@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: storecoach-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: storecoach
+      POSTGRES_USER: storecoach
+      POSTGRES_PASSWORD: storecoach_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: ./backend
+    container_name: storecoach-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - report_storage:/app/storage/reports
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: http://localhost:8000
+    container_name: storecoach-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:
+  report_storage:

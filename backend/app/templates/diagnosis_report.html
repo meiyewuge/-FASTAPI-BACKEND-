@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>门店经营诊断报告</title>{% include 'base_style.html' %}</head>
+<body>
+  <section class="cover">
+    <h1>门店经营陪跑系统｜首次经营诊断报告</h1>
+    <p class="muted">生成时间：{{ generated_at }}</p>
+    <p><strong>门店：</strong>{{ store.store_name }}　<strong>城市：</strong>{{ store.city }}　<strong>联系人：</strong>{{ store.contact_person }}</p>
+    <div class="score">{{ score.total_score }}分 <span style="font-size:22px;">{{ score.rating }}</span></div>
+    <p><strong>一句话结论：</strong>{{ ai.one_sentence_summary }}</p>
+    <p>{% for tag in score.risk_tags %}<span class="tag risk">{{ tag }}</span>{% endfor %}<span class="tag ok">置信度：{{ score.confidence_level }}</span></p>
+  </section>
+
+  <h2>一、七大维度得分</h2>
+  <table>
+    <thead><tr><th>维度</th><th>得分</th><th>满分</th><th>判断</th></tr></thead>
+    <tbody>
+      {% for d in score.dimensions %}
+      <tr><td>{{ d.name }}</td><td>{{ d.score }}</td><td>{{ d.max_score }}</td><td>{% if d.score / d.max_score < 0.55 %}偏弱，需要优先处理{% elif d.score / d.max_score < 0.75 %}中等，建议优化{% else %}表现较好，继续保持{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>二、核心问题</h2>
+  {% for item in ai.core_problems %}
+    <div class="card"><h3>{{ loop.index }}. {{ item.title }}</h3><p><strong>依据：</strong>{{ item.evidence }}</p><p><strong>影响：</strong>{{ item.impact }}</p></div>
+  {% endfor %}
+
+  <h2>三、MBA经营模型诊断</h2>
+  {% for item in ai.mba_model_analysis %}
+    <div class="card"><h3>{{ item.model_name }}</h3><p>{{ item.conclusion }}</p><p class="muted">{{ item.business_meaning }}</p></div>
+  {% endfor %}
+
+  <h2>四、15天行动方案</h2>
+  <table>
+    <thead><tr><th>时间</th><th>动作</th><th>目标</th></tr></thead>
+    <tbody>{% for item in ai.fifteen_day_action_plan %}<tr><td>{{ item.period }}</td><td>{{ item.action }}</td><td>{{ item.goal }}</td></tr>{% endfor %}</tbody>
+  </table>
+
+  <h2>五、30-90天建议</h2>
+  <p>{{ ai.thirty_to_ninety_day_plan }}</p>
+  <div class="card"><strong>推荐服务：</strong>{{ ai.service_recommendation.recommended_service }}<br><strong>推荐原因：</strong>{{ ai.service_recommendation.reason }}</div>
+  <p class="muted">{{ ai.risk_warning }}</p>
+
+  <div class="footer">本报告由门店经营陪跑系统根据用户填写数据、规则评分和AI经营报告生成，仅作为经营复盘和决策参考。</div>
+</body>
+</html>

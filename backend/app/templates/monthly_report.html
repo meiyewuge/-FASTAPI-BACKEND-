@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>门店月度经营体检报告</title>{% include 'base_style.html' %}</head>
+<body>
+  <section class="cover">
+    <h1>门店经营陪跑系统｜月度经营体检报告</h1>
+    <p class="muted">生成时间：{{ generated_at }}</p>
+    <p><strong>门店：</strong>{{ store.store_name }}　<strong>城市：</strong>{{ store.city }}</p>
+    <div class="score">{{ score.total_score }}分 <span style="font-size:22px;">{{ score.rating }}</span></div>
+    <p><strong>本月结论：</strong>{{ ai.monthly_summary }}</p>
+    <p>{% for tag in score.risk_tags %}<span class="tag risk">{{ tag }}</span>{% endfor %}</p>
+  </section>
+
+  <h2>一、人货场客财数得分</h2>
+  <table>
+    <thead><tr><th>维度</th><th>得分</th><th>满分</th><th>判断</th></tr></thead>
+    <tbody>{% for d in score.dimensions %}<tr><td>{{ d.name }}</td><td>{{ d.score }}</td><td>{{ d.max_score }}</td><td>{% if d.score / d.max_score < 0.55 %}偏弱{% elif d.score / d.max_score < 0.75 %}中等{% else %}较好{% endif %}</td></tr>{% endfor %}</tbody>
+  </table>
+
+  <h2>二、本月关键指标</h2>
+  <table>
+    <tbody>
+      {% for k,v in score.metrics.items() %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+
+  <h2>三、本月核心问题</h2>
+  {% for item in ai.top_three_problems %}
+    <div class="card"><h3>{{ loop.index }}. {{ item.problem }}</h3><p><strong>依据：</strong>{{ item.evidence }}</p><p><strong>下月影响：</strong>{{ item.impact_next_month }}</p></div>
+  {% endfor %}
+
+  <h2>四、下月四周行动计划</h2>
+  <table>
+    <thead><tr><th>周次</th><th>动作</th><th>目标</th><th>负责人建议</th></tr></thead>
+    <tbody>{% for item in ai.next_month_action_plan %}<tr><td>{{ item.week }}</td><td>{{ item.action }}</td><td>{{ item.target }}</td><td>{{ item.owner_suggestion }}</td></tr>{% endfor %}</tbody>
+  </table>
+
+  <h2>五、老板决策建议</h2>
+  <p>{{ ai.boss_decision_advice }}</p>
+  <div class="card"><strong>顾问跟进建议：</strong>{{ ai.coach_followup_suggestion }}</div>
+
+  <div class="footer">本报告由门店经营陪跑系统根据用户填写数据、规则评分和AI经营报告生成，仅作为经营复盘和决策参考。</div>
+</body>
+</html>
