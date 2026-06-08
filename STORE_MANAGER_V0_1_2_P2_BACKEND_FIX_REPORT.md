@@ -94,7 +94,22 @@ GET /api/store-manager/today-tasks?store_id=xxx&date=YYYY-MM-DD
 
 ---
 
-## 8. 当前阶段定盘
+## 8. 复审检查点确认（按复审要求补充）
+
+### 8.1 `task_date` 的日期口径
+- 后端 `task_date` 按 **报告生成日 `YYYY-MM-DD`** 存储，取自 `report.generated_at[:10]`（缺省回退当天）。
+- 前端 `getTodayTasks` 传入的是 `new Date().toISOString().slice(0,10)`（也是 `YYYY-MM-DD`）。
+- 两边都是日期（年月日，无时分秒、无时区偏移参与比较），格式一致。
+- ⚠️ **联调时需确认时区口径**：后端 `task_date` 取自服务器本地时间（`datetime.now()`），前端 `toISOString()` 为 **UTC**。若服务器时区非 UTC（如 UTC+8），跨零点时段可能出现"前端按 UTC 日期、后端按本地日期"差一天的边界情况。**联调首轮需校验：同一次生成的报告，前端用 `toISOString` 切出的 date 能命中后端的 `task_date`。** 如不一致，建议统一为同一时区口径（推荐都用门店本地日期）。
+
+### 8.2 旧库兼容（`task_date = NULL`）
+- 对已存在但缺列的旧库，`init_db` 通过 `PRAGMA table_info` 检测后安全 `ALTER TABLE ADD COLUMN task_date`，不会丢数据。
+- 旧任务的 `task_date` 为 `NULL`，按日期查询（`WHERE task_date = ?`）**不会命中**，因此**旧任务不会再混入任何一天的今日清单** —— 这正是本次修复想要的行为，明确记录在案。
+- 如确需让某条历史旧任务出现在指定日期，可单独为其补写 `task_date`（本期不做）。
+
+---
+
+## 9. 当前阶段定盘
 
 ```text
 P2 后端修复：完成，自测 6/6 通过
