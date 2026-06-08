@@ -66,7 +66,7 @@ def generate_today_tasks(req: GenerateTodayTasksRequest):
 
 @router.get("/today-tasks")
 def get_today_tasks(store_id: str, date: str = ""):
-    return ok(storage.list_tasks(store_id))
+    return ok(storage.list_tasks(store_id, date))
 
 
 @router.put("/tasks/{task_id}/status")

@@ -42,10 +42,19 @@ def init_db(conn):
         task_json TEXT,
         status TEXT,
         review_json TEXT,
+        task_date TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # 兼容已存在但缺少 task_date 列的旧库（独立 SQLite，安全 ALTER）。
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(store_manager_tasks)").fetchall()]
+    if "task_date" not in cols:
+        conn.execute("ALTER TABLE store_manager_tasks ADD COLUMN task_date TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_store_manager_tasks_store_date "
+        "ON store_manager_tasks(store_id, task_date)"
+    )
     conn.commit()
 
 
@@ -69,17 +78,20 @@ def save_report(payload: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, An
             datetime.now().isoformat()
         ))
 
+        # 任务所属日期 = 报告生成日（YYYY-MM-DD），用于今日清单按 date 过滤。
+        task_date = (report.get("generated_at") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
         for task in report.get("structured_json", {}).get("today_tasks", []):
             conn.execute("""
             INSERT OR REPLACE INTO store_manager_tasks
-            (task_id, report_id, store_id, task_json, status, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (task_id, report_id, store_id, task_json, status, task_date, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 task["task_id"],
                 report["report_id"],
                 report["store_id"],
                 json.dumps(task, ensure_ascii=False),
                 task.get("status", "待执行"),
+                task_date,
                 datetime.now().isoformat()
             ))
         conn.commit()
@@ -119,15 +131,17 @@ def list_reports(store_id: str) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def list_tasks(store_id: str) -> List[Dict[str, Any]]:
+def list_tasks(store_id: str, date: str = "") -> List[Dict[str, Any]]:
+    # 必须按 store_id + 日期过滤；date 缺省取今天，避免历史任务混入今日清单。
+    target_date = (date or "")[:10] or datetime.now().strftime("%Y-%m-%d")
     conn = _connect()
     try:
         rows = conn.execute("""
         SELECT * FROM store_manager_tasks
-        WHERE store_id = ?
+        WHERE store_id = ? AND task_date = ?
         ORDER BY created_at DESC
         LIMIT 50
-        """, (store_id,)).fetchall()
+        """, (store_id, target_date)).fetchall()
         tasks = []
         for row in rows:
             data = dict(row)
