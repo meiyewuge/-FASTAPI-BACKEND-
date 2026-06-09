@@ -5,6 +5,7 @@ from .database import Base, engine
 from .config import settings
 from .routers import diagnoses, monthly, admin, weapp
 from .store_manager.router import router as store_manager_router
+from .store_manager.router_v013 import router as store_manager_v013_router
 import os
 
 Base.metadata.create_all(bind=engine)
@@ -25,6 +26,7 @@ app.include_router(monthly.router)
 app.include_router(admin.router)
 app.include_router(weapp.router, prefix="/api", tags=["weapp"])
 app.include_router(store_manager_router)
+app.include_router(store_manager_v013_router)
 
 app.mount("/reports", StaticFiles(directory=settings.report_storage_path), name="reports")
 
