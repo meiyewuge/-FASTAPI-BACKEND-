@@ -6,9 +6,11 @@
 import json
 from datetime import datetime, timedelta
 
+from ._util_v013 import now_cst, today_cst
+
 
 def _today():
-    return datetime.now().strftime("%Y-%m-%d")
+    return today_cst()
 
 
 def _row(r):
@@ -31,7 +33,7 @@ def compute_rfm(profile: dict) -> str:
     recent = False
     if last_visit:
         try:
-            recent = (datetime.now() - datetime.strptime(last_visit[:10], "%Y-%m-%d")).days <= 30
+            recent = (now_cst().date() - datetime.strptime(last_visit[:10], "%Y-%m-%d").date()).days <= 30
         except ValueError:
             recent = False
     if total_spent >= 20000 and total_visits >= 6:
@@ -219,7 +221,7 @@ def _check_home_product_warning(conn, customer_id, pid, end_date, repurchase_sta
     if not end_date:
         return
     try:
-        days_left = (datetime.strptime(end_date[:10], "%Y-%m-%d") - datetime.now()).days
+        days_left = (datetime.strptime(end_date[:10], "%Y-%m-%d").date() - now_cst().date()).days
     except ValueError:
         return
     if days_left < 0:

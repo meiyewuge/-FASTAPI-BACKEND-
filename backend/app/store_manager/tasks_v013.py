@@ -8,7 +8,8 @@ P0 限流规则：
 5. 未入选 P0 的红色项降为 P1，但保留红色标签（keep_red_tag=🔥）。
 """
 import json
-from datetime import datetime
+
+from ._util_v013 import now_iso_cst, today_cst
 
 # 优先级数字与文档统一：P0=0, P1=1, P2=2, P3=3
 P0_DAILY_LIMIT = 3
@@ -26,7 +27,7 @@ RFM_RANK = {"高价值": 3, "潜力": 2, "待唤醒": 1, "普通": 0, "": 0}
 
 
 def _today():
-    return datetime.now().strftime("%Y-%m-%d")
+    return today_cst()
 
 
 def _gather_candidates(conn, store_id):
@@ -94,29 +95,52 @@ def generate_today_tasks(conn, store_id="default_store", report_date=None) -> li
     selected_p0 = throttleable[:remaining_slots]
     demoted = throttleable[remaining_slots:]  # 降为 P1，保留红标
 
-    # 清掉当日由本流程自动生成的任务，避免重复
-    conn.execute(
-        "DELETE FROM store_action_task WHERE store_id=? AND report_date=? AND source_type='customer_ops'",
-        (store_id, report_date),
-    )
+    # 幂等保护（P1-1）：不再 DELETE 重建，避免已完成任务状态丢失。
+    # 以 source_id 为幂等键：已存在则只更新展示/限流字段、保留 status/completed_at/review_note；
+    # 不存在则新建；本次不再出现的旧候选——已完成的保留，未完成的(过期候选)清除。
+    existing = {
+        r["source_id"]: dict(r)
+        for r in conn.execute(
+            "SELECT * FROM store_action_task WHERE store_id=? AND report_date=? AND source_type='customer_ops'",
+            (store_id, report_date),
+        ).fetchall()
+    }
 
-    def insert(card, priority, throttled, keep_red):
-        conn.execute(
-            "INSERT INTO store_action_task (store_id, report_date, title, description, priority, source_type, "
-            "source_id, related_customer_id, status, is_throttled_to_p1, keep_red_tag, merged_warning_count) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (store_id, report_date, _card_title(card),
-             json.dumps(card["items"], ensure_ascii=False), priority, "customer_ops",
-             f"customer:{card['customer_id']}", card["customer_id"], "pending",
-             1 if throttled else 0, 1 if keep_red else 0, len(card["items"])),
-        )
+    def upsert(card, priority, throttled, keep_red):
+        sid = f"customer:{card['customer_id']}"
+        title = _card_title(card)
+        desc = json.dumps(card["items"], ensure_ascii=False)
+        cnt = len(card["items"])
+        if sid in existing:
+            ex = existing.pop(sid)
+            # 保留 status / completed_at / review_note，仅刷新展示与限流标记
+            conn.execute(
+                "UPDATE store_action_task SET title=?, description=?, priority=?, "
+                "is_throttled_to_p1=?, keep_red_tag=?, merged_warning_count=?, related_customer_id=? WHERE id=?",
+                (title, desc, priority, 1 if throttled else 0, 1 if keep_red else 0, cnt, card["customer_id"], ex["id"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO store_action_task (store_id, report_date, title, description, priority, source_type, "
+                "source_id, related_customer_id, status, is_throttled_to_p1, keep_red_tag, merged_warning_count) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (store_id, report_date, title, desc, priority, "customer_ops",
+                 sid, card["customer_id"], "pending",
+                 1 if throttled else 0, 1 if keep_red else 0, cnt),
+            )
 
     for c in always_p0:
-        insert(c, P0, throttled=False, keep_red=True)
+        upsert(c, P0, throttled=False, keep_red=True)
     for c in selected_p0:
-        insert(c, P0, throttled=False, keep_red=True)
+        upsert(c, P0, throttled=False, keep_red=True)
     for c in demoted:
-        insert(c, P1, throttled=True, keep_red=True)  # 降级但保留红标
+        upsert(c, P1, throttled=True, keep_red=True)  # 降级但保留红标
+
+    # 本次未再出现的旧候选：已完成的保留（防状态丢失），未完成的过期候选清除
+    for sid, ex in existing.items():
+        if ex["status"] in ("done", "completed"):
+            continue
+        conn.execute("DELETE FROM store_action_task WHERE id=?", (ex["id"],))
     conn.commit()
 
     return get_today_tasks(conn, store_id, report_date)
@@ -146,7 +170,7 @@ def update_task_status(conn, task_id, status, review_note="") -> dict:
     r = conn.execute("SELECT * FROM store_action_task WHERE id=?", (task_id,)).fetchone()
     if not r:
         return None
-    completed_at = datetime.now().isoformat() if status in ("done", "completed") else None
+    completed_at = now_iso_cst() if status in ("done", "completed") else None
     conn.execute(
         "UPDATE store_action_task SET status=?, review_note=?, completed_at=? WHERE id=?",
         (status, review_note or r["review_note"], completed_at, task_id),

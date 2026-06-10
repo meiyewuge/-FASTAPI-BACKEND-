@@ -315,6 +315,10 @@ CREATE TABLE IF NOT EXISTS store_benchmark_config (
     repurchase_rate_green DECIMAL(5,2) DEFAULT 50.00,
     appointment_arrival_rate_green DECIMAL(5,2) DEFAULT 80.00,
     complaint_risk_max DECIMAL(8,2) DEFAULT 5.00,
+    traffic_visits_min DECIMAL(8,2) DEFAULT 20.00,
+    new_conversion_rate_green DECIMAL(5,2) DEFAULT 40.00,
+    recharge_ratio_green DECIMAL(5,2) DEFAULT 20.00,
+    main_project_ratio_green DECIMAL(5,2) DEFAULT 40.00,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(store_id)
@@ -347,7 +351,24 @@ def connect():
 
 def init_db(conn):
     conn.executescript(SCHEMA)
+    _migrate_benchmark_columns(conn)
     conn.commit()
+
+
+# 阈值配置化新增列 → 对已存在的旧测试库安全补列（独立 SQLite，不动主库/生产库）。
+_BENCHMARK_NEW_COLUMNS = {
+    "traffic_visits_min": "DECIMAL(8,2) DEFAULT 20.00",
+    "new_conversion_rate_green": "DECIMAL(5,2) DEFAULT 40.00",
+    "recharge_ratio_green": "DECIMAL(5,2) DEFAULT 20.00",
+    "main_project_ratio_green": "DECIMAL(5,2) DEFAULT 40.00",
+}
+
+
+def _migrate_benchmark_columns(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(store_benchmark_config)").fetchall()}
+    for name, ddl in _BENCHMARK_NEW_COLUMNS.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE store_benchmark_config ADD COLUMN {name} {ddl}")
 
 
 def table_names():

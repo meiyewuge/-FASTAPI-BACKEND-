@@ -92,10 +92,23 @@ def run():
     check("除零安全(指标均数值)", all(isinstance(m[k], (int, float)) for k in
           ["conversion_rate", "avg_order_value", "complaint_risk_index"]))
 
-    r = client.get(f"{B}/benchmark-config", params={"store_id": SID})
-    check("benchmark-config GET 默认值", r.json()["data"]["conversion_rate_green"] == 60)
+    cfg = client.get(f"{B}/benchmark-config", params={"store_id": SID}).json()["data"]
+    check("benchmark-config GET 默认值", cfg["conversion_rate_green"] == 60)
+    # 阈值配置化（4 个阈值已入 store_benchmark_config 默认值）
+    check("阈值配置化: traffic_visits_min=20", float(cfg.get("traffic_visits_min")) == 20)
+    check("阈值配置化: new_conversion_rate_green=40", float(cfg.get("new_conversion_rate_green")) == 40)
+    check("阈值配置化: recharge_ratio_green=20", float(cfg.get("recharge_ratio_green")) == 20)
+    check("阈值配置化: main_project_ratio_green=40", float(cfg.get("main_project_ratio_green")) == 40)
     check("benchmark-config PUT", client.put(f"{B}/benchmark-config", params={"store_id": SID},
           json={"conversion_rate_green": 65}).status_code == 200)
+
+    # store_id 输入校验（非法→400）
+    check("store_id 校验: 路径类字符→400",
+          client.get(f"{B}/computed-metrics", params={"store_id": "../etc/passwd"}).status_code == 400)
+    check("store_id 校验: 空格→400",
+          client.get(f"{B}/warnings", params={"store_id": "a b"}).status_code == 400)
+    check("store_id 校验: 合法→非400",
+          client.get(f"{B}/warnings", params={"store_id": "store_001"}).status_code == 200)
 
     print("=== 第四闸门：顾客经营全链路 11 步 ===")
     # 1 新建顾客
@@ -150,6 +163,14 @@ def run():
     rev = client.post(f"{B}/daily-review", json={"store_id": SID, "report_date": DATE, "review_content": "smoke"}).json()["data"]
     # 11 复盘含 tomorrow_actions
     check("G11 复盘返回 tomorrow_actions", "tomorrow_actions" in rev)
+
+    # 幂等保护：重复 generate 不丢已完成状态
+    if tasks:
+        done_id = tasks[0]["id"]
+        regen = client.post(f"{B}/today-tasks/generate", params={"store_id": SID, "date": DATE}).json()["data"]
+        still = next((t for t in regen if t["id"] == done_id), None)
+        check("幂等: 重复generate保留已完成任务状态", still is not None and still["status"] == "done",
+              f"status={still['status'] if still else 'GONE'}")
     check("today-tasks GET", client.get(f"{B}/today-tasks", params={"store_id": SID, "date": DATE}).status_code == 200)
     check("daily-review/history", client.get(f"{B}/daily-review/history", params={"store_id": SID}).status_code == 200)
     check("customers list", client.get(f"{B}/customers", params={"store_id": SID}).status_code == 200)

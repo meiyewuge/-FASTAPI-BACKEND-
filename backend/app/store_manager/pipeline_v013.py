@@ -1,13 +1,13 @@
 """V0.1.3 经营诊断编排：原始数据 → 自动指标 → 9类规则诊断 → 落库。"""
 import json
-from datetime import datetime
 
 from .metrics_v013 import compute_metrics, RAW_FIELDS
 from . import diagnosis_v013 as dg
+from ._util_v013 import today_cst
 
 
 def _today():
-    return datetime.now().strftime("%Y-%m-%d")
+    return today_cst()
 
 
 def save_daily_raw_data(conn, store_id, report_date, fields: dict) -> dict:

@@ -15,15 +15,7 @@ DIAGNOSIS_SOURCE_LABEL = "基于经营数据 + 7大库规则映射生成"
 DIAGNOSIS_METHOD_LABEL = "规则诊断"
 DIAGNOSIS_DISCLAIMER = "AI深度分析将在V0.1.4接入"
 
-# 部分阈值未在 StoreBenchmarkConfig 中（客流/新客承接/锁客/项目结构），
-# 使用规则级默认常量（标注为待确认，可后续配置化）。
-RULE_DEFAULTS = {
-    "traffic_visits_min": 20,        # 客流问题：日客流低于此值
-    "new_conversion_min": 50.0,      # 新客承接：新客成交率(%)低于此值
-    "recharge_ratio_min": 30.0,      # 锁客问题：充值占比(%)低于此值
-    "main_project_ratio_min": 50.0,  # 项目结构：主推项目占比(%)低于此值
-}
-
+# 全部诊断阈值均来自 StoreBenchmarkConfig（已配置化，不再硬编码规则常量）。
 BENCHMARK_DEFAULTS = {
     "store_id": "default_store", "store_type": "mature_store", "store_stage": "mature",
     "staff_count": 0, "monthly_target": 0, "avg_order_target": 0, "per_capita_target": 0,
@@ -31,6 +23,11 @@ BENCHMARK_DEFAULTS = {
     "return_customer_ratio_green_low": 70.00, "return_customer_ratio_green_high": 85.00,
     "conversion_rate_green": 60.00, "repurchase_rate_green": 50.00,
     "appointment_arrival_rate_green": 80.00, "complaint_risk_max": 5.00,
+    # 阈值配置化（原 RULE_DEFAULTS 移入，吴哥暂定值）
+    "traffic_visits_min": 20.00,          # 客流：日客流低于此值（且新客占比 < new_customer_ratio_green_low）
+    "new_conversion_rate_green": 40.00,   # 新客承接：新客成交率(%)健康线
+    "recharge_ratio_green": 20.00,        # 锁客：充值占比(%)健康线
+    "main_project_ratio_green": 40.00,    # 项目结构：主推项目占比(%)健康线
 }
 
 
@@ -94,17 +91,19 @@ def _issue(itype, name, severity, evidence, root_cause, today_action, day15_acti
 def match_rules(raw: dict, metrics: dict, cfg: dict) -> list:
     """匹配 9 类诊断规则，返回命中问题列表（未排序）。"""
     issues = []
-    rd = RULE_DEFAULTS
 
     visits = _f(raw.get("daily_visits"))
     complaints = _f(raw.get("daily_complaints"))
 
-    # 1. 客流问题
-    if visits < rd["traffic_visits_min"]:
+    # 1. 客流问题（阈值来自 StoreBenchmarkConfig）：日客流 < traffic_visits_min 且 新客占比 < 健康线下限
+    traffic_visits_min = _f(cfg.get("traffic_visits_min"))
+    new_ratio_low = _f(cfg.get("new_customer_ratio_green_low"))
+    if visits < traffic_visits_min and _f(metrics.get("new_customer_ratio")) < new_ratio_low:
         issues.append(_issue(
             "traffic", "客流问题", 8,
-            {"daily_visits": visits, "threshold": rd["traffic_visits_min"]},
-            "进店客流不足，获客与到店转化需要加强。",
+            {"daily_visits": visits, "visits_threshold": traffic_visits_min,
+             "new_customer_ratio": metrics.get("new_customer_ratio"), "new_ratio_threshold": new_ratio_low},
+            "进店客流不足且新客占比偏低，获客与到店转化需要加强。",
             "盘点引流渠道，今天先激活老客转介绍与到店预约。",
             "建立稳定的私域引流与预约机制。"))
 
@@ -117,11 +116,12 @@ def match_rules(raw: dict, metrics: dict, cfg: dict) -> list:
             "复盘今日未成交顾客，明确卡点并跟进。",
             "打磨成交话术与体验流程。"))
 
-    # 3. 新客承接问题
-    if _f(metrics.get("new_conversion_rate")) < rd["new_conversion_min"]:
+    # 3. 新客承接问题（阈值来自 StoreBenchmarkConfig）
+    new_conversion_green = _f(cfg.get("new_conversion_rate_green"))
+    if _f(metrics.get("new_conversion_rate")) < new_conversion_green:
         issues.append(_issue(
             "new_customer", "新客承接问题", 7,
-            {"new_conversion_rate": metrics.get("new_conversion_rate"), "threshold": rd["new_conversion_min"]},
+            {"new_conversion_rate": metrics.get("new_conversion_rate"), "threshold": new_conversion_green},
             "新客首次成交率偏低，新客承接与体验设计需要优化。",
             "为新客设计低门槛体验与跟进动作。",
             "建立新客 7 天承接 SOP。"))
@@ -136,11 +136,12 @@ def match_rules(raw: dict, metrics: dict, cfg: dict) -> list:
             "梳理可连带项目，今天演练升单话术。",
             "优化项目结构与套餐设计。"))
 
-    # 5. 锁客问题（充值占比偏低）
-    if _f(metrics.get("recharge_ratio")) < rd["recharge_ratio_min"]:
+    # 5. 锁客问题（充值占比偏低，阈值来自 StoreBenchmarkConfig）
+    recharge_green = _f(cfg.get("recharge_ratio_green"))
+    if _f(metrics.get("recharge_ratio")) < recharge_green:
         issues.append(_issue(
             "lock", "锁客问题", 6,
-            {"recharge_ratio": metrics.get("recharge_ratio"), "threshold": rd["recharge_ratio_min"]},
+            {"recharge_ratio": metrics.get("recharge_ratio"), "threshold": recharge_green},
             "充值占比偏低，顾客锁定与预存机制不足。",
             "梳理高价值顾客，设计今日锁客方案。",
             "建立会员储值与权益体系。"))
@@ -157,11 +158,12 @@ def match_rules(raw: dict, metrics: dict, cfg: dict) -> list:
             "筛出近期未回店老客，今天完成第一轮回访。",
             "建立老客分层回访与复购机制。"))
 
-    # 7. 项目结构问题
-    if _f(metrics.get("main_project_ratio")) < rd["main_project_ratio_min"]:
+    # 7. 项目结构问题（阈值来自 StoreBenchmarkConfig）
+    main_project_green = _f(cfg.get("main_project_ratio_green"))
+    if _f(metrics.get("main_project_ratio")) < main_project_green:
         issues.append(_issue(
             "project", "项目结构问题", 6,
-            {"main_project_ratio": metrics.get("main_project_ratio"), "threshold": rd["main_project_ratio_min"]},
+            {"main_project_ratio": metrics.get("main_project_ratio"), "threshold": main_project_green},
             "主推项目占比偏低，项目结构不够聚焦。",
             "明确本周主推项目并统一话术。",
             "优化项目矩阵与主推策略。"))

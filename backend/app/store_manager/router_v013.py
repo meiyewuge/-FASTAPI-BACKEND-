@@ -3,7 +3,9 @@
 补丁4：前缀沿用 /api/store-manager，不启 /api/v2；内部标记 api_version='v0.1.3'。
 所有接口走独立 SQLite，不动主库、不动 V0.1.1。
 """
-from fastapi import APIRouter, HTTPException
+import re
+
+from fastapi import APIRouter, HTTPException, Depends
 
 from . import db_v013 as db
 from . import pipeline_v013 as pipe
@@ -24,9 +26,25 @@ def ok(data):
     return {"code": 1000, "msg": "success", "data": data, "api_version": db.API_VERSION}
 
 
+# store_id 输入校验（P1：非空、长度限制、禁止路径类/特殊字符；不做复杂权限）。
+_STORE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _check_store_id(store_id: str) -> str:
+    if not store_id or not isinstance(store_id, str) or not _STORE_ID_RE.match(store_id):
+        raise HTTPException(status_code=400, detail="store_id 非法：需为 1-64 位字母/数字/下划线/连字符，禁止路径类特殊字符")
+    return store_id
+
+
+def valid_store_id(store_id: str = "default_store") -> str:
+    """query 参数 store_id 的校验依赖。"""
+    return _check_store_id(store_id)
+
+
 # ---------- 经营诊断 ----------
 @router.post("/daily-raw-data")
 def post_daily_raw_data(req: DailyRawDataRequest):
+    _check_store_id(req.store_id)
     conn = db.connect()
     try:
         raw = pipe.save_daily_raw_data(conn, req.store_id, req.report_date, req.form_data)
@@ -36,7 +54,7 @@ def post_daily_raw_data(req: DailyRawDataRequest):
 
 
 @router.get("/computed-metrics")
-def get_computed_metrics(store_id: str = "default_store", report_date: str = ""):
+def get_computed_metrics(store_id: str = Depends(valid_store_id), report_date: str = ""):
     conn = db.connect()
     try:
         return ok(pipe.get_computed_metrics(conn, store_id, report_date or None))
@@ -46,6 +64,7 @@ def get_computed_metrics(store_id: str = "default_store", report_date: str = "")
 
 @router.post("/monthly-diagnoses")
 def post_monthly_diagnosis(req: MonthlyDiagnosisRequest):
+    _check_store_id(req.store_id)
     conn = db.connect()
     try:
         return ok(pipe.create_diagnosis(conn, model_to_dict(req)))
@@ -67,7 +86,7 @@ def get_diagnosis(diagnosis_id: int):
 
 # ---------- 阈值配置（补丁1） ----------
 @router.get("/benchmark-config")
-def get_benchmark_config(store_id: str = "default_store"):
+def get_benchmark_config(store_id: str = Depends(valid_store_id)):
     conn = db.connect()
     try:
         return ok(dg.get_benchmark(conn, store_id))
@@ -76,7 +95,7 @@ def get_benchmark_config(store_id: str = "default_store"):
 
 
 @router.put("/benchmark-config")
-def put_benchmark_config(req: BenchmarkConfigUpdate, store_id: str = "default_store"):
+def put_benchmark_config(req: BenchmarkConfigUpdate, store_id: str = Depends(valid_store_id)):
     conn = db.connect()
     try:
         return ok(dg.update_benchmark(conn, store_id, model_to_dict(req)))
@@ -86,7 +105,7 @@ def put_benchmark_config(req: BenchmarkConfigUpdate, store_id: str = "default_st
 
 # ---------- 今日任务 + 复盘 ----------
 @router.get("/today-tasks")
-def get_today_tasks(store_id: str = "default_store", date: str = "", generate: int = 0):
+def get_today_tasks(store_id: str = Depends(valid_store_id), date: str = "", generate: int = 0):
     conn = db.connect()
     try:
         if generate:
@@ -97,7 +116,7 @@ def get_today_tasks(store_id: str = "default_store", date: str = "", generate: i
 
 
 @router.post("/today-tasks/generate")
-def post_generate_today_tasks(store_id: str = "default_store", date: str = ""):
+def post_generate_today_tasks(store_id: str = Depends(valid_store_id), date: str = ""):
     conn = db.connect()
     try:
         return ok(tk.generate_today_tasks(conn, store_id, date or None))
@@ -119,6 +138,7 @@ def put_task_status(task_id: int, req: TaskStatusUpdate):
 
 @router.post("/daily-review")
 def post_daily_review(req: DailyReviewRequest):
+    _check_store_id(req.store_id)
     conn = db.connect()
     try:
         return ok(tk.submit_daily_review(conn, req.store_id, req.report_date, req.review_content or ""))
@@ -127,7 +147,7 @@ def post_daily_review(req: DailyReviewRequest):
 
 
 @router.get("/daily-review/history")
-def get_daily_review_history(store_id: str = "default_store"):
+def get_daily_review_history(store_id: str = Depends(valid_store_id)):
     conn = db.connect()
     try:
         return ok(tk.get_review_history(conn, store_id))
@@ -138,6 +158,7 @@ def get_daily_review_history(store_id: str = "default_store"):
 # ---------- 顾客经营 ----------
 @router.post("/customers")
 def post_customer(req: CustomerCreate):
+    _check_store_id(req.store_id)
     conn = db.connect()
     try:
         try:
@@ -151,7 +172,7 @@ def post_customer(req: CustomerCreate):
 
 
 @router.get("/customers")
-def list_customers(store_id: str = "default_store", keyword: str = ""):
+def list_customers(store_id: str = Depends(valid_store_id), keyword: str = ""):
     conn = db.connect()
     try:
         return ok(ops.list_customers(conn, store_id, keyword or None))
@@ -239,7 +260,7 @@ def put_demand_progress(customer_id: int, demand_id: int, req: DemandProgressUpd
 
 # ---------- 看板与预警 ----------
 @router.get("/warnings")
-def get_warnings(store_id: str = "default_store"):
+def get_warnings(store_id: str = Depends(valid_store_id)):
     conn = db.connect()
     try:
         return ok(ops.list_warnings(conn, store_id, only_unresolved=True))
@@ -248,7 +269,7 @@ def get_warnings(store_id: str = "default_store"):
 
 
 @router.get("/demand-board")
-def get_demand_board(store_id: str = "default_store"):
+def get_demand_board(store_id: str = Depends(valid_store_id)):
     conn = db.connect()
     try:
         return ok(ops.build_demand_board(conn, store_id))
