@@ -1,12 +1,22 @@
-f1f29a4 fix(v0.1.3-review): 修复ChatGPT初审3个P0+3个P1(小修,不新增功能)
-e25e9a8 docs(v0.1.3): 后端代码审查交付包(7材料文件+zip,本地不push)
-2b8eebb docs(v0.1.3): 后端代码审查包(交Codex/ChatGPT审查,不部署/不push)
-86d64d3 docs(v0.1.3): 后端开发第一阶段交付报告(本地,不push)
-5841e7c test(v0.1.3-M7): 后端smoke_test覆盖全端点+第四闸门11步(24/24通过)
-c713287 feat(v0.1.3-M6): 诊断编排 + Schemas + API路由(/api/store-manager)
-2728a4e feat(v0.1.3-M5): 今日任务P0限流 + 复盘闭环(补丁2)
-2ee624b feat(v0.1.3-M4): 顾客经营模型(档案/项目/家居/需求/红黄预警/看板)
-9f1994b feat(v0.1.3-M3): 9类诊断规则引擎 + StoreBenchmarkConfig + library_ref静态映射
-e5f9cde feat(v0.1.3-M2): 13个自动计算指标(除零安全,率字段只读)
-78c853b feat(v0.1.3-M1): 数据底座 14 张表 + 高频索引(独立SQLite,不动主库)
-4ef0c32 chore(v0.1.3): 落位 5 份 V0.1.3 文档到 docs/v0.1.3/(仅资料,无代码改动)
+# ============================================================
+# V0.1.3 后端审查 · 提交口径说明（统一基准）
+#  - 基础 commit              : 68263a1
+#  - 代码修复 HEAD（审查对象）: f1f29a4  ← 最后一个含代码改动的提交
+#  - 审查包为 docs-only 提交  : 75c7da0 及其后口径修正提交（仅 docs/v0.1.3/，无代码）
+#  - 分支                     : store-manager-v0.1.3-backend（未 push）
+# 说明：f1f29a4 之后的提交只同步本审查包文档，不改任何业务代码。
+# ============================================================
+# git log --oneline 68263a1..HEAD（[CODE]=含代码 / [DOCS]=仅文档）:
+75c7da0 docs(v0.1.3): 同步审查包(P0-3 HEAD一致性 + app级smoke材料)  [DOCS]
+f1f29a4 fix(v0.1.3-review): 修复ChatGPT初审3个P0+3个P1(小修,不新增功能)  [CODE ★代码修复HEAD/审查对象]
+e25e9a8 docs(v0.1.3): 后端代码审查交付包(7材料文件+zip,本地不push)  [DOCS]
+2b8eebb docs(v0.1.3): 后端代码审查包(交Codex/ChatGPT审查,不部署/不push)  [DOCS]
+86d64d3 docs(v0.1.3): 后端开发第一阶段交付报告(本地,不push)  [DOCS]
+5841e7c test(v0.1.3-M7): 后端smoke_test覆盖全端点+第四闸门11步(24/24通过)  [CODE]
+c713287 feat(v0.1.3-M6): 诊断编排 + Schemas + API路由(/api/store-manager)  [CODE]
+2728a4e feat(v0.1.3-M5): 今日任务P0限流 + 复盘闭环(补丁2)  [CODE]
+2ee624b feat(v0.1.3-M4): 顾客经营模型(档案/项目/家居/需求/红黄预警/看板)  [CODE]
+9f1994b feat(v0.1.3-M3): 9类诊断规则引擎 + StoreBenchmarkConfig + library_ref静态映射  [CODE]
+e5f9cde feat(v0.1.3-M2): 13个自动计算指标(除零安全,率字段只读)  [CODE]
+78c853b feat(v0.1.3-M1): 数据底座 14 张表 + 高频索引(独立SQLite,不动主库)  [CODE]
+4ef0c32 chore(v0.1.3): 落位 5 份 V0.1.3 文档到 docs/v0.1.3/(仅资料,无代码改动)  [DOCS]
