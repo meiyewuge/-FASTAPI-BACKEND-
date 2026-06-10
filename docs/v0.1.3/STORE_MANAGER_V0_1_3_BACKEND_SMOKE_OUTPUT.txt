@@ -1,0 +1,28 @@
+=== 基础端点 ===
+  [PASS] health
+  [PASS] daily-raw-data — 200
+  [PASS] monthly-diagnosis — 200
+  [PASS] 诊断含 top3 + 规则文案(非AI智能)
+  [PASS] get diagnosis
+  [PASS] computed-metrics 13项
+  [PASS] 除零安全(指标均数值)
+  [PASS] benchmark-config GET 默认值
+  [PASS] benchmark-config PUT
+=== 第四闸门：顾客经营全链路 11 步 ===
+  [PASS] G1 POST /customers 201/200 + phone唯一
+  [PASS] G1 phone唯一约束生效(400) — 400
+  [PASS] G2 POST projects
+  [PASS] G3 consume remaining-1
+  [PASS] G4 消耗至0生成red预警
+  [PASS] G5 POST home-products
+  [PASS] G6 POST demands
+  [PASS] G7+G8 demand-board 可成交标💰
+  [PASS] G9 预警触发生成 store_action_task
+  [PASS] G10 PUT task status
+  [PASS] G11 复盘返回 tomorrow_actions
+  [PASS] today-tasks GET
+  [PASS] daily-review/history
+  [PASS] customers list
+  [PASS] customer detail
+
+=== smoke 结果：24 PASS / 0 FAIL ===

@@ -1,0 +1,10 @@
+2b8eebb docs(v0.1.3): 后端代码审查包(交Codex/ChatGPT审查,不部署/不push)
+86d64d3 docs(v0.1.3): 后端开发第一阶段交付报告(本地,不push)
+5841e7c test(v0.1.3-M7): 后端smoke_test覆盖全端点+第四闸门11步(24/24通过)
+c713287 feat(v0.1.3-M6): 诊断编排 + Schemas + API路由(/api/store-manager)
+2728a4e feat(v0.1.3-M5): 今日任务P0限流 + 复盘闭环(补丁2)
+2ee624b feat(v0.1.3-M4): 顾客经营模型(档案/项目/家居/需求/红黄预警/看板)
+9f1994b feat(v0.1.3-M3): 9类诊断规则引擎 + StoreBenchmarkConfig + library_ref静态映射
+e5f9cde feat(v0.1.3-M2): 13个自动计算指标(除零安全,率字段只读)
+78c853b feat(v0.1.3-M1): 数据底座 14 张表 + 高频索引(独立SQLite,不动主库)
+4ef0c32 chore(v0.1.3): 落位 5 份 V0.1.3 文档到 docs/v0.1.3/(仅资料,无代码改动)

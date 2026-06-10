@@ -1,0 +1,19 @@
+ backend/app/main.py                                |   2 +
+ backend/app/store_manager/customer_ops_v013.py     | 290 +++++++++++++++++
+ backend/app/store_manager/db_v013.py               | 349 +++++++++++++++++++++
+ backend/app/store_manager/diagnosis_v013.py        | 207 ++++++++++++
+ backend/app/store_manager/library_ref.py           |  75 +++++
+ backend/app/store_manager/metrics_v013.py          |  65 ++++
+ backend/app/store_manager/pipeline_v013.py         | 130 ++++++++
+ backend/app/store_manager/router_v013.py           | 247 +++++++++++++++
+ backend/app/store_manager/schemas_v013.py          | 102 ++++++
+ backend/app/store_manager/tasks_v013.py            | 209 ++++++++++++
+ backend/smoke_test_v013.py                         | 153 +++++++++
+ ...05\346\240\270\351\207\215\346\236\204PRD.docx" | Bin 0 -> 73196 bytes
+ ...4\200\345\217\221\346\226\207\346\241\243.docx" | Bin 0 -> 68475 bytes
+ ...5\344\270\201\350\257\264\346\230\216V0.1.docx" | Bin 0 -> 61096 bytes
+ ...6\276\350\256\241\346\226\207\346\241\243.docx" | Bin 0 -> 63988 bytes
+ ...4\272\345\242\236\350\241\245\345\214\205.docx" | Bin 0 -> 117812 bytes
+ ...E_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md | 236 ++++++++++++++
+ ...E_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md | 122 +++++++
+ 18 files changed, 2187 insertions(+)
