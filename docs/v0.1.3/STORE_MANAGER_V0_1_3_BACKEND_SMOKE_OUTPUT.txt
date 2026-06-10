@@ -17,7 +17,10 @@
   [PASS] G5 POST home-products
   [PASS] G6 POST demands
   [PASS] G7+G8 demand-board 可成交标💰
+  [PASS] 归属校验：错误customer消耗项目→404
+  [PASS] 归属校验：错误customer改需求→404
   [PASS] G9 预警触发生成 store_action_task
+  [PASS] 优先级数字 P0=0/P1=1 且 label 一致
   [PASS] G10 PUT task status
   [PASS] G11 复盘返回 tomorrow_actions
   [PASS] today-tasks GET
@@ -25,4 +28,4 @@
   [PASS] customers list
   [PASS] customer detail
 
-=== smoke 结果：24 PASS / 0 FAIL ===
+=== smoke 结果：27 PASS / 0 FAIL ===

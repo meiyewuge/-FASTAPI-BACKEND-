@@ -1,5 +1,5 @@
 diff --git a/backend/app/main.py b/backend/app/main.py
-index df7f03e..56bc413 100644
+index df7f03e..38b9584 100644
 --- a/backend/app/main.py
 +++ b/backend/app/main.py
 @@ -5,6 +5,7 @@ from .database import Base, engine
@@ -10,20 +10,25 @@ index df7f03e..56bc413 100644
  import os
  
  Base.metadata.create_all(bind=engine)
-@@ -25,6 +26,7 @@ app.include_router(monthly.router)
+@@ -24,6 +25,12 @@ app.include_router(diagnoses.router)
+ app.include_router(monthly.router)
  app.include_router(admin.router)
  app.include_router(weapp.router, prefix="/api", tags=["weapp"])
- app.include_router(store_manager_router)
++# V0.1.3 路由先注册：与 V0.1.2 store_manager 在 /api/store-manager 下有 4 个同 path+method
++# 重叠端点(monthly-diagnoses[POST]、today-tasks[GET]、today-tasks/generate[POST]、
++# tasks/{id}/status[PUT])。FastAPI 首个匹配生效，故 V0.1.3 先注册以保证其为权威实现；
++# V0.1.2 独有端点(history、monthly-diagnoses/{id}、tasks/{id}/review、admin/mark)仍由老 router 提供。
++# 注：V0.1.2 测试服务(18080)运行 V0.1.2 分支、不含 v013 路由，不受此顺序影响。
 +app.include_router(store_manager_v013_router)
+ app.include_router(store_manager_router)
  
  app.mount("/reports", StaticFiles(directory=settings.report_storage_path), name="reports")
- 
 diff --git a/backend/app/store_manager/customer_ops_v013.py b/backend/app/store_manager/customer_ops_v013.py
 new file mode 100644
-index 0000000..4124d58
+index 0000000..123bb36
 --- /dev/null
 +++ b/backend/app/store_manager/customer_ops_v013.py
-@@ -0,0 +1,290 @@
+@@ -0,0 +1,298 @@
 +"""V0.1.3 顾客经营模型业务逻辑。
 +
 +覆盖：顾客档案(RFM自动) / 在店项目(消耗+预警) / 家居产品(用完预警) /
@@ -171,6 +176,14 @@ index 0000000..4124d58
 +    return dict(conn.execute("SELECT * FROM customer_project WHERE id=?", (cur.lastrowid,)).fetchone())
 +
 +
++def get_project(conn, project_id) -> dict:
++    return _row(conn.execute("SELECT * FROM customer_project WHERE id=?", (project_id,)).fetchone())
++
++
++def get_demand(conn, demand_id) -> dict:
++    return _row(conn.execute("SELECT * FROM customer_demand WHERE id=?", (demand_id,)).fetchone())
++
++
 +def consume_project(conn, project_id) -> dict:
 +    """消耗 1 次：used+1，remaining=total-used；remaining<=2 黄，==0 红（自动预警）。"""
 +    p = conn.execute("SELECT * FROM customer_project WHERE id=?", (project_id,)).fetchone()
@@ -316,10 +329,10 @@ index 0000000..4124d58
 +    return board
 diff --git a/backend/app/store_manager/db_v013.py b/backend/app/store_manager/db_v013.py
 new file mode 100644
-index 0000000..f0bb805
+index 0000000..0a87b24
 --- /dev/null
 +++ b/backend/app/store_manager/db_v013.py
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,361 @@
 +"""V0.1.3 店长工作台 · 独立 SQLite 数据底座（14 张表 + 索引）。
 +
 +设计原则（遵守总审补丁说明 V0.1 红线）：
@@ -330,8 +343,20 @@ index 0000000..f0bb805
 +import os
 +import sqlite3
 +
-+# 与 V0.1.2 复用同一独立测试库（不进主库）。可用环境变量覆盖。
-+DB_PATH = os.getenv("STORE_MANAGER_DB_PATH", "/opt/meiye-wuyou/data/store_manager_workbench.db")
++# V0.1.3 使用独立测试库环境变量与隔离默认路径（不进主库、不与 V0.1.2 同库、不写生产目录）。
++# 默认指向测试隔离目录；如需自定义用 STORE_MANAGER_V013_DB_PATH 覆盖。
++DEFAULT_V013_DB_PATH = "/opt/meiye-wuyou-test/data/store_manager_workbench_v013.db"
++# 生产库目录（禁止 V0.1.3 写入）
++_PROD_DB_DIR = "/opt/meiye-wuyou/data"
++
++DB_PATH = os.getenv("STORE_MANAGER_V013_DB_PATH", DEFAULT_V013_DB_PATH)
++
++# 安全护栏（fail-fast）：V0.1.3 绝不允许写入生产库目录，避免漏配环境变量时静默落到生产路径。
++if os.path.normpath(os.path.dirname(DB_PATH) or ".") == os.path.normpath(_PROD_DB_DIR):
++    raise RuntimeError(
++        "V0.1.3 拒绝写入生产库目录 %s。请将 STORE_MANAGER_V013_DB_PATH 配置到测试隔离路径"
++        "（默认 %s）。" % (_PROD_DB_DIR, DEFAULT_V013_DB_PATH)
++    )
 +
 +# api_version 仅用于内部日志/调试（补丁4：前缀不变，不启 /api/v2）。
 +API_VERSION = "v0.1.3"
@@ -671,10 +696,10 @@ index 0000000..f0bb805
 +    ]
 diff --git a/backend/app/store_manager/diagnosis_v013.py b/backend/app/store_manager/diagnosis_v013.py
 new file mode 100644
-index 0000000..214edc2
+index 0000000..ed1e189
 --- /dev/null
 +++ b/backend/app/store_manager/diagnosis_v013.py
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,208 @@
 +"""V0.1.3 诊断规则引擎（9 类经营问题）。
 +
 +- 阈值从 StoreBenchmarkConfig 读取（补丁1），首次无配置 fallback 到表 DEFAULT 值。
@@ -757,7 +782,8 @@ index 0000000..214edc2
 +        "issue_type": itype,
 +        "issue_name": name,
 +        "severity": sev,
-+        "priority": 1 if sev >= 8 else 2,
++        # 优先级数字与文档统一：P0=0, P1=1（严重度>=8 视为 P0）
++        "priority": 0 if sev >= 8 else 1,
 +        "data_evidence": evidence,
 +        "root_cause": root_cause,
 +        "root_cause_detail": "",
@@ -1036,10 +1062,10 @@ index 0000000..a5898c2
 +]
 diff --git a/backend/app/store_manager/pipeline_v013.py b/backend/app/store_manager/pipeline_v013.py
 new file mode 100644
-index 0000000..9a503b7
+index 0000000..fa844f0
 --- /dev/null
 +++ b/backend/app/store_manager/pipeline_v013.py
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,131 @@
 +"""V0.1.3 经营诊断编排：原始数据 → 自动指标 → 9类规则诊断 → 落库。"""
 +import json
 +from datetime import datetime
@@ -1106,7 +1132,8 @@ index 0000000..9a503b7
 +
 +    raw = save_daily_raw_data(conn, store_id, report_date, fields)
 +    metrics = compute_metrics(raw)
-+    save_metrics(conn, store_id, report_date, raw["id"], metrics)
++    metrics_row = save_metrics(conn, store_id, report_date, raw["id"], metrics)
++    metrics_id = metrics_row["id"]
 +
 +    cfg = dg.get_benchmark(conn, store_id)
 +    diag = dg.run_diagnosis(raw, metrics, cfg)
@@ -1123,7 +1150,7 @@ index 0000000..9a503b7
 +         json.dumps(diag["top_issues"], ensure_ascii=False),
 +         json.dumps({}, ensure_ascii=False),
 +         json.dumps([], ensure_ascii=False),
-+         raw["id"], None),
++         raw["id"], metrics_id),
 +    )
 +    diagnosis_id = cur.lastrowid
 +    if not diagnosis_id:
@@ -1172,10 +1199,10 @@ index 0000000..9a503b7
 +    return d
 diff --git a/backend/app/store_manager/router_v013.py b/backend/app/store_manager/router_v013.py
 new file mode 100644
-index 0000000..f98bbff
+index 0000000..c81abbe
 --- /dev/null
 +++ b/backend/app/store_manager/router_v013.py
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,256 @@
 +"""V0.1.3 店长工作台 API 路由。
 +
 +补丁4：前缀沿用 /api/store-manager，不启 /api/v2；内部标记 api_version='v0.1.3'。
@@ -1367,10 +1394,13 @@ index 0000000..f98bbff
 +def post_consume(customer_id: int, project_id: int):
 +    conn = db.connect()
 +    try:
-+        p = ops.consume_project(conn, project_id)
-+        if not p:
++        proj = ops.get_project(conn, project_id)
++        if not proj:
 +            raise HTTPException(status_code=404, detail="project not found")
-+        return ok(p)
++        # 校验归属：项目必须属于 URL 中的 customer_id，防止跨顾客串改
++        if int(proj["customer_id"]) != int(customer_id):
++            raise HTTPException(status_code=404, detail="project not found for this customer")
++        return ok(ops.consume_project(conn, project_id))
 +    finally:
 +        conn.close()
 +
@@ -1401,6 +1431,12 @@ index 0000000..f98bbff
 +def put_demand_progress(customer_id: int, demand_id: int, req: DemandProgressUpdate):
 +    conn = db.connect()
 +    try:
++        dm = ops.get_demand(conn, demand_id)
++        if not dm:
++            raise HTTPException(status_code=404, detail="demand not found")
++        # 校验归属：需求必须属于 URL 中的 customer_id
++        if int(dm["customer_id"]) != int(customer_id):
++            raise HTTPException(status_code=404, detail="demand not found for this customer")
 +        return ok(ops.update_demand_progress(conn, demand_id, req.progress_score))
 +    finally:
 +        conn.close()
@@ -1533,10 +1569,10 @@ index 0000000..6ded48e
 +    review_content: Optional[str] = ""
 diff --git a/backend/app/store_manager/tasks_v013.py b/backend/app/store_manager/tasks_v013.py
 new file mode 100644
-index 0000000..3b5a3fa
+index 0000000..d1599fd
 --- /dev/null
 +++ b/backend/app/store_manager/tasks_v013.py
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,213 @@
 +"""V0.1.3 今日任务生成 + P0 限流 + 复盘闭环（补丁2）。
 +
 +P0 限流规则：
@@ -1549,9 +1585,13 @@ index 0000000..3b5a3fa
 +import json
 +from datetime import datetime
 +
++# 优先级数字与文档统一：P0=0, P1=1, P2=2, P3=3
 +P0_DAILY_LIMIT = 3
-+P0 = 1
-+P1 = 2
++P0 = 0
++P1 = 1
++P2 = 2
++P3 = 3
++PRIORITY_LABELS = {0: "P0", 1: "P1", 2: "P2", 3: "P3"}
 +
 +# 投诉/退款/差评：永远 P0，不受限流影响
 +COMPLAINT_TYPES = {"complaint", "refund", "bad_review"}
@@ -1671,7 +1711,7 @@ index 0000000..3b5a3fa
 +            t["items"] = json.loads(t.get("description") or "[]")
 +        except (ValueError, TypeError):
 +            t["items"] = []
-+        t["priority_label"] = "P0" if t["priority"] == P0 else "P1"
++        t["priority_label"] = PRIORITY_LABELS.get(t["priority"], "P?")
 +        t["red_tag"] = "🔥" if t["keep_red_tag"] else ""
 +        out.append(t)
 +    return out
@@ -1746,12 +1786,119 @@ index 0000000..3b5a3fa
 +                d[k] = []
 +        out.append(d)
 +    return out
+diff --git a/backend/smoke_app_level_v013.py b/backend/smoke_app_level_v013.py
+new file mode 100644
+index 0000000..d68668e
+--- /dev/null
++++ b/backend/smoke_app_level_v013.py
+@@ -0,0 +1,101 @@
++"""V0.1.3 · 完整 main.py app 级 smoke（验证路由冲突已解决）。
++
++目的（回应 P0-1）：不只测 isolated router_v013，而是导入**真实 app.main**，
++确认 /api/store-manager 下原先 4 个冲突端点现在由 V0.1.3 生效，
++且 V0.1.2 老 router 的独有端点仍可达、未被破坏。
++
++环境无 weasyprint 系统库时用轻量 stub 绕过（仅为本地 smoke，不影响生产渲染）。
++DB 走独立测试库（STORE_MANAGER_V013_DB_PATH / STORE_MANAGER_DB_PATH 测试路径）。
++"""
++import os
++import sys
++import types
++import tempfile
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++# weasyprint stub（仅当未安装时）
++try:
++    import weasyprint  # noqa: F401
++except Exception:
++    fake = types.ModuleType("weasyprint")
++    fake.HTML = lambda *a, **k: types.SimpleNamespace(write_pdf=lambda *a, **k: b"")
++    sys.modules["weasyprint"] = fake
++
++# 独立测试库（绝不写生产路径）
++tmp = tempfile.gettempdir()
++os.environ.setdefault("STORE_MANAGER_V013_DB_PATH", os.path.join(tmp, "v013_applevel.db"))
++os.environ.setdefault("STORE_MANAGER_DB_PATH", os.path.join(tmp, "v012_applevel.db"))
++os.environ.setdefault("DATABASE_URL", "sqlite:///" + os.path.join(tmp, "applevel_main.db"))
++for f in (os.environ["STORE_MANAGER_V013_DB_PATH"], os.path.join(tmp, "applevel_main.db")):
++    try:
++        os.remove(f)
++    except OSError:
++        pass
++
++from fastapi.testclient import TestClient
++from app.main import app
++
++client = TestClient(app)
++B = "/api/store-manager"
++_p = _f = 0
++
++
++def check(name, cond, detail=""):
++    global _p, _f
++    ok = bool(cond)
++    _p += ok
++    _f += (not ok)
++    print(f"  [{'PASS' if ok else 'FAIL'}] {name}{' — ' + detail if detail else ''}")
++
++
++SAMPLE = {"daily_revenue": 32000, "daily_recharge_amount": 12500, "daily_product_retail": 4500,
++          "daily_visits": 35, "daily_new_customers": 8, "daily_valid_appointments": 20,
++          "daily_appointment_arrivals": 17, "daily_transaction_customers": 18, "daily_transaction_orders": 18,
++          "daily_new_transaction": 5, "daily_project_sales": 15000, "daily_main_project_sales": 7500,
++          "daily_service_count": 50, "daily_staff_count": 15, "daily_complaints": 2}
++
++
++def run():
++    print("=== app 级：health 与路由加载 ===")
++    check("health", client.get("/health").json().get("status") == "ok")
++
++    print("=== app 级：4 个原冲突端点现由 V0.1.3 生效（响应含 api_version=v0.1.3）===")
++    # POST /monthly-diagnoses
++    r = client.post(f"{B}/monthly-diagnoses", json={"store_id": "app1", "report_date": "2026-06-09", "form_data": SAMPLE})
++    check("POST /monthly-diagnoses → v0.1.3", r.status_code == 200 and r.json().get("api_version") == "v0.1.3",
++          f"api_version={r.json().get('api_version')}")
++    # POST /today-tasks/generate
++    r = client.post(f"{B}/today-tasks/generate", params={"store_id": "app1", "date": "2026-06-09"})
++    check("POST /today-tasks/generate → v0.1.3", r.status_code == 200 and r.json().get("api_version") == "v0.1.3")
++    # GET /today-tasks
++    r = client.get(f"{B}/today-tasks", params={"store_id": "app1", "date": "2026-06-09"})
++    check("GET /today-tasks → v0.1.3", r.status_code == 200 and r.json().get("api_version") == "v0.1.3")
++    # PUT /tasks/{id}/status — v0.1.3 用整型 id；构造一个任务
++    cust = client.post(f"{B}/customers", json={"store_id": "app1", "name": "应用级顾客", "phone": "13600000001"}).json()["data"]
++    proj = client.post(f"{B}/customers/{cust['id']}/projects", json={"project_name": "P", "total_quantity": 1, "total_amount": 1000}).json()["data"]
++    client.post(f"{B}/customers/{cust['id']}/projects/{proj['id']}/consume")  # 消耗至0→red
++    tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": "app1", "date": "2026-06-09"}).json()["data"]
++    if tasks:
++        r = client.put(f"{B}/tasks/{tasks[0]['id']}/status", json={"status": "done"})
++        check("PUT /tasks/{id}/status → v0.1.3", r.status_code == 200 and r.json().get("api_version") == "v0.1.3")
++    else:
++        check("PUT /tasks/{id}/status → v0.1.3", False, "无任务可测")
++
++    print("=== app 级：V0.1.2 老 router 独有端点仍可达（未被破坏）===")
++    # GET /history（V0.1.2 独有）
++    check("GET /history (V0.1.2) 仍可达", client.get(f"{B}/history", params={"store_id": "x"}).status_code == 200)
++    # GET /monthly-diagnoses/{report_id}（V0.1.2 独有，404 也算路由可达，非 405/未注册）
++    r = client.get(f"{B}/monthly-diagnoses/nonexistent")
++    check("GET /monthly-diagnoses/{id} (V0.1.2) 路由可达", r.status_code in (200, 404), str(r.status_code))
++
++    print("=== app 级：V0.1.3 专属端点可达 ===")
++    check("GET /benchmark-config (v0.1.3)", client.get(f"{B}/benchmark-config", params={"store_id": "app1"}).json().get("api_version") == "v0.1.3")
++    check("GET /demand-board (v0.1.3)", client.get(f"{B}/demand-board", params={"store_id": "app1"}).json().get("api_version") == "v0.1.3")
++
++    print(f"\n=== app 级 smoke 结果：{_p} PASS / {_f} FAIL ===")
++    return _f == 0
++
++
++if __name__ == "__main__":
++    sys.exit(0 if run() else 1)
 diff --git a/backend/smoke_test_v013.py b/backend/smoke_test_v013.py
 new file mode 100644
-index 0000000..b00181d
+index 0000000..9cbcd48
 --- /dev/null
 +++ b/backend/smoke_test_v013.py
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,163 @@
 +"""V0.1.3 店长工作台 · 后端 smoke_test。
 +
 +覆盖：health / daily-raw-data / computed-metrics / benchmark-config /
@@ -1772,11 +1919,11 @@ index 0000000..b00181d
 +
 +sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 +
-+if not os.getenv("STORE_MANAGER_DB_PATH"):
-+    os.environ["STORE_MANAGER_DB_PATH"] = os.path.join(tempfile.gettempdir(), "store_manager_v013_smoke.db")
++if not os.getenv("STORE_MANAGER_V013_DB_PATH"):
++    os.environ["STORE_MANAGER_V013_DB_PATH"] = os.path.join(tempfile.gettempdir(), "store_manager_v013_smoke.db")
 +    # 干净起点
 +    try:
-+        os.remove(os.environ["STORE_MANAGER_DB_PATH"])
++        os.remove(os.environ["STORE_MANAGER_V013_DB_PATH"])
 +    except OSError:
 +        pass
 +
@@ -1884,9 +2031,19 @@ index 0000000..b00181d
 +    board = client.get(f"{B}/demand-board", params={"store_id": SID}).json()["data"]
 +    check("G7+G8 demand-board 可成交标💰", board["summary"]["dealable_count"] >= 1
 +          and any(d.get("flag") == "💰" for d in board["dealable_demands"]))
++    # P1-5 归属校验：用错误 customer 消耗项目 / 改需求 → 404
++    check("归属校验：错误customer消耗项目→404",
++          client.post(f"{B}/customers/999999/projects/{pid}/consume").status_code == 404)
++    check("归属校验：错误customer改需求→404",
++          client.put(f"{B}/customers/999999/demands/{demand_id}", json={"progress_score": 7}).status_code == 404)
++
 +    # 9 生成顾客经营任务
 +    tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": SID, "date": DATE}).json()["data"]
 +    check("G9 预警触发生成 store_action_task", len(tasks) >= 1)
++    # P1-6 优先级数字统一：P0=0 / P1=1
++    check("优先级数字 P0=0/P1=1 且 label 一致",
++          all(t["priority"] in (0, 1, 2, 3) for t in tasks)
++          and all((t["priority"] == 0) == (t["priority_label"] == "P0") for t in tasks))
 +    # 10 完成任务 + 提交复盘
 +    if tasks:
 +        check("G10 PUT task status", client.put(f"{B}/tasks/{tasks[0]['id']}/status",
@@ -1925,6 +2082,30 @@ diff --git "a/docs/v0.1.3/06_7\345\244\247\345\272\223V0.1\345\212\240\345\274\2
 new file mode 100644
 index 0000000..662815c
 Binary files /dev/null and "b/docs/v0.1.3/06_7\345\244\247\345\272\223V0.1\345\212\240\345\274\272\345\242\236\350\241\245\345\214\205.docx" differ
+diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CHANGED_FILES.txt b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CHANGED_FILES.txt
+new file mode 100644
+index 0000000..424486c
+--- /dev/null
++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CHANGED_FILES.txt
+@@ -0,0 +1,18 @@
++M	backend/app/main.py
++A	backend/app/store_manager/customer_ops_v013.py
++A	backend/app/store_manager/db_v013.py
++A	backend/app/store_manager/diagnosis_v013.py
++A	backend/app/store_manager/library_ref.py
++A	backend/app/store_manager/metrics_v013.py
++A	backend/app/store_manager/pipeline_v013.py
++A	backend/app/store_manager/router_v013.py
++A	backend/app/store_manager/schemas_v013.py
++A	backend/app/store_manager/tasks_v013.py
++A	backend/smoke_test_v013.py
++A	"docs/v0.1.3/01_\344\272\247\345\223\201\345\206\205\346\240\270\351\207\215\346\236\204PRD.docx"
++A	"docs/v0.1.3/02_\345\220\216\347\253\257\345\274\200\345\217\221\346\226\207\346\241\243.docx"
++A	"docs/v0.1.3/03_\346\200\273\345\256\241\350\241\245\344\270\201\350\257\264\346\230\216V0.1.docx"
++A	"docs/v0.1.3/05_\351\241\276\345\256\242\347\273\217\350\220\245\347\256\241\347\220\206\344\275\223\347\263\273\350\256\276\350\256\241\346\226\207\346\241\243.docx"
++A	"docs/v0.1.3/06_7\345\244\247\345\272\223V0.1\345\212\240\345\274\272\345\242\236\350\241\245\345\214\205.docx"
++A	docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md
++A	docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md
 diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md
 new file mode 100644
 index 0000000..4cbb832
@@ -2167,6 +2348,10 @@ index 0000000..4cbb832
 +---
 +
 +_生成后停住，等待吴哥安排扣子工具链审查。本阶段不 push、不部署。_
+diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.zip b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.zip
+new file mode 100644
+index 0000000..3440c39
+Binary files /dev/null and b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.zip differ
 diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md
 new file mode 100644
 index 0000000..b9c1fb9
@@ -2295,3 +2480,2443 @@ index 0000000..b9c1fb9
 +---
 +
 +_本报告为 V0.1.3 后端第一阶段交付，待吴哥 + ChatGPT 审核。后续前端、联调、部署均为独立阶段。_
+diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DIFF_68263a1_TO_HEAD.patch b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DIFF_68263a1_TO_HEAD.patch
+new file mode 100644
+index 0000000..a45e366
+--- /dev/null
++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DIFF_68263a1_TO_HEAD.patch
+@@ -0,0 +1,2297 @@
++diff --git a/backend/app/main.py b/backend/app/main.py
++index df7f03e..56bc413 100644
++--- a/backend/app/main.py
+++++ b/backend/app/main.py
++@@ -5,6 +5,7 @@ from .database import Base, engine
++ from .config import settings
++ from .routers import diagnoses, monthly, admin, weapp
++ from .store_manager.router import router as store_manager_router
+++from .store_manager.router_v013 import router as store_manager_v013_router
++ import os
++ 
++ Base.metadata.create_all(bind=engine)
++@@ -25,6 +26,7 @@ app.include_router(monthly.router)
++ app.include_router(admin.router)
++ app.include_router(weapp.router, prefix="/api", tags=["weapp"])
++ app.include_router(store_manager_router)
+++app.include_router(store_manager_v013_router)
++ 
++ app.mount("/reports", StaticFiles(directory=settings.report_storage_path), name="reports")
++ 
++diff --git a/backend/app/store_manager/customer_ops_v013.py b/backend/app/store_manager/customer_ops_v013.py
++new file mode 100644
++index 0000000..4124d58
++--- /dev/null
+++++ b/backend/app/store_manager/customer_ops_v013.py
++@@ -0,0 +1,290 @@
+++"""V0.1.3 顾客经营模型业务逻辑。
+++
+++覆盖：顾客档案(RFM自动) / 在店项目(消耗+预警) / 家居产品(用完预警) /
+++需求管理(进度≥8进可成交) / 红黄预警(去重) / 今日需求看板。
+++"""
+++import json
+++from datetime import datetime, timedelta
+++
+++
+++def _today():
+++    return datetime.now().strftime("%Y-%m-%d")
+++
+++
+++def _row(r):
+++    return dict(r) if r else None
+++
+++
+++# ---------------- 顾客档案 ----------------
+++CUSTOMER_FIELDS = [
+++    "store_id", "name", "nickname", "phone", "gender", "age_range", "skin_type",
+++    "source_channel", "first_visit_date", "customer_no", "preferred_projects",
+++    "preferred_staff", "preferred_time", "price_sensitivity", "comm_preference",
+++]
+++
+++
+++def compute_rfm(profile: dict) -> str:
+++    """简版 RFM 标签：基于最近到店/累计到店/累计消费。"""
+++    total_spent = float(profile.get("total_spent") or 0)
+++    total_visits = int(profile.get("total_visits") or 0)
+++    last_visit = profile.get("last_visit_date")
+++    recent = False
+++    if last_visit:
+++        try:
+++            recent = (datetime.now() - datetime.strptime(last_visit[:10], "%Y-%m-%d")).days <= 30
+++        except ValueError:
+++            recent = False
+++    if total_spent >= 20000 and total_visits >= 6:
+++        return "高价值"
+++    if recent and (total_spent >= 5000 or total_visits >= 3):
+++        return "潜力"
+++    if not recent and total_visits >= 1:
+++        return "待唤醒"
+++    return "普通"
+++
+++
+++def create_customer(conn, payload: dict) -> dict:
+++    data = {k: payload.get(k) for k in CUSTOMER_FIELDS}
+++    data["store_id"] = data.get("store_id") or "default_store"
+++    if not data.get("name") or not data.get("phone"):
+++        raise ValueError("name 和 phone 为必填")
+++    cols = [k for k in data if data[k] is not None]
+++    ph = ",".join(["?"] * len(cols))
+++    cur = conn.execute(
+++        f"INSERT INTO customer_profile ({','.join(cols)}) VALUES ({ph})",
+++        tuple(data[k] for k in cols),
+++    )
+++    conn.commit()
+++    return get_customer(conn, cur.lastrowid)
+++
+++
+++def get_customer(conn, customer_id) -> dict:
+++    r = conn.execute("SELECT * FROM customer_profile WHERE id=?", (customer_id,)).fetchone()
+++    return _row(r)
+++
+++
+++def list_customers(conn, store_id="default_store", keyword=None):
+++    if keyword:
+++        rows = conn.execute(
+++            "SELECT * FROM customer_profile WHERE store_id=? AND (name LIKE ? OR phone LIKE ?) ORDER BY id DESC LIMIT 100",
+++            (store_id, f"%{keyword}%", f"%{keyword}%"),
+++        ).fetchall()
+++    else:
+++        rows = conn.execute(
+++            "SELECT * FROM customer_profile WHERE store_id=? ORDER BY id DESC LIMIT 100", (store_id,)
+++        ).fetchall()
+++    return [dict(r) for r in rows]
+++
+++
+++def refresh_customer_profile(conn, customer_id):
+++    """根据在店项目刷新 remaining_project_amount + rfm_label。"""
+++    prof = get_customer(conn, customer_id)
+++    if not prof:
+++        return None
+++    remaining = conn.execute(
+++        "SELECT COALESCE(SUM(remaining_quantity*unit_amount),0) AS amt FROM customer_project WHERE customer_id=? AND status='active'",
+++        (customer_id,),
+++    ).fetchone()["amt"]
+++    prof["remaining_project_amount"] = remaining
+++    rfm = compute_rfm(prof)
+++    conn.execute(
+++        "UPDATE customer_profile SET remaining_project_amount=?, rfm_label=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+++        (remaining, rfm, customer_id),
+++    )
+++    conn.commit()
+++    return get_customer(conn, customer_id)
+++
+++
+++# ---------------- 红黄预警（去重 + 升级） ----------------
+++def create_warning(conn, customer_id, warning_type, warning_level, warning_source, warning_desc) -> dict:
+++    """去重：同一顾客同 type+source 且同 level 的未处理预警不重复生成；
+++    不同 level（如 yellow→red 升级）允许新增。"""
+++    existing = conn.execute(
+++        "SELECT * FROM customer_warning WHERE customer_id=? AND warning_type=? AND warning_source=? AND is_resolved=0",
+++        (customer_id, warning_type, warning_source),
+++    ).fetchall()
+++    for e in existing:
+++        if e["warning_level"] == warning_level:
+++            return dict(e)  # 同级未处理，已存在
+++    cur = conn.execute(
+++        "INSERT INTO customer_warning (customer_id, warning_type, warning_level, warning_source, warning_desc) VALUES (?,?,?,?,?)",
+++        (customer_id, warning_type, warning_level, warning_source, warning_desc),
+++    )
+++    conn.commit()
+++    return dict(conn.execute("SELECT * FROM customer_warning WHERE id=?", (cur.lastrowid,)).fetchone())
+++
+++
+++def list_warnings(conn, store_id="default_store", only_unresolved=True):
+++    q = (
+++        "SELECT w.*, c.name AS customer_name, c.rfm_label FROM customer_warning w "
+++        "JOIN customer_profile c ON c.id=w.customer_id WHERE c.store_id=?"
+++    )
+++    if only_unresolved:
+++        q += " AND w.is_resolved=0"
+++    q += " ORDER BY CASE w.warning_level WHEN 'red' THEN 0 ELSE 1 END, w.created_at DESC LIMIT 200"
+++    return [dict(r) for r in conn.execute(q, (store_id,)).fetchall()]
+++
+++
+++# ---------------- 在店项目 + 消耗 ----------------
+++def add_project(conn, customer_id, payload: dict) -> dict:
+++    total_q = int(payload.get("total_quantity") or 1)
+++    used = int(payload.get("used_quantity") or 0)
+++    total_amount = float(payload.get("total_amount") or 0)
+++    unit = float(payload.get("unit_amount") or (total_amount / total_q if total_q else 0))
+++    cur = conn.execute(
+++        "INSERT INTO customer_project (customer_id, project_name, project_type, purchase_date, "
+++        "total_quantity, total_amount, unit_amount, used_quantity, remaining_quantity, expiry_date, "
+++        "responsible_staff, status, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+++        (customer_id, payload.get("project_name"), payload.get("project_type", ""),
+++         payload.get("purchase_date") or _today(), total_q, total_amount, unit, used,
+++         total_q - used, payload.get("expiry_date"), payload.get("responsible_staff", ""),
+++         "active", payload.get("notes", "")),
+++    )
+++    conn.commit()
+++    refresh_customer_profile(conn, customer_id)
+++    return dict(conn.execute("SELECT * FROM customer_project WHERE id=?", (cur.lastrowid,)).fetchone())
+++
+++
+++def consume_project(conn, project_id) -> dict:
+++    """消耗 1 次：used+1，remaining=total-used；remaining<=2 黄，==0 红（自动预警）。"""
+++    p = conn.execute("SELECT * FROM customer_project WHERE id=?", (project_id,)).fetchone()
+++    if not p:
+++        return None
+++    p = dict(p)
+++    used = int(p["used_quantity"]) + 1
+++    remaining = int(p["total_quantity"]) - used
+++    if remaining < 0:
+++        remaining, used = 0, int(p["total_quantity"])
+++    status = "finished" if remaining == 0 else "active"
+++    conn.execute(
+++        "UPDATE customer_project SET used_quantity=?, remaining_quantity=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+++        (used, remaining, status, project_id),
+++    )
+++    conn.commit()
+++    # 自动预警
+++    if remaining == 0:
+++        create_warning(conn, p["customer_id"], "project_used_up", "red", f"project:{project_id}",
+++                       f"项目【{p['project_name']}】已消耗完，需及时续项。")
+++    elif remaining <= 2:
+++        create_warning(conn, p["customer_id"], "project_low", "yellow", f"project:{project_id}",
+++                       f"项目【{p['project_name']}】仅剩 {remaining} 次，建议提前沟通续项。")
+++    refresh_customer_profile(conn, p["customer_id"])
+++    return dict(conn.execute("SELECT * FROM customer_project WHERE id=?", (project_id,)).fetchone())
+++
+++
+++def list_projects(conn, customer_id):
+++    return [dict(r) for r in conn.execute(
+++        "SELECT * FROM customer_project WHERE customer_id=? ORDER BY id DESC", (customer_id,)).fetchall()]
+++
+++
+++# ---------------- 家居产品 + 复购预警 ----------------
+++def add_home_product(conn, customer_id, payload: dict) -> dict:
+++    purchase = payload.get("purchase_date") or _today()
+++    cycle = int(payload.get("estimated_cycle") or 30)
+++    end_date = payload.get("estimated_end_date")
+++    if not end_date:
+++        try:
+++            end_date = (datetime.strptime(purchase[:10], "%Y-%m-%d") + timedelta(days=cycle)).strftime("%Y-%m-%d")
+++        except ValueError:
+++            end_date = None
+++    cur = conn.execute(
+++        "INSERT INTO customer_home_product (customer_id, product_name, product_type, brand, specification, "
+++        "purchase_date, estimated_cycle, estimated_end_date, usage_progress, remaining_estimate, "
+++        "usage_feedback, repurchase_status, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+++        (customer_id, payload.get("product_name"), payload.get("product_type", ""), payload.get("brand", ""),
+++         payload.get("specification", ""), purchase, cycle, end_date, payload.get("usage_progress", ""),
+++         payload.get("remaining_estimate", ""), payload.get("usage_feedback", ""),
+++         payload.get("repurchase_status", "normal"), payload.get("notes", "")),
+++    )
+++    conn.commit()
+++    pid = cur.lastrowid
+++    _check_home_product_warning(conn, customer_id, pid, end_date, payload.get("repurchase_status", "normal"))
+++    return dict(conn.execute("SELECT * FROM customer_home_product WHERE id=?", (pid,)).fetchone())
+++
+++
+++def _check_home_product_warning(conn, customer_id, pid, end_date, repurchase_status):
+++    name = conn.execute("SELECT product_name FROM customer_home_product WHERE id=?", (pid,)).fetchone()["product_name"]
+++    if repurchase_status == "switched_competitor":
+++        create_warning(conn, customer_id, "home_product_switched", "red", f"home_product:{pid}",
+++                       f"家居产品【{name}】顾客反馈转竞品，需立即跟进。")
+++        return
+++    if not end_date:
+++        return
+++    try:
+++        days_left = (datetime.strptime(end_date[:10], "%Y-%m-%d") - datetime.now()).days
+++    except ValueError:
+++        return
+++    if days_left < 0:
+++        create_warning(conn, customer_id, "home_product_used_up", "red", f"home_product:{pid}",
+++                       f"家居产品【{name}】预计已用完，建议复购跟进。")
+++    elif days_left <= 7:
+++        create_warning(conn, customer_id, "home_product_low", "yellow", f"home_product:{pid}",
+++                       f"家居产品【{name}】预计 {days_left} 天内用完，可提前提醒复购。")
+++
+++
+++def list_home_products(conn, customer_id):
+++    return [dict(r) for r in conn.execute(
+++        "SELECT * FROM customer_home_product WHERE customer_id=? ORDER BY id DESC", (customer_id,)).fetchall()]
+++
+++
+++# ---------------- 需求管理 ----------------
+++DEMAND_DEALABLE_SCORE = 8
+++
+++
+++def add_demand(conn, customer_id, payload: dict) -> dict:
+++    score = int(payload.get("progress_score") or 0)
+++    cur = conn.execute(
+++        "INSERT INTO customer_demand (customer_id, demand_desc, demand_type, related_project, progress_score, "
+++        "created_at_service, last_updated_at_service, created_by_staff, responsible_staff, status, notes) "
+++        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+++        (customer_id, payload.get("demand_desc"), payload.get("demand_type", ""), payload.get("related_project", ""),
+++         score, payload.get("created_at_service") or _today(), _today(),
+++         payload.get("created_by_staff", ""), payload.get("responsible_staff", ""),
+++         payload.get("status", "active"), payload.get("notes", "")),
+++    )
+++    conn.commit()
+++    return dict(conn.execute("SELECT * FROM customer_demand WHERE id=?", (cur.lastrowid,)).fetchone())
+++
+++
+++def update_demand_progress(conn, demand_id, progress_score) -> dict:
+++    conn.execute(
+++        "UPDATE customer_demand SET progress_score=?, last_updated_at_service=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+++        (int(progress_score), _today(), demand_id),
+++    )
+++    conn.commit()
+++    return dict(conn.execute("SELECT * FROM customer_demand WHERE id=?", (demand_id,)).fetchone())
+++
+++
+++def list_demands(conn, customer_id):
+++    return [dict(r) for r in conn.execute(
+++        "SELECT * FROM customer_demand WHERE customer_id=? ORDER BY id DESC", (customer_id,)).fetchall()]
+++
+++
+++# ---------------- 今日需求看板 ----------------
+++def build_demand_board(conn, store_id="default_store") -> dict:
+++    """聚合：可成交需求(progress≥8 标💰) + 红黄预警，供今日看板展示。"""
+++    dealable = conn.execute(
+++        "SELECT d.*, c.name AS customer_name, c.phone, c.rfm_label FROM customer_demand d "
+++        "JOIN customer_profile c ON c.id=d.customer_id "
+++        "WHERE c.store_id=? AND d.status='active' AND d.progress_score>=? "
+++        "ORDER BY d.progress_score DESC LIMIT 100",
+++        (store_id, DEMAND_DEALABLE_SCORE),
+++    ).fetchall()
+++    warnings = list_warnings(conn, store_id, only_unresolved=True)
+++    board = {
+++        "board_date": _today(),
+++        "dealable_demands": [dict(r, dealable=True, flag="💰") for r in dealable],
+++        "warnings": warnings,
+++        "summary": {
+++            "dealable_count": len(dealable),
+++            "red_warning_count": sum(1 for w in warnings if w["warning_level"] == "red"),
+++            "yellow_warning_count": sum(1 for w in warnings if w["warning_level"] == "yellow"),
+++        },
+++    }
+++    conn.execute(
+++        "INSERT INTO daily_demand_board (store_id, board_date, board_data) VALUES (?,?,?) "
+++        "ON CONFLICT(store_id, board_date) DO UPDATE SET board_data=excluded.board_data",
+++        (store_id, _today(), json.dumps(board, ensure_ascii=False)),
+++    )
+++    conn.commit()
+++    return board
++diff --git a/backend/app/store_manager/db_v013.py b/backend/app/store_manager/db_v013.py
++new file mode 100644
++index 0000000..f0bb805
++--- /dev/null
+++++ b/backend/app/store_manager/db_v013.py
++@@ -0,0 +1,349 @@
+++"""V0.1.3 店长工作台 · 独立 SQLite 数据底座（14 张表 + 索引）。
+++
+++设计原则（遵守总审补丁说明 V0.1 红线）：
+++- 独立 SQLite 文件，与主库（SQLAlchemy）完全隔离，不动生产库、不做迁移。
+++- 新表独立，与 V0.1.2 的 store_manager_reports / store_manager_tasks 并存于同一独立库。
+++- 表结构 1:1 落地《后端开发文档》第 2 节 + 补丁5 高频索引。
+++"""
+++import os
+++import sqlite3
+++
+++# 与 V0.1.2 复用同一独立测试库（不进主库）。可用环境变量覆盖。
+++DB_PATH = os.getenv("STORE_MANAGER_DB_PATH", "/opt/meiye-wuyou/data/store_manager_workbench.db")
+++
+++# api_version 仅用于内部日志/调试（补丁4：前缀不变，不启 /api/v2）。
+++API_VERSION = "v0.1.3"
+++
+++SCHEMA = """
+++CREATE TABLE IF NOT EXISTS store_daily_raw_data (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    report_date TEXT NOT NULL,
+++    daily_revenue DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    daily_recharge_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    daily_product_retail DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    daily_visits INTEGER NOT NULL DEFAULT 0,
+++    daily_new_customers INTEGER NOT NULL DEFAULT 0,
+++    daily_valid_appointments INTEGER NOT NULL DEFAULT 0,
+++    daily_appointment_arrivals INTEGER NOT NULL DEFAULT 0,
+++    daily_transaction_customers INTEGER NOT NULL DEFAULT 0,
+++    daily_transaction_orders INTEGER NOT NULL DEFAULT 0,
+++    daily_new_transaction INTEGER NOT NULL DEFAULT 0,
+++    daily_project_sales DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    daily_main_project_sales DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    daily_service_count INTEGER NOT NULL DEFAULT 0,
+++    daily_staff_count INTEGER NOT NULL DEFAULT 0,
+++    daily_complaints INTEGER NOT NULL DEFAULT 0,
+++    daily_notes TEXT DEFAULT '',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    UNIQUE(store_id, report_date)
+++);
+++CREATE INDEX IF NOT EXISTS idx_raw_data_date ON store_daily_raw_data(report_date);
+++CREATE INDEX IF NOT EXISTS idx_raw_data_store ON store_daily_raw_data(store_id);
+++
+++CREATE TABLE IF NOT EXISTS store_computed_metrics (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    report_date TEXT NOT NULL,
+++    raw_data_id INTEGER NOT NULL,
+++    conversion_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    new_customer_ratio DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    new_conversion_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    avg_order_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    appointment_arrival_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    per_capita_efficiency DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    recharge_ratio DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    project_ratio DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    product_ratio DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    main_project_ratio DECIMAL(5,2) NOT NULL DEFAULT 0,
+++    complaint_risk_index DECIMAL(8,2) NOT NULL DEFAULT 0,
+++    estimated_return_customers INTEGER NOT NULL DEFAULT 0,
+++    service_efficiency DECIMAL(8,2) NOT NULL DEFAULT 0,
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (raw_data_id) REFERENCES store_daily_raw_data(id),
+++    UNIQUE(store_id, report_date)
+++);
+++CREATE INDEX IF NOT EXISTS idx_metrics_date ON store_computed_metrics(report_date);
+++
+++CREATE TABLE IF NOT EXISTS store_diagnosis_result (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    report_date TEXT NOT NULL,
+++    status TEXT NOT NULL DEFAULT 'draft',
+++    data_overview TEXT DEFAULT '{}',
+++    computed_metrics TEXT DEFAULT '{}',
+++    top_issues TEXT DEFAULT '[]',
+++    customer_opportunities TEXT DEFAULT '{}',
+++    tomorrow_actions TEXT DEFAULT '[]',
+++    raw_data_id INTEGER,
+++    metrics_id INTEGER,
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (raw_data_id) REFERENCES store_daily_raw_data(id),
+++    FOREIGN KEY (metrics_id) REFERENCES store_computed_metrics(id)
+++);
+++CREATE INDEX IF NOT EXISTS idx_diag_date ON store_diagnosis_result(report_date);
+++CREATE INDEX IF NOT EXISTS idx_diag_store ON store_diagnosis_result(store_id);
+++
+++CREATE TABLE IF NOT EXISTS store_diagnosis_issue (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    diagnosis_id INTEGER NOT NULL,
+++    issue_type TEXT NOT NULL,
+++    issue_name TEXT NOT NULL,
+++    severity INTEGER NOT NULL DEFAULT 5,
+++    priority INTEGER NOT NULL DEFAULT 2,
+++    data_evidence TEXT DEFAULT '{}',
+++    root_cause TEXT DEFAULT '',
+++    root_cause_detail TEXT DEFAULT '',
+++    library_ref TEXT DEFAULT '{}',
+++    today_action TEXT DEFAULT '',
+++    day15_action TEXT DEFAULT '',
+++    manager_confirm TEXT DEFAULT '',
+++    sort_order INTEGER NOT NULL DEFAULT 0,
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (diagnosis_id) REFERENCES store_diagnosis_result(id)
+++);
+++CREATE INDEX IF NOT EXISTS idx_issue_diag ON store_diagnosis_issue(diagnosis_id);
+++
+++CREATE TABLE IF NOT EXISTS customer_profile (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    name TEXT NOT NULL,
+++    nickname TEXT DEFAULT '',
+++    phone TEXT NOT NULL,
+++    gender TEXT DEFAULT '女',
+++    age_range TEXT DEFAULT '',
+++    skin_type TEXT DEFAULT '',
+++    source_channel TEXT DEFAULT '',
+++    first_visit_date TEXT,
+++    customer_no TEXT,
+++    total_spent DECIMAL(12,2) DEFAULT 0,
+++    total_visits INTEGER DEFAULT 0,
+++    avg_order_value DECIMAL(12,2) DEFAULT 0,
+++    monthly_visit_freq DECIMAL(8,2) DEFAULT 0,
+++    last_visit_date TEXT,
+++    visit_last_30_days INTEGER DEFAULT 0,
+++    remaining_project_amount DECIMAL(12,2) DEFAULT 0,
+++    consumption_years INTEGER DEFAULT 0,
+++    rfm_label TEXT DEFAULT '',
+++    preferred_projects TEXT DEFAULT '',
+++    preferred_staff TEXT DEFAULT '',
+++    preferred_time TEXT DEFAULT '',
+++    price_sensitivity TEXT DEFAULT '',
+++    comm_preference TEXT DEFAULT '',
+++    status TEXT DEFAULT 'active',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    UNIQUE(store_id, phone)
+++);
+++CREATE INDEX IF NOT EXISTS idx_customer_phone ON customer_profile(phone);
+++CREATE INDEX IF NOT EXISTS idx_customer_last_visit ON customer_profile(last_visit_date);
+++CREATE INDEX IF NOT EXISTS idx_customer_store ON customer_profile(store_id);
+++
+++CREATE TABLE IF NOT EXISTS customer_project (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    customer_id INTEGER NOT NULL,
+++    project_name TEXT NOT NULL,
+++    project_type TEXT NOT NULL,
+++    purchase_date TEXT NOT NULL,
+++    total_quantity INTEGER NOT NULL DEFAULT 1,
+++    total_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+++    unit_amount DECIMAL(12,2) DEFAULT 0,
+++    used_quantity INTEGER DEFAULT 0,
+++    remaining_quantity INTEGER DEFAULT 0,
+++    expiry_date TEXT,
+++    responsible_staff TEXT DEFAULT '',
+++    status TEXT DEFAULT 'active',
+++    notes TEXT DEFAULT '',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (customer_id) REFERENCES customer_profile(id)
+++);
+++CREATE INDEX IF NOT EXISTS idx_cp_customer ON customer_project(customer_id);
+++CREATE INDEX IF NOT EXISTS idx_cp_status ON customer_project(status);
+++
+++CREATE TABLE IF NOT EXISTS customer_home_product (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    customer_id INTEGER NOT NULL,
+++    product_name TEXT NOT NULL,
+++    product_type TEXT DEFAULT '',
+++    brand TEXT DEFAULT '',
+++    specification TEXT DEFAULT '',
+++    purchase_date TEXT NOT NULL,
+++    estimated_cycle INTEGER DEFAULT 30,
+++    estimated_end_date TEXT,
+++    usage_progress TEXT DEFAULT '',
+++    remaining_estimate TEXT DEFAULT '',
+++    usage_feedback TEXT DEFAULT '',
+++    repurchase_status TEXT DEFAULT 'normal',
+++    notes TEXT DEFAULT '',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (customer_id) REFERENCES customer_profile(id)
+++);
+++CREATE INDEX IF NOT EXISTS idx_chp_customer ON customer_home_product(customer_id);
+++CREATE INDEX IF NOT EXISTS idx_chp_repurchase ON customer_home_product(repurchase_status);
+++
+++CREATE TABLE IF NOT EXISTS customer_demand (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    customer_id INTEGER NOT NULL,
+++    demand_desc TEXT NOT NULL,
+++    demand_type TEXT DEFAULT '',
+++    related_project TEXT DEFAULT '',
+++    progress_score INTEGER DEFAULT 0,
+++    created_at_service TEXT,
+++    last_updated_at_service TEXT,
+++    created_by_staff TEXT DEFAULT '',
+++    responsible_staff TEXT DEFAULT '',
+++    status TEXT DEFAULT 'active',
+++    notes TEXT DEFAULT '',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (customer_id) REFERENCES customer_profile(id)
+++);
+++CREATE INDEX IF NOT EXISTS idx_cd_customer ON customer_demand(customer_id);
+++CREATE INDEX IF NOT EXISTS idx_cd_type ON customer_demand(demand_type);
+++CREATE INDEX IF NOT EXISTS idx_cd_status ON customer_demand(status);
+++
+++CREATE TABLE IF NOT EXISTS customer_warning (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    customer_id INTEGER NOT NULL,
+++    warning_type TEXT NOT NULL,
+++    warning_level TEXT NOT NULL,
+++    warning_source TEXT NOT NULL,
+++    warning_desc TEXT NOT NULL,
+++    is_resolved INTEGER DEFAULT 0,
+++    resolved_at TIMESTAMP,
+++    resolved_by TEXT DEFAULT '',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (customer_id) REFERENCES customer_profile(id)
+++);
+++CREATE INDEX IF NOT EXISTS idx_cw_customer ON customer_warning(customer_id);
+++CREATE INDEX IF NOT EXISTS idx_cw_level ON customer_warning(warning_level);
+++CREATE INDEX IF NOT EXISTS idx_cw_resolved ON customer_warning(is_resolved);
+++
+++CREATE TABLE IF NOT EXISTS customer_follow_task (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    customer_id INTEGER NOT NULL,
+++    warning_id INTEGER,
+++    task_desc TEXT NOT NULL,
+++    assigned_staff TEXT DEFAULT '',
+++    priority INTEGER DEFAULT 2,
+++    status TEXT DEFAULT 'pending',
+++    due_date TEXT,
+++    completed_at TIMESTAMP,
+++    result_note TEXT DEFAULT '',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    FOREIGN KEY (customer_id) REFERENCES customer_profile(id),
+++    FOREIGN KEY (warning_id) REFERENCES customer_warning(id)
+++);
+++
+++CREATE TABLE IF NOT EXISTS store_action_task (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    report_date TEXT NOT NULL,
+++    title TEXT NOT NULL,
+++    description TEXT DEFAULT '',
+++    priority INTEGER NOT NULL DEFAULT 2,
+++    source_type TEXT DEFAULT '',
+++    source_id TEXT DEFAULT '',
+++    related_customer_id INTEGER,
+++    related_staff TEXT DEFAULT '',
+++    status TEXT NOT NULL DEFAULT 'pending',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    deadline TIMESTAMP,
+++    completed_at TIMESTAMP,
+++    review_note TEXT DEFAULT '',
+++    is_throttled_to_p1 INTEGER NOT NULL DEFAULT 0,
+++    keep_red_tag INTEGER NOT NULL DEFAULT 0,
+++    merged_warning_count INTEGER NOT NULL DEFAULT 0,
+++    FOREIGN KEY (related_customer_id) REFERENCES customer_profile(id)
+++);
+++CREATE INDEX IF NOT EXISTS idx_task_date ON store_action_task(report_date);
+++CREATE INDEX IF NOT EXISTS idx_task_priority ON store_action_task(priority);
+++CREATE INDEX IF NOT EXISTS idx_task_status ON store_action_task(status);
+++
+++CREATE TABLE IF NOT EXISTS daily_demand_board (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    board_date TEXT NOT NULL,
+++    board_data TEXT NOT NULL,
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    UNIQUE(store_id, board_date)
+++);
+++
+++CREATE TABLE IF NOT EXISTS daily_review (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    report_date TEXT NOT NULL,
+++    review_content TEXT DEFAULT '',
+++    completed_tasks TEXT DEFAULT '[]',
+++    unfinished_tasks TEXT DEFAULT '[]',
+++    tomorrow_actions TEXT DEFAULT '[]',
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    UNIQUE(store_id, report_date)
+++);
+++CREATE INDEX IF NOT EXISTS idx_review_date ON daily_review(report_date);
+++
+++CREATE TABLE IF NOT EXISTS store_benchmark_config (
+++    id INTEGER PRIMARY KEY AUTOINCREMENT,
+++    store_id TEXT NOT NULL DEFAULT 'default_store',
+++    store_type TEXT DEFAULT 'mature_store',
+++    store_stage TEXT DEFAULT 'mature',
+++    staff_count INTEGER DEFAULT 0,
+++    monthly_target DECIMAL(12,2) DEFAULT 0,
+++    avg_order_target DECIMAL(12,2) DEFAULT 0,
+++    per_capita_target DECIMAL(12,2) DEFAULT 0,
+++    new_customer_ratio_green_low DECIMAL(5,2) DEFAULT 15.00,
+++    new_customer_ratio_green_high DECIMAL(5,2) DEFAULT 30.00,
+++    return_customer_ratio_green_low DECIMAL(5,2) DEFAULT 70.00,
+++    return_customer_ratio_green_high DECIMAL(5,2) DEFAULT 85.00,
+++    conversion_rate_green DECIMAL(5,2) DEFAULT 60.00,
+++    repurchase_rate_green DECIMAL(5,2) DEFAULT 50.00,
+++    appointment_arrival_rate_green DECIMAL(5,2) DEFAULT 80.00,
+++    complaint_risk_max DECIMAL(8,2) DEFAULT 5.00,
+++    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+++    UNIQUE(store_id)
+++);
+++
+++-- 补丁5：高频查询复合索引
+++CREATE INDEX IF NOT EXISTS idx_cw_customer_resolved ON customer_warning(customer_id, is_resolved);
+++CREATE INDEX IF NOT EXISTS idx_task_store_date_priority_status ON store_action_task(store_id, report_date, priority, status);
+++CREATE INDEX IF NOT EXISTS idx_cd_customer_type_status ON customer_demand(customer_id, demand_type, status);
+++CREATE INDEX IF NOT EXISTS idx_cp_customer_status_remaining_expiry ON customer_project(customer_id, status, remaining_quantity, expiry_date);
+++CREATE INDEX IF NOT EXISTS idx_chp_customer_repurchase_enddate ON customer_home_product(customer_id, repurchase_status, estimated_end_date);
+++"""
+++
+++# 补丁5 中 idx_cw_store_level_resolved 含 store_id，但 customer_warning 无 store_id 列，
+++# 改为按 customer+level+resolved 覆盖（store 维度经 customer 关联），见下方补充索引。
+++SCHEMA += """
+++CREATE INDEX IF NOT EXISTS idx_cw_customer_level_resolved ON customer_warning(customer_id, warning_level, is_resolved);
+++"""
+++
+++
+++def connect():
+++    """打开独立 SQLite 连接并确保建表（幂等）。"""
+++    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+++    conn = sqlite3.connect(DB_PATH)
+++    conn.row_factory = sqlite3.Row
+++    conn.execute("PRAGMA foreign_keys = ON")
+++    init_db(conn)
+++    return conn
+++
+++
+++def init_db(conn):
+++    conn.executescript(SCHEMA)
+++    conn.commit()
+++
+++
+++def table_names():
+++    """返回本模块管理的 14 张表，用于 smoke 校验。"""
+++    return [
+++        "store_daily_raw_data", "store_computed_metrics", "store_diagnosis_result",
+++        "store_diagnosis_issue", "store_action_task", "customer_profile",
+++        "customer_project", "customer_home_product", "customer_demand",
+++        "customer_warning", "customer_follow_task", "daily_demand_board",
+++        "daily_review", "store_benchmark_config",
+++    ]
++diff --git a/backend/app/store_manager/diagnosis_v013.py b/backend/app/store_manager/diagnosis_v013.py
++new file mode 100644
++index 0000000..214edc2
++--- /dev/null
+++++ b/backend/app/store_manager/diagnosis_v013.py
++@@ -0,0 +1,207 @@
+++"""V0.1.3 诊断规则引擎（9 类经营问题）。
+++
+++- 阈值从 StoreBenchmarkConfig 读取（补丁1），首次无配置 fallback 到表 DEFAULT 值。
+++- 9 类问题：客流/成交/新客承接/客单/锁客/复购/项目结构/员工人效/服务风险。
+++- 输出按 severity 降序，取 top3 作为"今日最核心 3 个问题"。
+++- 文案边界（补丁7）：统一"规则诊断"，禁止"AI 智能诊断"等表述。
+++"""
+++import json
+++
+++from . import db_v013 as db
+++from .library_ref import get_library_ref
+++
+++# 补丁7：报告页统一文案边界。
+++DIAGNOSIS_SOURCE_LABEL = "基于经营数据 + 7大库规则映射生成"
+++DIAGNOSIS_METHOD_LABEL = "规则诊断"
+++DIAGNOSIS_DISCLAIMER = "AI深度分析将在V0.1.4接入"
+++
+++# 部分阈值未在 StoreBenchmarkConfig 中（客流/新客承接/锁客/项目结构），
+++# 使用规则级默认常量（标注为待确认，可后续配置化）。
+++RULE_DEFAULTS = {
+++    "traffic_visits_min": 20,        # 客流问题：日客流低于此值
+++    "new_conversion_min": 50.0,      # 新客承接：新客成交率(%)低于此值
+++    "recharge_ratio_min": 30.0,      # 锁客问题：充值占比(%)低于此值
+++    "main_project_ratio_min": 50.0,  # 项目结构：主推项目占比(%)低于此值
+++}
+++
+++BENCHMARK_DEFAULTS = {
+++    "store_id": "default_store", "store_type": "mature_store", "store_stage": "mature",
+++    "staff_count": 0, "monthly_target": 0, "avg_order_target": 0, "per_capita_target": 0,
+++    "new_customer_ratio_green_low": 15.00, "new_customer_ratio_green_high": 30.00,
+++    "return_customer_ratio_green_low": 70.00, "return_customer_ratio_green_high": 85.00,
+++    "conversion_rate_green": 60.00, "repurchase_rate_green": 50.00,
+++    "appointment_arrival_rate_green": 80.00, "complaint_risk_max": 5.00,
+++}
+++
+++
+++def ensure_default_benchmark(conn, store_id="default_store"):
+++    """ECS 首次启动/首次读取时插入默认配置（补丁1：默认值初始化）。"""
+++    row = conn.execute("SELECT * FROM store_benchmark_config WHERE store_id=?", (store_id,)).fetchone()
+++    if row:
+++        return dict(row)
+++    cfg = dict(BENCHMARK_DEFAULTS, store_id=store_id)
+++    cols = ",".join(cfg.keys())
+++    ph = ",".join(["?"] * len(cfg))
+++    conn.execute(f"INSERT INTO store_benchmark_config ({cols}) VALUES ({ph})", tuple(cfg.values()))
+++    conn.commit()
+++    return dict(conn.execute("SELECT * FROM store_benchmark_config WHERE store_id=?", (store_id,)).fetchone())
+++
+++
+++def get_benchmark(conn, store_id="default_store") -> dict:
+++    return ensure_default_benchmark(conn, store_id)
+++
+++
+++def update_benchmark(conn, store_id, patch: dict) -> dict:
+++    cfg = ensure_default_benchmark(conn, store_id)
+++    editable = [k for k in BENCHMARK_DEFAULTS if k != "store_id"]
+++    sets, vals = [], []
+++    for k in editable:
+++        if k in patch and patch[k] is not None:
+++            sets.append(f"{k}=?")
+++            vals.append(patch[k])
+++    if sets:
+++        sets.append("updated_at=CURRENT_TIMESTAMP")
+++        vals.append(store_id)
+++        conn.execute(f"UPDATE store_benchmark_config SET {','.join(sets)} WHERE store_id=?", tuple(vals))
+++        conn.commit()
+++    return dict(conn.execute("SELECT * FROM store_benchmark_config WHERE store_id=?", (store_id,)).fetchone())
+++
+++
+++def _f(v):
+++    try:
+++        return float(v or 0)
+++    except (TypeError, ValueError):
+++        return 0.0
+++
+++
+++def _issue(itype, name, severity, evidence, root_cause, today_action, day15_action):
+++    sev = max(1, min(10, int(severity)))
+++    return {
+++        "issue_type": itype,
+++        "issue_name": name,
+++        "severity": sev,
+++        "priority": 1 if sev >= 8 else 2,
+++        "data_evidence": evidence,
+++        "root_cause": root_cause,
+++        "root_cause_detail": "",
+++        "library_ref": get_library_ref(itype),
+++        "today_action": today_action,
+++        "day15_action": day15_action,
+++    }
+++
+++
+++def match_rules(raw: dict, metrics: dict, cfg: dict) -> list:
+++    """匹配 9 类诊断规则，返回命中问题列表（未排序）。"""
+++    issues = []
+++    rd = RULE_DEFAULTS
+++
+++    visits = _f(raw.get("daily_visits"))
+++    complaints = _f(raw.get("daily_complaints"))
+++
+++    # 1. 客流问题
+++    if visits < rd["traffic_visits_min"]:
+++        issues.append(_issue(
+++            "traffic", "客流问题", 8,
+++            {"daily_visits": visits, "threshold": rd["traffic_visits_min"]},
+++            "进店客流不足，获客与到店转化需要加强。",
+++            "盘点引流渠道，今天先激活老客转介绍与到店预约。",
+++            "建立稳定的私域引流与预约机制。"))
+++
+++    # 2. 成交问题（conversion_rate < 成交率健康线）
+++    if _f(metrics.get("conversion_rate")) < _f(cfg.get("conversion_rate_green")):
+++        issues.append(_issue(
+++            "deal", "成交问题", 8,
+++            {"conversion_rate": metrics.get("conversion_rate"), "threshold": _f(cfg.get("conversion_rate_green"))},
+++            "到店成交率低于健康线，咨询/逼单/信任建立环节需要复盘。",
+++            "复盘今日未成交顾客，明确卡点并跟进。",
+++            "打磨成交话术与体验流程。"))
+++
+++    # 3. 新客承接问题
+++    if _f(metrics.get("new_conversion_rate")) < rd["new_conversion_min"]:
+++        issues.append(_issue(
+++            "new_customer", "新客承接问题", 7,
+++            {"new_conversion_rate": metrics.get("new_conversion_rate"), "threshold": rd["new_conversion_min"]},
+++            "新客首次成交率偏低，新客承接与体验设计需要优化。",
+++            "为新客设计低门槛体验与跟进动作。",
+++            "建立新客 7 天承接 SOP。"))
+++
+++    # 4. 客单问题（仅当设置了客单目标时判定）
+++    avg_order_target = _f(cfg.get("avg_order_target"))
+++    if avg_order_target > 0 and _f(metrics.get("avg_order_value")) < avg_order_target:
+++        issues.append(_issue(
+++            "price", "客单问题", 7,
+++            {"avg_order_value": metrics.get("avg_order_value"), "threshold": avg_order_target},
+++            "客单价低于目标，连带与升单能力需要提升。",
+++            "梳理可连带项目，今天演练升单话术。",
+++            "优化项目结构与套餐设计。"))
+++
+++    # 5. 锁客问题（充值占比偏低）
+++    if _f(metrics.get("recharge_ratio")) < rd["recharge_ratio_min"]:
+++        issues.append(_issue(
+++            "lock", "锁客问题", 6,
+++            {"recharge_ratio": metrics.get("recharge_ratio"), "threshold": rd["recharge_ratio_min"]},
+++            "充值占比偏低，顾客锁定与预存机制不足。",
+++            "梳理高价值顾客，设计今日锁客方案。",
+++            "建立会员储值与权益体系。"))
+++
+++    # 6. 复购问题（复购客占比 < 老客占比健康线下限）
+++    return_ratio = 0.0
+++    if visits > 0:
+++        return_ratio = round(_f(metrics.get("estimated_return_customers")) / visits * 100, 2)
+++    if return_ratio < _f(cfg.get("return_customer_ratio_green_low")):
+++        issues.append(_issue(
+++            "repeat", "复购问题", 7,
+++            {"return_customer_ratio": return_ratio, "threshold": _f(cfg.get("return_customer_ratio_green_low"))},
+++            "复购/回店客占比偏低，老客经营与回店理由需要加强。",
+++            "筛出近期未回店老客，今天完成第一轮回访。",
+++            "建立老客分层回访与复购机制。"))
+++
+++    # 7. 项目结构问题
+++    if _f(metrics.get("main_project_ratio")) < rd["main_project_ratio_min"]:
+++        issues.append(_issue(
+++            "project", "项目结构问题", 6,
+++            {"main_project_ratio": metrics.get("main_project_ratio"), "threshold": rd["main_project_ratio_min"]},
+++            "主推项目占比偏低，项目结构不够聚焦。",
+++            "明确本周主推项目并统一话术。",
+++            "优化项目矩阵与主推策略。"))
+++
+++    # 8. 员工人效问题（仅当设置了人效目标时判定）
+++    per_capita_target = _f(cfg.get("per_capita_target"))
+++    if per_capita_target > 0 and _f(metrics.get("per_capita_efficiency")) < per_capita_target:
+++        issues.append(_issue(
+++            "staff", "员工人效问题", 6,
+++            {"per_capita_efficiency": metrics.get("per_capita_efficiency"), "threshold": per_capita_target},
+++            "人均产出低于目标，员工动作与目标拆解需要加强。",
+++            "把目标拆到员工，确认今日跟进客户。",
+++            "建立员工日清与人效复盘机制。"))
+++
+++    # 9. 服务风险问题（complaint_risk_index > 3 或有投诉）
+++    if _f(metrics.get("complaint_risk_index")) > 3 or complaints > 0:
+++        sev = 9 if complaints > 0 else 8
+++        issues.append(_issue(
+++            "risk", "服务风险问题", sev,
+++            {"complaint_risk_index": metrics.get("complaint_risk_index"), "daily_complaints": complaints},
+++            "存在投诉或客诉风险偏高，服务体验与客诉处理需要立即关注。",
+++            "立即处理今日投诉/风险顾客，闭环安抚。",
+++            "建立服务质检与客诉预警机制。"))
+++
+++    return issues
+++
+++
+++def run_diagnosis(raw: dict, metrics: dict, cfg: dict) -> dict:
+++    """生成诊断结构：全部问题 + top3 核心问题。"""
+++    issues = match_rules(raw, metrics, cfg)
+++    issues_sorted = sorted(issues, key=lambda x: x["severity"], reverse=True)
+++    for i, it in enumerate(issues_sorted):
+++        it["sort_order"] = i
+++    top3 = issues_sorted[:3]
+++    return {
+++        "method": DIAGNOSIS_METHOD_LABEL,
+++        "source_label": DIAGNOSIS_SOURCE_LABEL,
+++        "disclaimer": DIAGNOSIS_DISCLAIMER,
+++        "issues": issues_sorted,
+++        "top_issues": [
+++            {"issue_type": t["issue_type"], "issue_name": t["issue_name"], "severity": t["severity"]}
+++            for t in top3
+++        ],
+++    }
++diff --git a/backend/app/store_manager/library_ref.py b/backend/app/store_manager/library_ref.py
++new file mode 100644
++index 0000000..453184c
++--- /dev/null
+++++ b/backend/app/store_manager/library_ref.py
++@@ -0,0 +1,75 @@
+++"""7 大库 library_ref 静态映射（补丁说明：V0.1.3 为静态映射，V0.1.4 替换为 RAG 检索）。
+++
+++来源：《后端开发文档》第 6.1 节 ISSUE_LIBRARY_MAP，9 类问题 → 7 大库条目编号。
+++"""
+++
+++ISSUE_LIBRARY_MAP = {
+++    "traffic": {
+++        "lib1": ["K-DZ-01-M01", "K-DZ-01-M03"],
+++        "lib2": ["K-DZ-02-P01-001", "-002", "-003", "-004", "-005"],
+++        "lib3": ["K-DZ-03-RC02"],
+++        "lib4": ["K-DZ-04-A01"],
+++        "lib5": ["K-DZ-05-D01", "K-DZ-05-D06"],
+++    },
+++    "deal": {
+++        "lib1": ["K-DZ-01-M04", "K-DZ-01-M05"],
+++        "lib2": ["K-DZ-02-P02-001~005", "K-DZ-02-P04-001~004"],
+++        "lib3": ["K-DZ-03-RC03", "K-DZ-03-RC05"],
+++        "lib4": ["K-DZ-04-A02", "K-DZ-04-A04"],
+++        "lib6": ["K-DZ-06-E03"],
+++        "lib7": ["K-DZ-07-S01", "K-DZ-07-S07"],
+++    },
+++    "new_customer": {
+++        "lib1": ["K-DZ-01-M03", "K-DZ-01-M04"],
+++        "lib2": ["K-DZ-02-P02-001", "K-DZ-02-P02-003"],
+++        "lib3": ["K-DZ-03-RC03"],
+++        "lib4": ["K-DZ-04-A02"],
+++        "lib6": ["K-DZ-06-E01", "K-DZ-06-E03"],
+++        "lib7": ["K-DZ-07-S01"],
+++    },
+++    "price": {
+++        "lib1": ["K-DZ-01-M05"],
+++        "lib2": ["K-DZ-02-P04-001~004"],
+++        "lib3": ["K-DZ-03-RC05"],
+++        "lib4": ["K-DZ-04-A04"],
+++        "lib5": ["K-DZ-05-D04"],
+++        "lib7": ["K-DZ-07-S04"],
+++    },
+++    "lock": {
+++        "lib1": ["K-DZ-01-M09"],
+++        "lib2": ["K-DZ-02-P03"],
+++        "lib3": ["K-DZ-03-RC04"],
+++        "lib4": ["K-DZ-04-A03"],
+++        "lib7": ["K-DZ-07-S03"],
+++    },
+++    "repeat": {
+++        "lib1": ["K-DZ-01-M07", "K-DZ-01-M08", "K-DZ-01-M09"],
+++        "lib2": ["K-DZ-02-P03-001~005"],
+++        "lib3": ["K-DZ-03-RC04"],
+++        "lib4": ["K-DZ-04-A03"],
+++        "lib7": ["K-DZ-07-S02", "K-DZ-07-S03", "K-DZ-07-S05"],
+++    },
+++    "project": {
+++        "lib2": ["K-DZ-02-P06-001~004"],
+++        "lib4": ["K-DZ-04-A06"],
+++        "lib5": ["K-DZ-05-D04"],
+++    },
+++    "staff": {
+++        "lib1": ["K-DZ-01-M15"],
+++        "lib2": ["K-DZ-02-P05-001~004"],
+++        "lib3": ["K-DZ-03-RC06"],
+++        "lib4": ["K-DZ-04-A05"],
+++        "lib6": ["K-DZ-06-E01", "-E02", "-E03", "-E04", "-E05"],
+++    },
+++    "risk": {
+++        "lib1": ["K-DZ-01-M11", "-M12", "-M13", "-M14"],
+++        "lib3": ["K-DZ-03-RC07"],
+++        "lib4": ["K-DZ-04-A02"],
+++        "lib6": ["K-DZ-06-E02", "-E03"],
+++    },
+++}
+++
+++
+++def get_library_ref(issue_type: str) -> dict:
+++    """返回某问题类型的 7 大库映射；未知类型返回空 dict。"""
+++    return ISSUE_LIBRARY_MAP.get(issue_type, {})
++diff --git a/backend/app/store_manager/metrics_v013.py b/backend/app/store_manager/metrics_v013.py
++new file mode 100644
++index 0000000..a5898c2
++--- /dev/null
+++++ b/backend/app/store_manager/metrics_v013.py
++@@ -0,0 +1,65 @@
+++"""V0.1.3 自动计算指标（13 个）。
+++
+++严格按《后端开发文档》第4.1节公式实现：
+++- 所有"率"只由系统计算，不接受前端填写；
+++- 除零保护：任何分母为 0 时结果直接置 0。
+++"""
+++
+++
+++def _num(v):
+++    try:
+++        return float(v or 0)
+++    except (TypeError, ValueError):
+++        return 0.0
+++
+++
+++def _div(numerator, denominator, percent=False, ndigits=2):
+++    """除零安全：分母<=0 返回 0。percent=True 时乘 100。"""
+++    d = _num(denominator)
+++    if d == 0:
+++        return 0
+++    val = _num(numerator) / d * (100 if percent else 1)
+++    return round(val, ndigits)
+++
+++
+++def compute_metrics(raw: dict) -> dict:
+++    """输入 15 项原始数据 dict，输出 13 个计算指标 dict。"""
+++    g = lambda k: _num(raw.get(k))
+++    visits = g("daily_visits")
+++    new_customers = g("daily_new_customers")
+++
+++    return {
+++        "conversion_rate": _div(raw.get("daily_transaction_customers"), visits, percent=True),
+++        "new_customer_ratio": _div(new_customers, visits, percent=True),
+++        "new_conversion_rate": _div(raw.get("daily_new_transaction"), new_customers, percent=True),
+++        "avg_order_value": _div(raw.get("daily_revenue"), raw.get("daily_transaction_customers")),
+++        "appointment_arrival_rate": _div(raw.get("daily_appointment_arrivals"), raw.get("daily_valid_appointments"), percent=True),
+++        "per_capita_efficiency": _div(raw.get("daily_revenue"), raw.get("daily_staff_count")),
+++        "recharge_ratio": _div(raw.get("daily_recharge_amount"), raw.get("daily_revenue"), percent=True),
+++        "project_ratio": _div(raw.get("daily_project_sales"), raw.get("daily_revenue"), percent=True),
+++        "product_ratio": _div(raw.get("daily_product_retail"), raw.get("daily_revenue"), percent=True),
+++        "main_project_ratio": _div(raw.get("daily_main_project_sales"), raw.get("daily_project_sales"), percent=True),
+++        "complaint_risk_index": _div(g("daily_complaints") * 100, raw.get("daily_service_count")),
+++        # 预估复购客数 = 总客流 - 新客（不涉及除法，可能为负则保守置 0）
+++        "estimated_return_customers": int(max(0, visits - new_customers)),
+++        "service_efficiency": _div(raw.get("daily_service_count"), raw.get("daily_staff_count")),
+++    }
+++
+++
+++# 15 项原始数据字段（用于校验/录入）
+++RAW_FIELDS = [
+++    "daily_revenue", "daily_recharge_amount", "daily_product_retail",
+++    "daily_visits", "daily_new_customers", "daily_valid_appointments",
+++    "daily_appointment_arrivals", "daily_transaction_customers",
+++    "daily_transaction_orders", "daily_new_transaction", "daily_project_sales",
+++    "daily_main_project_sales", "daily_service_count", "daily_staff_count",
+++    "daily_complaints",
+++]
+++
+++# 13 项计算指标字段（只读，不允许前端填写）
+++METRIC_FIELDS = [
+++    "conversion_rate", "new_customer_ratio", "new_conversion_rate",
+++    "avg_order_value", "appointment_arrival_rate", "per_capita_efficiency",
+++    "recharge_ratio", "project_ratio", "product_ratio", "main_project_ratio",
+++    "complaint_risk_index", "estimated_return_customers", "service_efficiency",
+++]
++diff --git a/backend/app/store_manager/pipeline_v013.py b/backend/app/store_manager/pipeline_v013.py
++new file mode 100644
++index 0000000..9a503b7
++--- /dev/null
+++++ b/backend/app/store_manager/pipeline_v013.py
++@@ -0,0 +1,130 @@
+++"""V0.1.3 经营诊断编排：原始数据 → 自动指标 → 9类规则诊断 → 落库。"""
+++import json
+++from datetime import datetime
+++
+++from .metrics_v013 import compute_metrics, RAW_FIELDS
+++from . import diagnosis_v013 as dg
+++
+++
+++def _today():
+++    return datetime.now().strftime("%Y-%m-%d")
+++
+++
+++def save_daily_raw_data(conn, store_id, report_date, fields: dict) -> dict:
+++    store_id = store_id or "default_store"
+++    report_date = report_date or _today()
+++    vals = {k: (fields.get(k) or 0) for k in RAW_FIELDS}
+++    vals["daily_notes"] = fields.get("daily_notes", "")
+++    cols = ["store_id", "report_date"] + list(vals.keys())
+++    placeholders = ",".join(["?"] * len(cols))
+++    updates = ",".join([f"{k}=excluded.{k}" for k in vals.keys()] + ["updated_at=CURRENT_TIMESTAMP"])
+++    conn.execute(
+++        f"INSERT INTO store_daily_raw_data ({','.join(cols)}) VALUES ({placeholders}) "
+++        f"ON CONFLICT(store_id, report_date) DO UPDATE SET {updates}",
+++        tuple([store_id, report_date] + list(vals.values())),
+++    )
+++    conn.commit()
+++    return dict(conn.execute(
+++        "SELECT * FROM store_daily_raw_data WHERE store_id=? AND report_date=?", (store_id, report_date)
+++    ).fetchone())
+++
+++
+++def save_metrics(conn, store_id, report_date, raw_id, metrics: dict) -> dict:
+++    cols = ["store_id", "report_date", "raw_data_id"] + list(metrics.keys())
+++    placeholders = ",".join(["?"] * len(cols))
+++    updates = ",".join([f"{k}=excluded.{k}" for k in metrics.keys()])
+++    conn.execute(
+++        f"INSERT INTO store_computed_metrics ({','.join(cols)}) VALUES ({placeholders}) "
+++        f"ON CONFLICT(store_id, report_date) DO UPDATE SET {updates}",
+++        tuple([store_id, report_date, raw_id] + list(metrics.values())),
+++    )
+++    conn.commit()
+++    return dict(conn.execute(
+++        "SELECT * FROM store_computed_metrics WHERE store_id=? AND report_date=?", (store_id, report_date)
+++    ).fetchone())
+++
+++
+++def get_computed_metrics(conn, store_id="default_store", report_date=None) -> dict:
+++    if report_date:
+++        r = conn.execute(
+++            "SELECT * FROM store_computed_metrics WHERE store_id=? AND report_date=?", (store_id, report_date)
+++        ).fetchone()
+++    else:
+++        r = conn.execute(
+++            "SELECT * FROM store_computed_metrics WHERE store_id=? ORDER BY report_date DESC LIMIT 1", (store_id,)
+++        ).fetchone()
+++    return dict(r) if r else None
+++
+++
+++def create_diagnosis(conn, payload: dict) -> dict:
+++    """主流程：保存15项原始数据 → 计算13指标 → 9类规则诊断 → 落库报告与问题。"""
+++    store_id = payload.get("store_id") or "default_store"
+++    report_date = payload.get("report_date") or payload.get("diagnosis_month") or _today()
+++    fields = payload.get("form_data") or payload.get("raw_data") or payload
+++
+++    raw = save_daily_raw_data(conn, store_id, report_date, fields)
+++    metrics = compute_metrics(raw)
+++    save_metrics(conn, store_id, report_date, raw["id"], metrics)
+++
+++    cfg = dg.get_benchmark(conn, store_id)
+++    diag = dg.run_diagnosis(raw, metrics, cfg)
+++
+++    data_overview = {k: raw.get(k) for k in RAW_FIELDS}
+++    cur = conn.execute(
+++        "INSERT INTO store_diagnosis_result (store_id, report_date, status, data_overview, computed_metrics, "
+++        "top_issues, customer_opportunities, tomorrow_actions, raw_data_id, metrics_id) "
+++        "VALUES (?,?,?,?,?,?,?,?,?,?) "
+++        "ON CONFLICT DO NOTHING",
+++        (store_id, report_date, "published",
+++         json.dumps(data_overview, ensure_ascii=False),
+++         json.dumps(metrics, ensure_ascii=False),
+++         json.dumps(diag["top_issues"], ensure_ascii=False),
+++         json.dumps({}, ensure_ascii=False),
+++         json.dumps([], ensure_ascii=False),
+++         raw["id"], None),
+++    )
+++    diagnosis_id = cur.lastrowid
+++    if not diagnosis_id:
+++        row = conn.execute(
+++            "SELECT id FROM store_diagnosis_result WHERE store_id=? AND report_date=? ORDER BY id DESC LIMIT 1",
+++            (store_id, report_date)).fetchone()
+++        diagnosis_id = row["id"] if row else None
+++    # 落库问题列表
+++    conn.execute("DELETE FROM store_diagnosis_issue WHERE diagnosis_id=?", (diagnosis_id,))
+++    for it in diag["issues"]:
+++        conn.execute(
+++            "INSERT INTO store_diagnosis_issue (diagnosis_id, issue_type, issue_name, severity, priority, "
+++            "data_evidence, root_cause, root_cause_detail, library_ref, today_action, day15_action, sort_order) "
+++            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+++            (diagnosis_id, it["issue_type"], it["issue_name"], it["severity"], it["priority"],
+++             json.dumps(it["data_evidence"], ensure_ascii=False), it["root_cause"], it.get("root_cause_detail", ""),
+++             json.dumps(it["library_ref"], ensure_ascii=False), it["today_action"], it["day15_action"], it["sort_order"]),
+++        )
+++    conn.commit()
+++    return get_diagnosis(conn, diagnosis_id)
+++
+++
+++def get_diagnosis(conn, diagnosis_id) -> dict:
+++    r = conn.execute("SELECT * FROM store_diagnosis_result WHERE id=?", (diagnosis_id,)).fetchone()
+++    if not r:
+++        return None
+++    d = dict(r)
+++    for k in ("data_overview", "computed_metrics", "customer_opportunities"):
+++        d[k] = json.loads(d.get(k) or "{}")
+++    for k in ("top_issues", "tomorrow_actions"):
+++        d[k] = json.loads(d.get(k) or "[]")
+++    issues = conn.execute(
+++        "SELECT * FROM store_diagnosis_issue WHERE diagnosis_id=? ORDER BY sort_order ASC", (diagnosis_id,)
+++    ).fetchall()
+++    parsed = []
+++    for it in issues:
+++        x = dict(it)
+++        x["data_evidence"] = json.loads(x.get("data_evidence") or "{}")
+++        x["library_ref"] = json.loads(x.get("library_ref") or "{}")
+++        parsed.append(x)
+++    d["issues"] = parsed
+++    # 文案边界（补丁7）
+++    d["method"] = dg.DIAGNOSIS_METHOD_LABEL
+++    d["source_label"] = dg.DIAGNOSIS_SOURCE_LABEL
+++    d["disclaimer"] = dg.DIAGNOSIS_DISCLAIMER
+++    return d
++diff --git a/backend/app/store_manager/router_v013.py b/backend/app/store_manager/router_v013.py
++new file mode 100644
++index 0000000..f98bbff
++--- /dev/null
+++++ b/backend/app/store_manager/router_v013.py
++@@ -0,0 +1,247 @@
+++"""V0.1.3 店长工作台 API 路由。
+++
+++补丁4：前缀沿用 /api/store-manager，不启 /api/v2；内部标记 api_version='v0.1.3'。
+++所有接口走独立 SQLite，不动主库、不动 V0.1.1。
+++"""
+++from fastapi import APIRouter, HTTPException
+++
+++from . import db_v013 as db
+++from . import pipeline_v013 as pipe
+++from . import diagnosis_v013 as dg
+++from . import customer_ops_v013 as ops
+++from . import tasks_v013 as tk
+++from . import model_to_dict
+++from .schemas_v013 import (
+++    DailyRawDataRequest, MonthlyDiagnosisRequest, BenchmarkConfigUpdate,
+++    CustomerCreate, ProjectCreate, HomeProductCreate, DemandCreate,
+++    DemandProgressUpdate, TaskStatusUpdate, DailyReviewRequest,
+++)
+++
+++router = APIRouter(prefix="/api/store-manager", tags=["store-manager-v0.1.3"])
+++
+++
+++def ok(data):
+++    return {"code": 1000, "msg": "success", "data": data, "api_version": db.API_VERSION}
+++
+++
+++# ---------- 经营诊断 ----------
+++@router.post("/daily-raw-data")
+++def post_daily_raw_data(req: DailyRawDataRequest):
+++    conn = db.connect()
+++    try:
+++        raw = pipe.save_daily_raw_data(conn, req.store_id, req.report_date, req.form_data)
+++        return ok(raw)
+++    finally:
+++        conn.close()
+++
+++
+++@router.get("/computed-metrics")
+++def get_computed_metrics(store_id: str = "default_store", report_date: str = ""):
+++    conn = db.connect()
+++    try:
+++        return ok(pipe.get_computed_metrics(conn, store_id, report_date or None))
+++    finally:
+++        conn.close()
+++
+++
+++@router.post("/monthly-diagnoses")
+++def post_monthly_diagnosis(req: MonthlyDiagnosisRequest):
+++    conn = db.connect()
+++    try:
+++        return ok(pipe.create_diagnosis(conn, model_to_dict(req)))
+++    finally:
+++        conn.close()
+++
+++
+++@router.get("/diagnosis/{diagnosis_id}")
+++def get_diagnosis(diagnosis_id: int):
+++    conn = db.connect()
+++    try:
+++        d = pipe.get_diagnosis(conn, diagnosis_id)
+++        if not d:
+++            raise HTTPException(status_code=404, detail="diagnosis not found")
+++        return ok(d)
+++    finally:
+++        conn.close()
+++
+++
+++# ---------- 阈值配置（补丁1） ----------
+++@router.get("/benchmark-config")
+++def get_benchmark_config(store_id: str = "default_store"):
+++    conn = db.connect()
+++    try:
+++        return ok(dg.get_benchmark(conn, store_id))
+++    finally:
+++        conn.close()
+++
+++
+++@router.put("/benchmark-config")
+++def put_benchmark_config(req: BenchmarkConfigUpdate, store_id: str = "default_store"):
+++    conn = db.connect()
+++    try:
+++        return ok(dg.update_benchmark(conn, store_id, model_to_dict(req)))
+++    finally:
+++        conn.close()
+++
+++
+++# ---------- 今日任务 + 复盘 ----------
+++@router.get("/today-tasks")
+++def get_today_tasks(store_id: str = "default_store", date: str = "", generate: int = 0):
+++    conn = db.connect()
+++    try:
+++        if generate:
+++            return ok(tk.generate_today_tasks(conn, store_id, date or None))
+++        return ok(tk.get_today_tasks(conn, store_id, date or None))
+++    finally:
+++        conn.close()
+++
+++
+++@router.post("/today-tasks/generate")
+++def post_generate_today_tasks(store_id: str = "default_store", date: str = ""):
+++    conn = db.connect()
+++    try:
+++        return ok(tk.generate_today_tasks(conn, store_id, date or None))
+++    finally:
+++        conn.close()
+++
+++
+++@router.put("/tasks/{task_id}/status")
+++def put_task_status(task_id: int, req: TaskStatusUpdate):
+++    conn = db.connect()
+++    try:
+++        t = tk.update_task_status(conn, task_id, req.status, req.review_note or "")
+++        if not t:
+++            raise HTTPException(status_code=404, detail="task not found")
+++        return ok(t)
+++    finally:
+++        conn.close()
+++
+++
+++@router.post("/daily-review")
+++def post_daily_review(req: DailyReviewRequest):
+++    conn = db.connect()
+++    try:
+++        return ok(tk.submit_daily_review(conn, req.store_id, req.report_date, req.review_content or ""))
+++    finally:
+++        conn.close()
+++
+++
+++@router.get("/daily-review/history")
+++def get_daily_review_history(store_id: str = "default_store"):
+++    conn = db.connect()
+++    try:
+++        return ok(tk.get_review_history(conn, store_id))
+++    finally:
+++        conn.close()
+++
+++
+++# ---------- 顾客经营 ----------
+++@router.post("/customers")
+++def post_customer(req: CustomerCreate):
+++    conn = db.connect()
+++    try:
+++        try:
+++            c = ops.create_customer(conn, model_to_dict(req))
+++        except Exception as e:
+++            # phone 唯一约束冲突等
+++            raise HTTPException(status_code=400, detail=f"创建失败：{e}")
+++        return ok(c)
+++    finally:
+++        conn.close()
+++
+++
+++@router.get("/customers")
+++def list_customers(store_id: str = "default_store", keyword: str = ""):
+++    conn = db.connect()
+++    try:
+++        return ok(ops.list_customers(conn, store_id, keyword or None))
+++    finally:
+++        conn.close()
+++
+++
+++@router.get("/customers/{customer_id}")
+++def get_customer(customer_id: int):
+++    conn = db.connect()
+++    try:
+++        c = ops.get_customer(conn, customer_id)
+++        if not c:
+++            raise HTTPException(status_code=404, detail="customer not found")
+++        c["projects"] = ops.list_projects(conn, customer_id)
+++        c["home_products"] = ops.list_home_products(conn, customer_id)
+++        c["demands"] = ops.list_demands(conn, customer_id)
+++        return ok(c)
+++    finally:
+++        conn.close()
+++
+++
+++@router.post("/customers/{customer_id}/projects")
+++def post_project(customer_id: int, req: ProjectCreate):
+++    conn = db.connect()
+++    try:
+++        if not ops.get_customer(conn, customer_id):
+++            raise HTTPException(status_code=404, detail="customer not found")
+++        return ok(ops.add_project(conn, customer_id, model_to_dict(req)))
+++    finally:
+++        conn.close()
+++
+++
+++@router.post("/customers/{customer_id}/projects/{project_id}/consume")
+++def post_consume(customer_id: int, project_id: int):
+++    conn = db.connect()
+++    try:
+++        p = ops.consume_project(conn, project_id)
+++        if not p:
+++            raise HTTPException(status_code=404, detail="project not found")
+++        return ok(p)
+++    finally:
+++        conn.close()
+++
+++
+++@router.post("/customers/{customer_id}/home-products")
+++def post_home_product(customer_id: int, req: HomeProductCreate):
+++    conn = db.connect()
+++    try:
+++        if not ops.get_customer(conn, customer_id):
+++            raise HTTPException(status_code=404, detail="customer not found")
+++        return ok(ops.add_home_product(conn, customer_id, model_to_dict(req)))
+++    finally:
+++        conn.close()
+++
+++
+++@router.post("/customers/{customer_id}/demands")
+++def post_demand(customer_id: int, req: DemandCreate):
+++    conn = db.connect()
+++    try:
+++        if not ops.get_customer(conn, customer_id):
+++            raise HTTPException(status_code=404, detail="customer not found")
+++        return ok(ops.add_demand(conn, customer_id, model_to_dict(req)))
+++    finally:
+++        conn.close()
+++
+++
+++@router.put("/customers/{customer_id}/demands/{demand_id}")
+++def put_demand_progress(customer_id: int, demand_id: int, req: DemandProgressUpdate):
+++    conn = db.connect()
+++    try:
+++        return ok(ops.update_demand_progress(conn, demand_id, req.progress_score))
+++    finally:
+++        conn.close()
+++
+++
+++# ---------- 看板与预警 ----------
+++@router.get("/warnings")
+++def get_warnings(store_id: str = "default_store"):
+++    conn = db.connect()
+++    try:
+++        return ok(ops.list_warnings(conn, store_id, only_unresolved=True))
+++    finally:
+++        conn.close()
+++
+++
+++@router.get("/demand-board")
+++def get_demand_board(store_id: str = "default_store"):
+++    conn = db.connect()
+++    try:
+++        return ok(ops.build_demand_board(conn, store_id))
+++    finally:
+++        conn.close()
++diff --git a/backend/app/store_manager/schemas_v013.py b/backend/app/store_manager/schemas_v013.py
++new file mode 100644
++index 0000000..6ded48e
++--- /dev/null
+++++ b/backend/app/store_manager/schemas_v013.py
++@@ -0,0 +1,102 @@
+++"""V0.1.3 pydantic 请求模型（兼容 v1/v2）。"""
+++from typing import Optional, Dict, Any
+++from pydantic import BaseModel, Field
+++
+++
+++class DailyRawDataRequest(BaseModel):
+++    store_id: str = "default_store"
+++    report_date: Optional[str] = None
+++    form_data: Dict[str, Any] = Field(default_factory=dict)
+++
+++
+++class MonthlyDiagnosisRequest(BaseModel):
+++    store_id: str = "default_store"
+++    report_date: Optional[str] = None
+++    diagnosis_month: Optional[str] = None
+++    form_data: Dict[str, Any] = Field(default_factory=dict)
+++
+++
+++class BenchmarkConfigUpdate(BaseModel):
+++    store_type: Optional[str] = None
+++    store_stage: Optional[str] = None
+++    staff_count: Optional[int] = None
+++    monthly_target: Optional[float] = None
+++    avg_order_target: Optional[float] = None
+++    per_capita_target: Optional[float] = None
+++    new_customer_ratio_green_low: Optional[float] = None
+++    new_customer_ratio_green_high: Optional[float] = None
+++    return_customer_ratio_green_low: Optional[float] = None
+++    return_customer_ratio_green_high: Optional[float] = None
+++    conversion_rate_green: Optional[float] = None
+++    repurchase_rate_green: Optional[float] = None
+++    appointment_arrival_rate_green: Optional[float] = None
+++    complaint_risk_max: Optional[float] = None
+++
+++
+++class CustomerCreate(BaseModel):
+++    store_id: str = "default_store"
+++    name: str
+++    phone: str
+++    nickname: Optional[str] = ""
+++    gender: Optional[str] = "女"
+++    age_range: Optional[str] = ""
+++    skin_type: Optional[str] = ""
+++    source_channel: Optional[str] = ""
+++    first_visit_date: Optional[str] = None
+++    customer_no: Optional[str] = None
+++    preferred_projects: Optional[str] = ""
+++    preferred_staff: Optional[str] = ""
+++    preferred_time: Optional[str] = ""
+++    price_sensitivity: Optional[str] = ""
+++    comm_preference: Optional[str] = ""
+++
+++
+++class ProjectCreate(BaseModel):
+++    project_name: str
+++    project_type: str = ""
+++    purchase_date: Optional[str] = None
+++    total_quantity: int = 1
+++    total_amount: float = 0
+++    unit_amount: Optional[float] = None
+++    used_quantity: int = 0
+++    expiry_date: Optional[str] = None
+++    responsible_staff: Optional[str] = ""
+++    notes: Optional[str] = ""
+++
+++
+++class HomeProductCreate(BaseModel):
+++    product_name: str
+++    product_type: Optional[str] = ""
+++    brand: Optional[str] = ""
+++    specification: Optional[str] = ""
+++    purchase_date: Optional[str] = None
+++    estimated_cycle: int = 30
+++    estimated_end_date: Optional[str] = None
+++    usage_feedback: Optional[str] = ""
+++    repurchase_status: Optional[str] = "normal"
+++    notes: Optional[str] = ""
+++
+++
+++class DemandCreate(BaseModel):
+++    demand_desc: str
+++    demand_type: Optional[str] = ""
+++    related_project: Optional[str] = ""
+++    progress_score: int = 0
+++    created_by_staff: Optional[str] = ""
+++    responsible_staff: Optional[str] = ""
+++    notes: Optional[str] = ""
+++
+++
+++class DemandProgressUpdate(BaseModel):
+++    progress_score: int
+++
+++
+++class TaskStatusUpdate(BaseModel):
+++    status: str
+++    review_note: Optional[str] = ""
+++
+++
+++class DailyReviewRequest(BaseModel):
+++    store_id: str = "default_store"
+++    report_date: Optional[str] = None
+++    review_content: Optional[str] = ""
++diff --git a/backend/app/store_manager/tasks_v013.py b/backend/app/store_manager/tasks_v013.py
++new file mode 100644
++index 0000000..3b5a3fa
++--- /dev/null
+++++ b/backend/app/store_manager/tasks_v013.py
++@@ -0,0 +1,209 @@
+++"""V0.1.3 今日任务生成 + P0 限流 + 复盘闭环（补丁2）。
+++
+++P0 限流规则：
+++1. 每天 P0 默认最多 3 条；
+++2. 投诉/退款/差评永远 P0（不受限流影响）；
+++3. 同一顾客多个预警合并为 1 张任务卡；
+++4. P0 超过 3 条时，按「金额风险 > 顾客价值 > 时效性」排序；
+++5. 未入选 P0 的红色项降为 P1，但保留红色标签（keep_red_tag=🔥）。
+++"""
+++import json
+++from datetime import datetime
+++
+++P0_DAILY_LIMIT = 3
+++P0 = 1
+++P1 = 2
+++
+++# 投诉/退款/差评：永远 P0，不受限流影响
+++COMPLAINT_TYPES = {"complaint", "refund", "bad_review"}
+++
+++# RFM 顾客价值排序权重
+++RFM_RANK = {"高价值": 3, "潜力": 2, "待唤醒": 1, "普通": 0, "": 0}
+++
+++
+++def _today():
+++    return datetime.now().strftime("%Y-%m-%d")
+++
+++
+++def _gather_candidates(conn, store_id):
+++    """收集 P0 候选：未处理红色预警 + 可成交需求(progress>=8)，按顾客合并。"""
+++    cards = {}  # customer_id -> card
+++
+++    def ensure(cid, name, rfm):
+++        if cid not in cards:
+++            cards[cid] = {
+++                "customer_id": cid, "customer_name": name, "rfm_label": rfm or "",
+++                "items": [], "is_complaint": False, "amount_risk": 0.0, "earliest": None,
+++            }
+++        return cards[cid]
+++
+++    # 红色预警（含投诉/退款/差评）
+++    rows = conn.execute(
+++        "SELECT w.*, c.name AS customer_name, c.rfm_label, c.remaining_project_amount, c.total_spent "
+++        "FROM customer_warning w JOIN customer_profile c ON c.id=w.customer_id "
+++        "WHERE c.store_id=? AND w.is_resolved=0 AND w.warning_level='red' ORDER BY w.created_at ASC",
+++        (store_id,),
+++    ).fetchall()
+++    for w in rows:
+++        card = ensure(w["customer_id"], w["customer_name"], w["rfm_label"])
+++        card["items"].append({"kind": "warning", "type": w["warning_type"], "desc": w["warning_desc"], "id": w["id"]})
+++        if w["warning_type"] in COMPLAINT_TYPES:
+++            card["is_complaint"] = True
+++        card["amount_risk"] = max(card["amount_risk"], float(w["remaining_project_amount"] or 0), float(w["total_spent"] or 0))
+++        card["earliest"] = w["created_at"] if card["earliest"] is None else min(card["earliest"], w["created_at"])
+++
+++    # 可成交需求（下次可成交）
+++    drows = conn.execute(
+++        "SELECT d.*, c.name AS customer_name, c.rfm_label, c.remaining_project_amount, c.total_spent "
+++        "FROM customer_demand d JOIN customer_profile c ON c.id=d.customer_id "
+++        "WHERE c.store_id=? AND d.status='active' AND d.progress_score>=8 ORDER BY d.updated_at ASC",
+++        (store_id,),
+++    ).fetchall()
+++    for d in drows:
+++        card = ensure(d["customer_id"], d["customer_name"], d["rfm_label"])
+++        card["items"].append({"kind": "demand", "type": "dealable", "desc": f"可成交需求：{d['demand_desc']}", "id": d["id"]})
+++        card["amount_risk"] = max(card["amount_risk"], float(d["remaining_project_amount"] or 0), float(d["total_spent"] or 0))
+++        ts = d["updated_at"] or d["created_at"]
+++        card["earliest"] = ts if card["earliest"] is None else min(card["earliest"], ts)
+++
+++    return list(cards.values())
+++
+++
+++def _card_title(card):
+++    n = len(card["items"])
+++    if n > 1:
+++        return f"{card['customer_name']} 有{n}项紧急事项需处理"
+++    return f"{card['customer_name']}：{card['items'][0]['desc']}"
+++
+++
+++def generate_today_tasks(conn, store_id="default_store", report_date=None) -> list:
+++    """生成今日任务并写入 store_action_task（先清当日自动生成任务再重建）。"""
+++    report_date = report_date or _today()
+++    cards = _gather_candidates(conn, store_id)
+++
+++    always_p0 = [c for c in cards if c["is_complaint"]]
+++    throttleable = [c for c in cards if not c["is_complaint"]]
+++    # 排序：金额风险 > 顾客价值 > 时效性(越早越前)
+++    throttleable.sort(key=lambda c: (-c["amount_risk"], -RFM_RANK.get(c["rfm_label"], 0), c["earliest"] or ""))
+++
+++    remaining_slots = max(0, P0_DAILY_LIMIT - len(always_p0))
+++    selected_p0 = throttleable[:remaining_slots]
+++    demoted = throttleable[remaining_slots:]  # 降为 P1，保留红标
+++
+++    # 清掉当日由本流程自动生成的任务，避免重复
+++    conn.execute(
+++        "DELETE FROM store_action_task WHERE store_id=? AND report_date=? AND source_type='customer_ops'",
+++        (store_id, report_date),
+++    )
+++
+++    def insert(card, priority, throttled, keep_red):
+++        conn.execute(
+++            "INSERT INTO store_action_task (store_id, report_date, title, description, priority, source_type, "
+++            "source_id, related_customer_id, status, is_throttled_to_p1, keep_red_tag, merged_warning_count) "
+++            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+++            (store_id, report_date, _card_title(card),
+++             json.dumps(card["items"], ensure_ascii=False), priority, "customer_ops",
+++             f"customer:{card['customer_id']}", card["customer_id"], "pending",
+++             1 if throttled else 0, 1 if keep_red else 0, len(card["items"])),
+++        )
+++
+++    for c in always_p0:
+++        insert(c, P0, throttled=False, keep_red=True)
+++    for c in selected_p0:
+++        insert(c, P0, throttled=False, keep_red=True)
+++    for c in demoted:
+++        insert(c, P1, throttled=True, keep_red=True)  # 降级但保留红标
+++    conn.commit()
+++
+++    return get_today_tasks(conn, store_id, report_date)
+++
+++
+++def get_today_tasks(conn, store_id="default_store", report_date=None) -> list:
+++    report_date = report_date or _today()
+++    rows = conn.execute(
+++        "SELECT * FROM store_action_task WHERE store_id=? AND report_date=? "
+++        "ORDER BY priority ASC, keep_red_tag DESC, id ASC",
+++        (store_id, report_date),
+++    ).fetchall()
+++    out = []
+++    for r in rows:
+++        t = dict(r)
+++        try:
+++            t["items"] = json.loads(t.get("description") or "[]")
+++        except (ValueError, TypeError):
+++            t["items"] = []
+++        t["priority_label"] = "P0" if t["priority"] == P0 else "P1"
+++        t["red_tag"] = "🔥" if t["keep_red_tag"] else ""
+++        out.append(t)
+++    return out
+++
+++
+++def update_task_status(conn, task_id, status, review_note="") -> dict:
+++    r = conn.execute("SELECT * FROM store_action_task WHERE id=?", (task_id,)).fetchone()
+++    if not r:
+++        return None
+++    completed_at = datetime.now().isoformat() if status in ("done", "completed") else None
+++    conn.execute(
+++        "UPDATE store_action_task SET status=?, review_note=?, completed_at=? WHERE id=?",
+++        (status, review_note or r["review_note"], completed_at, task_id),
+++    )
+++    conn.commit()
+++    return dict(conn.execute("SELECT * FROM store_action_task WHERE id=?", (task_id,)).fetchone())
+++
+++
+++def submit_daily_review(conn, store_id, report_date, review_content="") -> dict:
+++    """复盘闭环：汇总完成/未完成任务，生成明日 3 件事。"""
+++    report_date = report_date or _today()
+++    tasks = get_today_tasks(conn, store_id, report_date)
+++    completed = [t for t in tasks if t["status"] in ("done", "completed")]
+++    unfinished = [t for t in tasks if t["status"] not in ("done", "completed")]
+++
+++    # 明日 3 件事：优先未完成的 P0 → 被降级的红标 P1 → 其余未完成
+++    ranked = sorted(
+++        unfinished,
+++        key=lambda t: (t["priority"], 0 if t["keep_red_tag"] else 1, t["id"]),
+++    )
+++    tomorrow_actions = [
+++        {"title": t["title"], "priority_label": t["priority_label"], "red_tag": t["red_tag"]}
+++        for t in ranked[:3]
+++    ]
+++    # 防饥饿提示：今日因限流降为 P1 的红色项
+++    demoted_today = [t for t in tasks if t["is_throttled_to_p1"]]
+++    if demoted_today:
+++        tomorrow_actions_note = f"今日 {len(demoted_today)} 项 P0 候选因限流降为 P1，建议明天优先处理"
+++    else:
+++        tomorrow_actions_note = ""
+++
+++    conn.execute(
+++        "INSERT INTO daily_review (store_id, report_date, review_content, completed_tasks, unfinished_tasks, tomorrow_actions) "
+++        "VALUES (?,?,?,?,?,?) ON CONFLICT(store_id, report_date) DO UPDATE SET "
+++        "review_content=excluded.review_content, completed_tasks=excluded.completed_tasks, "
+++        "unfinished_tasks=excluded.unfinished_tasks, tomorrow_actions=excluded.tomorrow_actions",
+++        (store_id, report_date, review_content,
+++         json.dumps([t["id"] for t in completed]),
+++         json.dumps([t["id"] for t in unfinished]),
+++         json.dumps(tomorrow_actions, ensure_ascii=False)),
+++    )
+++    conn.commit()
+++    return {
+++        "store_id": store_id, "report_date": report_date,
+++        "completed_count": len(completed), "unfinished_count": len(unfinished),
+++        "tomorrow_actions": tomorrow_actions, "tomorrow_actions_note": tomorrow_actions_note,
+++    }
+++
+++
+++def get_review_history(conn, store_id="default_store", limit=30):
+++    rows = conn.execute(
+++        "SELECT * FROM daily_review WHERE store_id=? ORDER BY report_date DESC LIMIT ?",
+++        (store_id, limit),
+++    ).fetchall()
+++    out = []
+++    for r in rows:
+++        d = dict(r)
+++        for k in ("completed_tasks", "unfinished_tasks", "tomorrow_actions"):
+++            try:
+++                d[k] = json.loads(d.get(k) or "[]")
+++            except (ValueError, TypeError):
+++                d[k] = []
+++        out.append(d)
+++    return out
++diff --git a/backend/smoke_test_v013.py b/backend/smoke_test_v013.py
++new file mode 100644
++index 0000000..b00181d
++--- /dev/null
+++++ b/backend/smoke_test_v013.py
++@@ -0,0 +1,153 @@
+++"""V0.1.3 店长工作台 · 后端 smoke_test。
+++
+++覆盖：health / daily-raw-data / computed-metrics / benchmark-config /
+++monthly-diagnosis / today-tasks / customer / project / home-product /
+++demand / warnings / demand-board / task-status / review +
+++第四闸门「顾客经营全链路 11 步」（补丁3）。
+++
+++用法：
+++    STORE_MANAGER_DB_PATH=/tmp/smoke.db STORE_MANAGER_ADMIN_KEY=k python smoke_test_v013.py
+++
+++说明：本脚本用最小 FastAPI app 挂载 v0.1.3 路由 + health 进行隔离 smoke，
+++不依赖 weasyprint 等无关系统库；整库启动冒烟由部署前环境执行。
+++零容忍项：任何 5xx / traceback / 写入失败 / 计算除零错误。
+++"""
+++import os
+++import sys
+++import tempfile
+++
+++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+++
+++if not os.getenv("STORE_MANAGER_DB_PATH"):
+++    os.environ["STORE_MANAGER_DB_PATH"] = os.path.join(tempfile.gettempdir(), "store_manager_v013_smoke.db")
+++    # 干净起点
+++    try:
+++        os.remove(os.environ["STORE_MANAGER_DB_PATH"])
+++    except OSError:
+++        pass
+++
+++from fastapi import FastAPI
+++from fastapi.testclient import TestClient
+++from app.store_manager.router_v013 import router as v013_router
+++
+++app = FastAPI(title="store-manager-v0.1.3-smoke")
+++app.include_router(v013_router)
+++
+++
+++@app.get("/health")
+++def health():
+++    return {"status": "ok", "module": "store-manager", "version": "v0.1.3"}
+++
+++
+++client = TestClient(app)
+++
+++_passed = 0
+++_failed = 0
+++_results = []
+++
+++
+++def check(name, cond, detail=""):
+++    global _passed, _failed
+++    ok = bool(cond)
+++    _passed += ok
+++    _failed += (not ok)
+++    _results.append((ok, name, detail))
+++    print(f"  [{'PASS' if ok else 'FAIL'}] {name}{' — ' + detail if detail else ''}")
+++    return ok
+++
+++
+++def no5xx(resp):
+++    return resp.status_code < 500
+++
+++
+++SAMPLE_RAW = {
+++    "daily_revenue": 32000, "daily_recharge_amount": 12500, "daily_product_retail": 4500,
+++    "daily_visits": 35, "daily_new_customers": 8, "daily_valid_appointments": 20,
+++    "daily_appointment_arrivals": 17, "daily_transaction_customers": 18, "daily_transaction_orders": 18,
+++    "daily_new_transaction": 5, "daily_project_sales": 15000, "daily_main_project_sales": 7500,
+++    "daily_service_count": 50, "daily_staff_count": 15, "daily_complaints": 2,
+++}
+++SID = "smoke_store"
+++DATE = "2026-06-09"
+++B = "/api/store-manager"
+++
+++
+++def run():
+++    print("=== 基础端点 ===")
+++    check("health", client.get("/health").json().get("status") == "ok")
+++
+++    r = client.post(f"{B}/daily-raw-data", json={"store_id": SID, "report_date": DATE, "form_data": SAMPLE_RAW})
+++    check("daily-raw-data", no5xx(r) and r.status_code == 200, str(r.status_code))
+++
+++    r = client.post(f"{B}/monthly-diagnoses", json={"store_id": SID, "report_date": DATE, "form_data": SAMPLE_RAW})
+++    check("monthly-diagnosis", no5xx(r) and r.status_code == 200, str(r.status_code))
+++    diag = r.json()["data"]
+++    check("诊断含 top3 + 规则文案(非AI智能)", len(diag["top_issues"]) <= 3 and diag["method"] == "规则诊断"
+++          and "AI智能" not in diag["source_label"])
+++    check("get diagnosis", client.get(f"{B}/diagnosis/{diag['id']}").status_code == 200)
+++
+++    r = client.get(f"{B}/computed-metrics", params={"store_id": SID, "report_date": DATE})
+++    m = r.json()["data"]
+++    check("computed-metrics 13项", no5xx(r) and len(m) >= 13 and "conversion_rate" in m)
+++    check("除零安全(指标均数值)", all(isinstance(m[k], (int, float)) for k in
+++          ["conversion_rate", "avg_order_value", "complaint_risk_index"]))
+++
+++    r = client.get(f"{B}/benchmark-config", params={"store_id": SID})
+++    check("benchmark-config GET 默认值", r.json()["data"]["conversion_rate_green"] == 60)
+++    check("benchmark-config PUT", client.put(f"{B}/benchmark-config", params={"store_id": SID},
+++          json={"conversion_rate_green": 65}).status_code == 200)
+++
+++    print("=== 第四闸门：顾客经营全链路 11 步 ===")
+++    # 1 新建顾客
+++    r = client.post(f"{B}/customers", json={"store_id": SID, "name": "闸门顾客", "phone": "13700000001"})
+++    check("G1 POST /customers 201/200 + phone唯一", r.status_code in (200, 201))
+++    cid = r.json()["data"]["id"]
+++    dup = client.post(f"{B}/customers", json={"store_id": SID, "name": "重复", "phone": "13700000001"})
+++    check("G1 phone唯一约束生效(400)", dup.status_code == 400, str(dup.status_code))
+++    # 2 录入在店项目
+++    r = client.post(f"{B}/customers/{cid}/projects", json={"project_name": "颈肩调理", "project_type": "理疗",
+++                    "total_quantity": 3, "total_amount": 3000})
+++    check("G2 POST projects", r.status_code == 200)
+++    pid = r.json()["data"]["id"]
+++    # 3 项目消耗 remaining-1
+++    r = client.post(f"{B}/customers/{cid}/projects/{pid}/consume")
+++    check("G3 consume remaining-1", r.json()["data"]["remaining_quantity"] == 2)
+++    # 4 消耗至0触发红警
+++    client.post(f"{B}/customers/{cid}/projects/{pid}/consume")
+++    client.post(f"{B}/customers/{cid}/projects/{pid}/consume")
+++    w = client.get(f"{B}/warnings", params={"store_id": SID}).json()["data"]
+++    check("G4 消耗至0生成red预警", any(x["warning_level"] == "red" and x["customer_id"] == cid for x in w))
+++    # 5 录入家居产品
+++    check("G5 POST home-products", client.post(f"{B}/customers/{cid}/home-products",
+++          json={"product_name": "精华", "purchase_date": "2026-06-01", "estimated_cycle": 30}).status_code == 200)
+++    # 6 录入需求
+++    r = client.post(f"{B}/customers/{cid}/demands", json={"demand_desc": "想改善法令纹", "demand_type": "抗衰", "progress_score": 5})
+++    check("G6 POST demands", r.status_code == 200)
+++    demand_id = r.json()["data"]["id"]
+++    # 7 需求进度≥8进可成交
+++    client.put(f"{B}/customers/{cid}/demands/{demand_id}", json={"progress_score": 9})
+++    # 8 今日需求看板
+++    board = client.get(f"{B}/demand-board", params={"store_id": SID}).json()["data"]
+++    check("G7+G8 demand-board 可成交标💰", board["summary"]["dealable_count"] >= 1
+++          and any(d.get("flag") == "💰" for d in board["dealable_demands"]))
+++    # 9 生成顾客经营任务
+++    tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": SID, "date": DATE}).json()["data"]
+++    check("G9 预警触发生成 store_action_task", len(tasks) >= 1)
+++    # 10 完成任务 + 提交复盘
+++    if tasks:
+++        check("G10 PUT task status", client.put(f"{B}/tasks/{tasks[0]['id']}/status",
+++              json={"status": "done"}).status_code == 200)
+++    rev = client.post(f"{B}/daily-review", json={"store_id": SID, "report_date": DATE, "review_content": "smoke"}).json()["data"]
+++    # 11 复盘含 tomorrow_actions
+++    check("G11 复盘返回 tomorrow_actions", "tomorrow_actions" in rev)
+++    check("today-tasks GET", client.get(f"{B}/today-tasks", params={"store_id": SID, "date": DATE}).status_code == 200)
+++    check("daily-review/history", client.get(f"{B}/daily-review/history", params={"store_id": SID}).status_code == 200)
+++    check("customers list", client.get(f"{B}/customers", params={"store_id": SID}).status_code == 200)
+++    check("customer detail", client.get(f"{B}/customers/{cid}").status_code == 200)
+++
+++    print(f"\n=== smoke 结果：{_passed} PASS / {_failed} FAIL ===")
+++    return _failed == 0
+++
+++
+++if __name__ == "__main__":
+++    sys.exit(0 if run() else 1)
++diff --git "a/docs/v0.1.3/01_\344\272\247\345\223\201\345\206\205\346\240\270\351\207\215\346\236\204PRD.docx" "b/docs/v0.1.3/01_\344\272\247\345\223\201\345\206\205\346\240\270\351\207\215\346\236\204PRD.docx"
++new file mode 100644
++index 0000000..07158cc
++Binary files /dev/null and "b/docs/v0.1.3/01_\344\272\247\345\223\201\345\206\205\346\240\270\351\207\215\346\236\204PRD.docx" differ
++diff --git "a/docs/v0.1.3/02_\345\220\216\347\253\257\345\274\200\345\217\221\346\226\207\346\241\243.docx" "b/docs/v0.1.3/02_\345\220\216\347\253\257\345\274\200\345\217\221\346\226\207\346\241\243.docx"
++new file mode 100644
++index 0000000..d229404
++Binary files /dev/null and "b/docs/v0.1.3/02_\345\220\216\347\253\257\345\274\200\345\217\221\346\226\207\346\241\243.docx" differ
++diff --git "a/docs/v0.1.3/03_\346\200\273\345\256\241\350\241\245\344\270\201\350\257\264\346\230\216V0.1.docx" "b/docs/v0.1.3/03_\346\200\273\345\256\241\350\241\245\344\270\201\350\257\264\346\230\216V0.1.docx"
++new file mode 100644
++index 0000000..6ddce27
++Binary files /dev/null and "b/docs/v0.1.3/03_\346\200\273\345\256\241\350\241\245\344\270\201\350\257\264\346\230\216V0.1.docx" differ
++diff --git "a/docs/v0.1.3/05_\351\241\276\345\256\242\347\273\217\350\220\245\347\256\241\347\220\206\344\275\223\347\263\273\350\256\276\350\256\241\346\226\207\346\241\243.docx" "b/docs/v0.1.3/05_\351\241\276\345\256\242\347\273\217\350\220\245\347\256\241\347\220\206\344\275\223\347\263\273\350\256\276\350\256\241\346\226\207\346\241\243.docx"
++new file mode 100644
++index 0000000..5b6d599
++Binary files /dev/null and "b/docs/v0.1.3/05_\351\241\276\345\256\242\347\273\217\350\220\245\347\256\241\347\220\206\344\275\223\347\263\273\350\256\276\350\256\241\346\226\207\346\241\243.docx" differ
++diff --git "a/docs/v0.1.3/06_7\345\244\247\345\272\223V0.1\345\212\240\345\274\272\345\242\236\350\241\245\345\214\205.docx" "b/docs/v0.1.3/06_7\345\244\247\345\272\223V0.1\345\212\240\345\274\272\345\242\236\350\241\245\345\214\205.docx"
++new file mode 100644
++index 0000000..662815c
++Binary files /dev/null and "b/docs/v0.1.3/06_7\345\244\247\345\272\223V0.1\345\212\240\345\274\272\345\242\236\350\241\245\345\214\205.docx" differ
++diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md
++new file mode 100644
++index 0000000..4cbb832
++--- /dev/null
+++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md
++@@ -0,0 +1,236 @@
+++# 店长工作台 V0.1.3 · 后端代码审查包
+++
+++> 用途：交扣子 / Codex / ChatGPT 做代码审查。**本阶段不部署、不 push、不 merge。**
+++> 仓库：`-FASTAPI-BACKEND-` ｜ 仅后端，未动 MWUZS-MINIAPP。
+++
+++---
+++
+++## 1. 基础 commit
+++`68263a1`（V0.1.2 P2 复审检查点补充，V0.1.3 分支由此切出）
+++
+++## 2. 当前分支
+++`store-manager-v0.1.3-backend`（无 upstream，远程不存在 → 未 push）
+++
+++## 3. 当前 HEAD
+++`86d64d3ba5b7838558c986f67b4696a89dc58224`（short `86d64d3`）
+++
+++## 4. 本轮全部提交（git log --oneline，68263a1..HEAD）
+++```
+++86d64d3 docs(v0.1.3): 后端开发第一阶段交付报告(本地,不push)
+++5841e7c test(v0.1.3-M7): 后端smoke_test覆盖全端点+第四闸门11步(24/24通过)
+++c713287 feat(v0.1.3-M6): 诊断编排 + Schemas + API路由(/api/store-manager)
+++2728a4e feat(v0.1.3-M5): 今日任务P0限流 + 复盘闭环(补丁2)
+++2ee624b feat(v0.1.3-M4): 顾客经营模型(档案/项目/家居/需求/红黄预警/看板)
+++9f1994b feat(v0.1.3-M3): 9类诊断规则引擎 + StoreBenchmarkConfig + library_ref静态映射
+++e5f9cde feat(v0.1.3-M2): 13个自动计算指标(除零安全,率字段只读)
+++78c853b feat(v0.1.3-M1): 数据底座 14 张表 + 高频索引(独立SQLite,不动主库)
+++4ef0c32 chore(v0.1.3): 落位 5 份 V0.1.3 文档到 docs/v0.1.3/
+++```
+++
+++## 5. git diff --stat（68263a1..HEAD）
+++```
+++17 files changed, 1951 insertions(+)
+++backend/app/main.py                              |   2 +
+++backend/app/store_manager/db_v013.py             | 349 +
+++backend/app/store_manager/customer_ops_v013.py   | 290 +
+++backend/app/store_manager/router_v013.py         | 247 +
+++backend/app/store_manager/tasks_v013.py          | 209 +
+++backend/app/store_manager/diagnosis_v013.py      | 207 +
+++backend/smoke_test_v013.py                       | 153 +
+++backend/app/store_manager/pipeline_v013.py       | 130 +
+++backend/app/store_manager/schemas_v013.py        | 102 +
+++backend/app/store_manager/library_ref.py         |  75 +
+++backend/app/store_manager/metrics_v013.py        |  65 +
+++docs/v0.1.3/*.docx (5 份) + 交付报告.md (122 +)
+++```
+++
+++## 6. 本轮新增/修改文件清单
+++**修改（1）**：`backend/app/main.py`（仅 +2 行：import + include_router）。
+++**新增代码（11）**：`db_v013.py` / `metrics_v013.py` / `diagnosis_v013.py` / `library_ref.py` / `customer_ops_v013.py` / `tasks_v013.py` / `pipeline_v013.py` / `schemas_v013.py` / `router_v013.py`（均在 `backend/app/store_manager/`）+ `backend/smoke_test_v013.py`。
+++**新增文档**：`docs/v0.1.3/` 下 5 份 docx + 交付报告 + 本审查包。
+++> 现有 router（diagnoses/monthly/admin/weapp）、models、database、schemas、V0.1.2 子包文件：**零改动**。
+++
+++## 7. 新增 14 张 SQLite 表（独立库，不入主库）
+++| # | 表 | 用途 |
+++|---|----|----|
+++| 1 | store_daily_raw_data | 15 项每日原始经营数据 |
+++| 2 | store_computed_metrics | 13 项自动计算指标 |
+++| 3 | store_diagnosis_result | 诊断报告主表（10 段） |
+++| 4 | store_diagnosis_issue | 诊断问题（含 severity/library_ref） |
+++| 5 | store_action_task | 今日任务（含限流字段 is_throttled_to_p1/keep_red_tag/merged_warning_count） |
+++| 6 | customer_profile | 顾客档案（RFM 自动） |
+++| 7 | customer_project | 在店项目（消耗/剩余） |
+++| 8 | customer_home_product | 家居产品（用完预警） |
+++| 9 | customer_demand | 需求管理（progress_score） |
+++| 10 | customer_warning | 红黄预警 |
+++| 11 | customer_follow_task | 顾客跟进任务 |
+++| 12 | daily_demand_board | 今日需求看板快照 |
+++| 13 | daily_review | 每日复盘（含 tomorrow_actions） |
+++| 14 | store_benchmark_config | 门店健康线阈值（补丁1） |
+++
+++索引：基础索引 + 补丁5 的 6 个高频复合索引（合计约 30 个，全部 `IF NOT EXISTS`）。
+++
+++## 8. 21 个 /api/store-manager 端点
+++```
+++POST  /daily-raw-data
+++GET   /computed-metrics
+++POST  /monthly-diagnoses
+++GET   /diagnosis/{diagnosis_id}
+++GET   /benchmark-config
+++PUT   /benchmark-config
+++GET   /today-tasks
+++POST  /today-tasks/generate
+++PUT   /tasks/{task_id}/status
+++POST  /daily-review
+++GET   /daily-review/history
+++POST  /customers
+++GET   /customers
+++GET   /customers/{customer_id}
+++POST  /customers/{customer_id}/projects
+++POST  /customers/{customer_id}/projects/{project_id}/consume
+++POST  /customers/{customer_id}/home-products
+++POST  /customers/{customer_id}/demands
+++PUT   /customers/{customer_id}/demands/{demand_id}
+++GET   /warnings
+++GET   /demand-board
+++```
+++响应统一：`{code:1000, msg:"success", data:..., api_version:"v0.1.3"}`。
+++
+++## 9. 13 个自动计算指标（除零安全：分母为 0 一律置 0）
+++| 指标 | 公式 |
+++|------|------|
+++| conversion_rate | 成交客数 / 客流 ×100 |
+++| new_customer_ratio | 新客数 / 客流 ×100 |
+++| new_conversion_rate | 新客成交 / 新客数 ×100 |
+++| avg_order_value | 营收 / 成交客数 |
+++| appointment_arrival_rate | 到店 / 有效预约 ×100 |
+++| per_capita_efficiency | 营收 / 员工数 |
+++| recharge_ratio | 充值额 / 营收 ×100 |
+++| project_ratio | 项目业绩 / 营收 ×100 |
+++| product_ratio | 产品零售 / 营收 ×100 |
+++| main_project_ratio | 主推项目 / 项目业绩 ×100 |
+++| complaint_risk_index | 投诉 ×100 / 服务人次 |
+++| estimated_return_customers | 客流 − 新客（保守不为负） |
+++| service_efficiency | 服务人次 / 员工数 |
+++> 全部"率"仅由系统计算，不接受前端填写。
+++
+++## 10. 9 类诊断规则（severity 降序取 top3）
+++| # | 问题类型(key) | 触发条件 | severity | 阈值来源 |
+++|---|---------------|----------|----------|----------|
+++| 1 | 客流 traffic | daily_visits < 20 | 8 | 规则默认（待配置化） |
+++| 2 | 成交 deal | conversion_rate < conversion_rate_green(60) | 8 | **StoreBenchmarkConfig** |
+++| 3 | 新客承接 new_customer | new_conversion_rate < 50% | 7 | 规则默认（待配置化） |
+++| 4 | 客单 price | avg_order_value < avg_order_target（>0 才判） | 7 | **StoreBenchmarkConfig** |
+++| 5 | 锁客 lock | recharge_ratio < 30% | 6 | 规则默认（待配置化） |
+++| 6 | 复购 repeat | 复购客占比 < return_customer_ratio_green_low(70) | 7 | **StoreBenchmarkConfig** |
+++| 7 | 项目结构 project | main_project_ratio < 50% | 6 | 规则默认（待配置化） |
+++| 8 | 员工人效 staff | per_capita_efficiency < per_capita_target（>0 才判） | 6 | **StoreBenchmarkConfig** |
+++| 9 | 服务风险 risk | complaint_risk_index > 3 或 有投诉 | 8/9 | 固定规则 |
+++> 每问题挂 7 大库 `library_ref` 静态映射（V0.1.4 换 RAG）。文案统一"规则诊断"，禁"AI 智能诊断"，附"AI深度分析将在V0.1.4接入"。
+++
+++## 11. StoreBenchmarkConfig 默认阈值（补丁1）
+++首次读取/启动自动插入 `default_store` 默认配置；诊断规则从此读取，无配置 fallback 到 DEFAULT。
+++```
+++conversion_rate_green=60 · repurchase_rate_green=50 · appointment_arrival_rate_green=80
+++new_customer_ratio: 15~30 · return_customer_ratio: 70~85 · complaint_risk_max=5
+++monthly_target / avg_order_target / per_capita_target 默认 0（需门店设置后参与判定）
+++```
+++提供 GET/PUT `/benchmark-config`，V0.1.3 默认值即生效、可调。
+++
+++## 12. P0 限流规则（补丁2）
+++1. 每天 P0 默认最多 3 条；
+++2. 投诉/退款/差评永远 P0（不受限流）；
+++3. 同一顾客多个预警合并为 1 张任务卡（标题"{顾客} 有N项紧急事项需处理"）；
+++4. P0 超 3 条时按「金额风险 > 顾客价值(RFM) > 时效性」排序；
+++5. 未入选红色项降为 P1，但保留红色标签（keep_red_tag=🔥）+ 防饥饿提示"今日 N 项 P0 候选因限流降为 P1，建议明天优先处理"。
+++
+++## 13. 第四闸门 11 步后端链路（补丁3）
+++```
+++1 POST /customers (phone 唯一)
+++2 POST /customers/{id}/projects
+++3 POST /customers/{id}/projects/{pid}/consume (remaining-1)
+++4 消耗至 0 → customer_warning 生成 red
+++5 POST /customers/{id}/home-products
+++6 POST /customers/{id}/demands
+++7 PUT  /customers/{id}/demands/{did} progress≥8 → 看板标 💰
+++8 GET  /demand-board 正确聚合
+++9 today-tasks/generate 预警触发生成 store_action_task
+++10 PUT /tasks/{id}/status → POST /daily-review
+++11 复盘返回含 tomorrow_actions
+++```
+++
+++## 14. smoke_test 完整输出（24 PASS / 0 FAIL）
+++```
+++=== 基础端点 ===
+++  [PASS] health
+++  [PASS] daily-raw-data — 200
+++  [PASS] monthly-diagnosis — 200
+++  [PASS] 诊断含 top3 + 规则文案(非AI智能)
+++  [PASS] get diagnosis
+++  [PASS] computed-metrics 13项
+++  [PASS] 除零安全(指标均数值)
+++  [PASS] benchmark-config GET 默认值
+++  [PASS] benchmark-config PUT
+++=== 第四闸门：顾客经营全链路 11 步 ===
+++  [PASS] G1 POST /customers 201/200 + phone唯一
+++  [PASS] G1 phone唯一约束生效(400) — 400
+++  [PASS] G2 POST projects
+++  [PASS] G3 consume remaining-1
+++  [PASS] G4 消耗至0生成red预警
+++  [PASS] G5 POST home-products
+++  [PASS] G6 POST demands
+++  [PASS] G7+G8 demand-board 可成交标💰
+++  [PASS] G9 预警触发生成 store_action_task
+++  [PASS] G10 PUT task status
+++  [PASS] G11 复盘返回 tomorrow_actions
+++  [PASS] today-tasks GET
+++  [PASS] daily-review/history
+++  [PASS] customers list
+++  [PASS] customer detail
+++
+++=== smoke 结果：24 PASS / 0 FAIL ===
+++exit=0
+++```
+++
+++## 15. 是否有 5xx / traceback / 异常日志
+++**无。** smoke 全程无 5xx、无 traceback、无异常日志；零容忍项（5xx / traceback / 写入失败 / 除零）全部通过。
+++> 说明：因当前环境未装 weasyprint（系统库），未做"整库一次性启动"冒烟；store-manager 与 weasyprint 无依赖，已用隔离挂载完整验证。整库启动冒烟留待部署前环境执行。
+++
+++## 16. 未完成 / 待确认问题清单
+++**16.1 待确认业务参数清单（4 个规则阈值）**
+++文档表格未给精确数值，当前用规则默认常量。吴哥已建议先按下表暂定，但**要求写入 `StoreBenchmarkConfig`、不写死在规则里**；代码审查通过后再统一补一个小提交：
+++| 规则 | 当前代码默认 | 吴哥暂定值 | 落位 |
+++|------|------|----------|------|
+++| 客流 traffic | daily_visits<20 | daily_visits<20 且 new_customer_ratio<15% | 待入 StoreBenchmarkConfig |
+++| 新客承接 new_customer | new_conversion_rate<50% | new_conversion_rate<40% | 待入 StoreBenchmarkConfig |
+++| 锁客 lock | recharge_ratio<30% | recharge_ratio<20% | 待入 StoreBenchmarkConfig |
+++| 项目结构 project | main_project_ratio<50% | main_project_ratio<40% | 待入 StoreBenchmarkConfig |
+++> 处理方式（已与吴哥确认）：**本审查阶段不改代码**，仅记录；审查通过后再以一个小提交统一把这 4 个阈值配置化并写入 benchmark 默认值。
+++
+++**16.2 其他**
+++1. 客单/人效规则需门店设置目标值（avg_order_target/per_capita_target>0）才触发，否则不判（避免误报）。
+++2. `generate_today_tasks` 重复调用会重建当日 customer_ops 来源任务（重置状态）；正常每日生成一次。如需增量保留状态需再设计。
+++3. severity 取规则区间内代表值，未按偏离度动态打分。
+++4. 04_总审证据包本次未提供，当前以 5 份文档为准。
+++
+++## 17. 红线自查
+++| 项 | 状态 |
+++|----|------|
+++| 未 push | ✅（分支无 upstream，远程不存在） |
+++| 未 merge | ✅ |
+++| 未部署 ECS | ✅ |
+++| 未 scp | ✅ |
+++| 未动 18080 测试服务 | ✅ |
+++| 未动 V0.1.1 主链路 | ✅（现有 router/模型零改动） |
+++| 未动生产数据库 / 未迁移 | ✅（独立 SQLite，不入主库） |
+++| 未改 Nginx | ✅ |
+++| 未动 MWUZS-MINIAPP | ✅（该仓库工作区干净，本轮零提交；+2059 为 V0.1.2 旧 PR 累计差异） |
+++
+++## 18. 建议下一步
+++1. 将本审查包交 **扣子 / Codex / ChatGPT** 做代码审查（架构、SQL 注入面、并发、错误处理、字段一致性、限流正确性）。
+++2. **不进入部署**。审查通过后，再：① 统一补 4 个阈值配置化小提交；② 评估部署到 ECS **18081**（V0.1.3 测试端口，与 18080 V0.1.2 隔离）；③ 整库启动冒烟（含 weasyprint）。
+++3. 顺序：生成审查包 → 扣子收包 → Codex/ChatGPT 审查 → 通过 → 补阈值小提交 → 再部署 18081。
+++
+++---
+++
+++_生成后停住，等待吴哥安排扣子工具链审查。本阶段不 push、不部署。_
++diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md
++new file mode 100644
++index 0000000..b9c1fb9
++--- /dev/null
+++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md
++@@ -0,0 +1,122 @@
+++# 店长工作台 V0.1.3 · 后端开发交付报告（第一阶段）
+++
+++> 仓库：`-FASTAPI-BACKEND-` ｜ 分支：`store-manager-v0.1.3-backend`（基于 `68263a1`）
+++> 范围：**仅后端**。不做前端、不做 UI、不动 MWUZS-MINIAPP。
+++> 状态：**未 push、未 merge、未部署、未动 18080、未动生产库/V0.1.1。** 全部本地 commit。
+++> 优先级原则：总审补丁说明 V0.1 最高，冲突以补丁说明为准（8 个补丁已全部纳入）。
+++
+++---
+++
+++## 1. git log --oneline（68263a1..HEAD）
+++
+++```
+++5841e7c test(v0.1.3-M7): 后端smoke_test覆盖全端点+第四闸门11步(24/24通过)
+++c713287 feat(v0.1.3-M6): 诊断编排 + Schemas + API路由(/api/store-manager)
+++2728a4e feat(v0.1.3-M5): 今日任务P0限流 + 复盘闭环(补丁2)
+++2ee624b feat(v0.1.3-M4): 顾客经营模型(档案/项目/家居/需求/红黄预警/看板)
+++9f1994b feat(v0.1.3-M3): 9类诊断规则引擎 + StoreBenchmarkConfig + library_ref静态映射
+++e5f9cde feat(v0.1.3-M2): 13个自动计算指标(除零安全,率字段只读)
+++78c853b feat(v0.1.3-M1): 数据底座 14 张表 + 高频索引(独立SQLite,不动主库)
+++4ef0c32 chore(v0.1.3): 落位 5 份 V0.1.3 文档
+++```
+++
+++## 2. git diff 摘要（68263a1..HEAD）
+++
+++```
+++16 files changed, 1829 insertions(+)
+++backend/app/main.py                              |   2 +
+++backend/app/store_manager/db_v013.py             | 349 +
+++backend/app/store_manager/customer_ops_v013.py   | 290 +
+++backend/app/store_manager/router_v013.py         | 247 +
+++backend/app/store_manager/tasks_v013.py          | 209 +
+++backend/app/store_manager/diagnosis_v013.py      | 207 +
+++backend/smoke_test_v013.py                       | 153 +
+++backend/app/store_manager/pipeline_v013.py       | 130 +
+++backend/app/store_manager/schemas_v013.py        | 102 +
+++backend/app/store_manager/library_ref.py         |  75 +
+++backend/app/store_manager/metrics_v013.py        |  65 +
+++docs/v0.1.3/*.docx (5 份文档)
+++```
+++
+++## 3. 改动文件清单
+++
+++**新增代码（全部在 `backend/app/store_manager/` 独立子包内）：**
+++| 文件 | 职责 | 对应模块 |
+++|------|------|----------|
+++| `db_v013.py` | 14 张表 DDL + 索引（独立 SQLite） | M1 |
+++| `metrics_v013.py` | 13 自动计算指标（除零安全） | M2 |
+++| `diagnosis_v013.py` | 9 类诊断规则 + 阈值配置 + 文案边界 | M3 |
+++| `library_ref.py` | 7 大库静态映射 | M3 |
+++| `customer_ops_v013.py` | 顾客/项目/家居/需求/预警/看板 | M4 |
+++| `tasks_v013.py` | 今日任务 P0 限流 + 复盘闭环 | M5 |
+++| `pipeline_v013.py` | 诊断编排（原始→指标→诊断→落库） | M6 |
+++| `schemas_v013.py` | pydantic 请求模型 | M6 |
+++| `router_v013.py` | `/api/store-manager` 路由 | M6 |
+++| `backend/smoke_test_v013.py` | 后端 smoke + 第四闸门 | M7 |
+++
+++**修改现有：**
+++- `backend/app/main.py`：**仅新增 2 行**注册 `store_manager_v013_router`。未改任何现有 router/接口。
+++
+++## 4. 新增数据表清单（14 张，独立 SQLite，不入主库）
+++
+++`store_daily_raw_data`(15项原始) · `store_computed_metrics`(13指标) · `store_diagnosis_result` · `store_diagnosis_issue` · `store_action_task`(任务+限流字段) · `customer_profile`(RFM) · `customer_project` · `customer_home_product` · `customer_demand` · `customer_warning` · `customer_follow_task` · `daily_demand_board` · `daily_review` · `store_benchmark_config`(补丁1)
+++
+++索引：基础索引 + 补丁5 的 6 个高频复合索引（共 30 个）。
+++
+++## 5. API 清单（前缀 `/api/store-manager`，补丁4 不启 v2）
+++
+++| 方法 | 路径 | 说明 |
+++|------|------|------|
+++| POST | `/daily-raw-data` | 录入 15 项原始数据 |
+++| GET | `/computed-metrics` | 13 自动计算指标 |
+++| POST | `/monthly-diagnoses` | 生成诊断（原始→指标→9规则→top3） |
+++| GET | `/diagnosis/{id}` | 取诊断报告 |
+++| GET/PUT | `/benchmark-config` | 健康线阈值配置（补丁1） |
+++| GET | `/today-tasks` | 今日任务（含 `generate` 参数） |
+++| POST | `/today-tasks/generate` | 生成今日任务（P0 限流） |
+++| PUT | `/tasks/{id}/status` | 更新任务状态 |
+++| POST | `/daily-review` | 提交复盘（返回明日 3 件事） |
+++| GET | `/daily-review/history` | 复盘历史 |
+++| POST/GET | `/customers` `/customers/{id}` | 顾客档案 |
+++| POST | `/customers/{id}/projects` | 在店项目 |
+++| POST | `/customers/{id}/projects/{pid}/consume` | 项目消耗（触发预警） |
+++| POST | `/customers/{id}/home-products` | 家居产品 |
+++| POST/PUT | `/customers/{id}/demands` `/demands/{did}` | 需求管理 |
+++| GET | `/warnings` | 预警清单 |
+++| GET | `/demand-board` | 今日需求看板 |
+++
+++响应统一 `{code:1000, msg, data, api_version:"v0.1.3"}`。
+++
+++## 6. smoke_test 结果
+++
+++`python backend/smoke_test_v013.py` → **24 PASS / 0 FAIL**。
+++- 基础端点：health / daily-raw-data / monthly-diagnosis / computed-metrics(13项,除零安全) / benchmark-config(GET默认+PUT) / 诊断文案边界(规则诊断,非"AI智能") ✅
+++- 第四闸门顾客经营全链路 11 步：建档(phone唯一)→项目→消耗→消耗至0触红警→家居→需求→进度≥8进可成交💰→看板→生成任务→改状态→复盘含 tomorrow_actions ✅
+++- 零容忍项（5xx/traceback/写失败/除零）：无 ✅
+++- 模块级自测：M1 表14/14 · M2 指标对齐文档样例 · M3 规则top3 · M4 预警去重 · M5 P0限流(投诉永远P0/降级保留🔥/合并) 全通过。
+++
+++> 说明：因当前环境未装 weasyprint（系统库），未做"整库一次性启动"冒烟；store-manager 与 weasyprint 无依赖，已用隔离挂载完整验证。整库启动冒烟留待部署前环境（扣子）执行。
+++
+++## 7. 未完成 / 待确认问题清单
+++
+++1. **部分规则阈值未配置化**：客流(daily_visits<20)、新客承接(new_conversion<50%)、锁客(recharge<30%)、项目结构(main_project_ratio<50%) 用的是规则级默认常量（文档表格中该列为图片/未给精确数值）。成交/复购/人效/客单/服务风险已接 `StoreBenchmarkConfig`。→ 待吴哥确认这 4 个阈值的精确值，可后续并入 benchmark 配置。
+++2. **客单/人效规则需目标值才触发**：`avg_order_target`/`per_capita_target` 默认 0 时不触发（避免误报）。→ 联调时需为门店设置目标值。
+++3. **`generate_today_tasks` 重复调用会重建当日任务**（清旧重建 customer_ops 来源任务，会重置状态）。正常流程每日生成一次；如需"增量保留状态"需再设计。
+++4. **severity 取规则内代表值**（区间如 7-9 取固定值），未做按偏离度动态打分。
+++5. **第四闸门 smoke 为隔离挂载**，整库启动冒烟待部署前环境执行（见第 6 节）。
+++6. **04_总审证据包** 本次未提供，当前以 5 份文档为准。
+++
+++## 8. 边界声明（本阶段严格遵守）
+++
+++- ❌ 未 push（本地 commit，分支无 upstream）
+++- ❌ 未 merge
+++- ❌ 未部署 ECS、未 scp
+++- ❌ 未动 18080 测试服务、未改 Nginx
+++- ❌ 未动 V0.1.1、未动生产数据库、未执行任何迁移
+++- ❌ 未改 MWUZS-MINIAPP 小程序仓库（仅后端）
+++- ✅ 仅 `-FASTAPI-BACKEND-` 后端、独立 SQLite、独立子包、main.py 仅 2 行注册
+++- ✅ 8 个总审补丁全部纳入；文案边界统一"规则诊断"，不接大模型
+++
+++---
+++
+++_本报告为 V0.1.3 后端第一阶段交付，待吴哥 + ChatGPT 审核。后续前端、联调、部署均为独立阶段。_
+diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DIFF_STAT.txt b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DIFF_STAT.txt
+new file mode 100644
+index 0000000..ec044c4
+--- /dev/null
++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_DIFF_STAT.txt
+@@ -0,0 +1,19 @@
++ backend/app/main.py                                |   2 +
++ backend/app/store_manager/customer_ops_v013.py     | 290 +++++++++++++++++
++ backend/app/store_manager/db_v013.py               | 349 +++++++++++++++++++++
++ backend/app/store_manager/diagnosis_v013.py        | 207 ++++++++++++
++ backend/app/store_manager/library_ref.py           |  75 +++++
++ backend/app/store_manager/metrics_v013.py          |  65 ++++
++ backend/app/store_manager/pipeline_v013.py         | 130 ++++++++
++ backend/app/store_manager/router_v013.py           | 247 +++++++++++++++
++ backend/app/store_manager/schemas_v013.py          | 102 ++++++
++ backend/app/store_manager/tasks_v013.py            | 209 ++++++++++++
++ backend/smoke_test_v013.py                         | 153 +++++++++
++ ...05\346\240\270\351\207\215\346\236\204PRD.docx" | Bin 0 -> 73196 bytes
++ ...4\200\345\217\221\346\226\207\346\241\243.docx" | Bin 0 -> 68475 bytes
++ ...5\344\270\201\350\257\264\346\230\216V0.1.docx" | Bin 0 -> 61096 bytes
++ ...6\276\350\256\241\346\226\207\346\241\243.docx" | Bin 0 -> 63988 bytes
++ ...4\272\345\242\236\350\241\245\345\214\205.docx" | Bin 0 -> 117812 bytes
++ ...E_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md | 236 ++++++++++++++
++ ...E_MANAGER_V0_1_3_BACKEND_DEV_DELIVERY_REPORT.md | 122 +++++++
++ 18 files changed, 2187 insertions(+)
+diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_GIT_LOG.txt b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_GIT_LOG.txt
+new file mode 100644
+index 0000000..afc58b8
+--- /dev/null
++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_GIT_LOG.txt
+@@ -0,0 +1,10 @@
++2b8eebb docs(v0.1.3): 后端代码审查包(交Codex/ChatGPT审查,不部署/不push)
++86d64d3 docs(v0.1.3): 后端开发第一阶段交付报告(本地,不push)
++5841e7c test(v0.1.3-M7): 后端smoke_test覆盖全端点+第四闸门11步(24/24通过)
++c713287 feat(v0.1.3-M6): 诊断编排 + Schemas + API路由(/api/store-manager)
++2728a4e feat(v0.1.3-M5): 今日任务P0限流 + 复盘闭环(补丁2)
++2ee624b feat(v0.1.3-M4): 顾客经营模型(档案/项目/家居/需求/红黄预警/看板)
++9f1994b feat(v0.1.3-M3): 9类诊断规则引擎 + StoreBenchmarkConfig + library_ref静态映射
++e5f9cde feat(v0.1.3-M2): 13个自动计算指标(除零安全,率字段只读)
++78c853b feat(v0.1.3-M1): 数据底座 14 张表 + 高频索引(独立SQLite,不动主库)
++4ef0c32 chore(v0.1.3): 落位 5 份 V0.1.3 文档到 docs/v0.1.3/(仅资料,无代码改动)
+diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_REVIEW_README.md b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_REVIEW_README.md
+new file mode 100644
+index 0000000..7826ff7
+--- /dev/null
++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_REVIEW_README.md
+@@ -0,0 +1,56 @@
++# V0.1.3 后端代码审查包 · README
++
++> 本包供扣子 / Codex / ChatGPT 工具链做代码审查。**当前不允许部署、不允许 push。**
++
++## 基本信息
++- 仓库：`-FASTAPI-BACKEND-`（仅后端）
++- 基础 commit：`68263a1`（V0.1.2 P2 复审检查点，V0.1.3 分支由此切出）
++- 当前 HEAD：`86d64d3`
++- 分支名：`store-manager-v0.1.3-backend`（无 upstream → 未 push）
++
++## 包内文件
++| 文件 | 说明 |
++|------|------|
++| `STORE_MANAGER_V0_1_3_BACKEND_CODE_REVIEW_PACKAGE.md` | 审查总包（18 节：表/端点/指标/规则/限流/闸门/smoke/红线等） |
++| `STORE_MANAGER_V0_1_3_BACKEND_REVIEW_README.md` | 本说明 |
++| `STORE_MANAGER_V0_1_3_BACKEND_DIFF_68263a1_TO_HEAD.patch` | 全量改动 patch（`git diff 68263a1..HEAD`，新增文件=全量源码） |
++| `STORE_MANAGER_V0_1_3_BACKEND_DIFF_STAT.txt` | `git diff --stat 68263a1..HEAD` |
++| `STORE_MANAGER_V0_1_3_BACKEND_GIT_LOG.txt` | `git log --oneline 68263a1..HEAD` |
++| `STORE_MANAGER_V0_1_3_BACKEND_CHANGED_FILES.txt` | `git diff --name-status 68263a1..HEAD` |
++| `STORE_MANAGER_V0_1_3_BACKEND_SMOKE_OUTPUT.txt` | smoke 完整输出（含 24 PASS / 0 FAIL） |
++
++## 如何查看 diff
++```bash
++# 在 -FASTAPI-BACKEND- 仓库内
++git checkout store-manager-v0.1.3-backend
++git diff 68263a1..HEAD
++# 或直接看包内 patch：
++less STORE_MANAGER_V0_1_3_BACKEND_DIFF_68263a1_TO_HEAD.patch
++```
++> 本轮所有后端代码均为**新增文件**（patch 中以 `new file` 呈现），现有文件仅 `backend/app/main.py` 改 2 行（注册 router）。
++
++## 如何运行 smoke_test
++```bash
++cd backend
++STORE_MANAGER_DB_PATH=/tmp/smoke.db STORE_MANAGER_ADMIN_KEY=any_key python smoke_test_v013.py
++# 期望：24 PASS / 0 FAIL，exit 0，无 5xx / traceback
++```
++> 隔离挂载 v0.1.3 路由（不依赖 weasyprint）；整库启动冒烟留待部署前环境执行。
++
++## 红线声明（本阶段）
++- 未 push（分支无 upstream，远程不存在）
++- 未 merge
++- 未部署 ECS、未 scp、未开放 18081
++- 未动 18080 测试服务、未改 Nginx
++- 未动 V0.1.1 主链路、未动生产数据库、未执行迁移
++- 未动 MWUZS-MINIAPP 小程序仓库（该仓库工作区干净，本轮零提交）
++
++## 安全
++本包不含：`.env` / 密钥 / 数据库真实数据 / `node_modules` / `venv` / `__pycache__` / 生产配置。
++
++## 下一步（顺序定死，当前禁止部署）
++```
++生成 review zip → 扣子收包 → Codex/ChatGPT 审查 → 审查通过
++→ 补 4 个阈值配置化小提交 → 再部署 ECS 18081
++```
++> 4 个待确认阈值（客流/新客承接/锁客/项目结构）见审查总包第 16.1 节，**审查通过后再统一补小提交，本阶段不改代码**。
+diff --git a/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_SMOKE_OUTPUT.txt b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_SMOKE_OUTPUT.txt
+new file mode 100644
+index 0000000..d6289d0
+--- /dev/null
++++ b/docs/v0.1.3/STORE_MANAGER_V0_1_3_BACKEND_SMOKE_OUTPUT.txt
+@@ -0,0 +1,28 @@
++=== 基础端点 ===
++  [PASS] health
++  [PASS] daily-raw-data — 200
++  [PASS] monthly-diagnosis — 200
++  [PASS] 诊断含 top3 + 规则文案(非AI智能)
++  [PASS] get diagnosis
++  [PASS] computed-metrics 13项
++  [PASS] 除零安全(指标均数值)
++  [PASS] benchmark-config GET 默认值
++  [PASS] benchmark-config PUT
++=== 第四闸门：顾客经营全链路 11 步 ===
++  [PASS] G1 POST /customers 201/200 + phone唯一
++  [PASS] G1 phone唯一约束生效(400) — 400
++  [PASS] G2 POST projects
++  [PASS] G3 consume remaining-1
++  [PASS] G4 消耗至0生成red预警
++  [PASS] G5 POST home-products
++  [PASS] G6 POST demands
++  [PASS] G7+G8 demand-board 可成交标💰
++  [PASS] G9 预警触发生成 store_action_task
++  [PASS] G10 PUT task status
++  [PASS] G11 复盘返回 tomorrow_actions
++  [PASS] today-tasks GET
++  [PASS] daily-review/history
++  [PASS] customers list
++  [PASS] customer detail
++
++=== smoke 结果：24 PASS / 0 FAIL ===

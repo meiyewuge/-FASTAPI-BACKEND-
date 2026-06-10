@@ -11,8 +11,24 @@
 ## 2. 当前分支
 `store-manager-v0.1.3-backend`（无 upstream，远程不存在 → 未 push）
 
-## 3. 当前 HEAD
-`86d64d3ba5b7838558c986f67b4696a89dc58224`（short `86d64d3`）
+## 3. HEAD 信息（已修正 P0-3 一致性）
+| 角色 | commit | 说明 |
+|------|--------|------|
+| 第一阶段代码交付 HEAD | `86d64d3` | 7 模块开发完成 |
+| 首版审查包提交 | `2b8eebb` | 首次审查材料 |
+| **初审修订后代码 HEAD（本次审查对象）** | **`f1f29a4`** | 修复初审 3P0+3P1 |
+| 审查材料同步提交 | 紧随 `f1f29a4` 的 docs-only 提交 | 仅同步本包，无代码改动 |
+> 本审查材料对应代码 HEAD = `f1f29a4`；其后仅一个 docs 提交同步本包。
+
+## 3.1 初审修订记录（ChatGPT 初审 3P0 + 3P1，已小修）
+| 编号 | 问题 | 处理 |
+|------|------|------|
+| P0-1 | `/api/store-manager` 4 端点被 V0.1.2 老 router 屏蔽 | `main.py` 将 `router_v013` 提前注册→V0.1.3 生效；新增 `smoke_app_level_v013.py` 完整 app 级 smoke（9/0）验证；老 router 独有端点仍可达 |
+| P0-2 | 默认 DB 可能落到生产目录 | 改用 `STORE_MANAGER_V013_DB_PATH`，默认 `/opt/meiye-wuyou-test/data/store_manager_workbench_v013.db`；写生产目录 fail-fast |
+| P0-3 | 审查包 HEAD 不一致 | 本节明确区分 3 个 HEAD + docs 同步提交 |
+| P1-4 | `metrics_id` 写成 None | `pipeline_v013` 保存 metrics 后写入 `metrics_id` |
+| P1-5 | consume/demand 未校验归属 | router 校验 project/demand 属于 URL 的 `customer_id`，否则 404 |
+| P1-6 | 优先级数字与文档不一致 | 统一 `P0=0/P1=1/P2=2/P3=3`（含诊断问题与任务 label） |
 
 ## 4. 本轮全部提交（git log --oneline，68263a1..HEAD）
 ```
@@ -192,9 +208,16 @@ monthly_target / avg_order_target / per_capita_target 默认 0（需门店设置
 exit=0
 ```
 
+## 14.1 app 级 smoke（修复 P0-1 后新增，9 PASS / 0 FAIL）
+导入**真实 `app.main`**（无 weasyprint 时自动 stub），验证路由冲突已解决：
+- 4 个原冲突端点（monthly-diagnoses[POST] / today-tasks[GET] / today-tasks/generate[POST] / tasks/{id}/status[PUT]）现响应 `api_version=v0.1.3`（V0.1.3 生效）✅
+- V0.1.2 老 router 独有端点（/history、/monthly-diagnoses/{id}）仍可达 ✅
+- V0.1.3 专属端点（benchmark-config、demand-board）可达 ✅
+> isolated router smoke 因新增归属/优先级校验，由 24 → **27 PASS / 0 FAIL**。
+
 ## 15. 是否有 5xx / traceback / 异常日志
-**无。** smoke 全程无 5xx、无 traceback、无异常日志；零容忍项（5xx / traceback / 写入失败 / 除零）全部通过。
-> 说明：因当前环境未装 weasyprint（系统库），未做"整库一次性启动"冒烟；store-manager 与 weasyprint 无依赖，已用隔离挂载完整验证。整库启动冒烟留待部署前环境执行。
+**无。** 两个 smoke（isolated 27/0 + app 级 9/0）全程无 5xx、无 traceback、无异常日志；零容忍项（5xx / traceback / 写入失败 / 除零）全部通过。
+> app 级 smoke 已覆盖"整库 main.py 启动 + 路由不冲突"；weasyprint 在无系统库时用 stub（仅 smoke），真实 PDF 渲染依赖留待部署前环境。
 
 ## 16. 未完成 / 待确认问题清单
 **16.1 待确认业务参数清单（4 个规则阈值）**
