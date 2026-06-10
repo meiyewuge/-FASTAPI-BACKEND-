@@ -7,7 +7,14 @@
   [PASS] computed-metrics 13项
   [PASS] 除零安全(指标均数值)
   [PASS] benchmark-config GET 默认值
+  [PASS] 阈值配置化: traffic_visits_min=20
+  [PASS] 阈值配置化: new_conversion_rate_green=40
+  [PASS] 阈值配置化: recharge_ratio_green=20
+  [PASS] 阈值配置化: main_project_ratio_green=40
   [PASS] benchmark-config PUT
+  [PASS] store_id 校验: 路径类字符→400
+  [PASS] store_id 校验: 空格→400
+  [PASS] store_id 校验: 合法→非400
 === 第四闸门：顾客经营全链路 11 步 ===
   [PASS] G1 POST /customers 201/200 + phone唯一
   [PASS] G1 phone唯一约束生效(400) — 400
@@ -23,9 +30,10 @@
   [PASS] 优先级数字 P0=0/P1=1 且 label 一致
   [PASS] G10 PUT task status
   [PASS] G11 复盘返回 tomorrow_actions
+  [PASS] 幂等: 重复generate保留已完成任务状态 — status=done
   [PASS] today-tasks GET
   [PASS] daily-review/history
   [PASS] customers list
   [PASS] customer detail
 
-=== smoke 结果：27 PASS / 0 FAIL ===
+=== smoke 结果：35 PASS / 0 FAIL ===
