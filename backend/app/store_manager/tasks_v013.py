@@ -10,9 +10,13 @@ P0 限流规则：
 import json
 from datetime import datetime
 
+# 优先级数字与文档统一：P0=0, P1=1, P2=2, P3=3
 P0_DAILY_LIMIT = 3
-P0 = 1
-P1 = 2
+P0 = 0
+P1 = 1
+P2 = 2
+P3 = 3
+PRIORITY_LABELS = {0: "P0", 1: "P1", 2: "P2", 3: "P3"}
 
 # 投诉/退款/差评：永远 P0，不受限流影响
 COMPLAINT_TYPES = {"complaint", "refund", "bad_review"}
@@ -132,7 +136,7 @@ def get_today_tasks(conn, store_id="default_store", report_date=None) -> list:
             t["items"] = json.loads(t.get("description") or "[]")
         except (ValueError, TypeError):
             t["items"] = []
-        t["priority_label"] = "P0" if t["priority"] == P0 else "P1"
+        t["priority_label"] = PRIORITY_LABELS.get(t["priority"], "P?")
         t["red_tag"] = "🔥" if t["keep_red_tag"] else ""
         out.append(t)
     return out

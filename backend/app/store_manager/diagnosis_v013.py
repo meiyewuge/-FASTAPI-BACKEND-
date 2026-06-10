@@ -80,7 +80,8 @@ def _issue(itype, name, severity, evidence, root_cause, today_action, day15_acti
         "issue_type": itype,
         "issue_name": name,
         "severity": sev,
-        "priority": 1 if sev >= 8 else 2,
+        # 优先级数字与文档统一：P0=0, P1=1（严重度>=8 视为 P0）
+        "priority": 0 if sev >= 8 else 1,
         "data_evidence": evidence,
         "root_cause": root_cause,
         "root_cause_detail": "",

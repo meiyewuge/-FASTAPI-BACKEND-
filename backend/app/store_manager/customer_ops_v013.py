@@ -145,6 +145,14 @@ def add_project(conn, customer_id, payload: dict) -> dict:
     return dict(conn.execute("SELECT * FROM customer_project WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
+def get_project(conn, project_id) -> dict:
+    return _row(conn.execute("SELECT * FROM customer_project WHERE id=?", (project_id,)).fetchone())
+
+
+def get_demand(conn, demand_id) -> dict:
+    return _row(conn.execute("SELECT * FROM customer_demand WHERE id=?", (demand_id,)).fetchone())
+
+
 def consume_project(conn, project_id) -> dict:
     """消耗 1 次：used+1，remaining=total-used；remaining<=2 黄，==0 红（自动预警）。"""
     p = conn.execute("SELECT * FROM customer_project WHERE id=?", (project_id,)).fetchone()

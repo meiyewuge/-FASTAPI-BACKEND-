@@ -8,8 +8,20 @@
 import os
 import sqlite3
 
-# 与 V0.1.2 复用同一独立测试库（不进主库）。可用环境变量覆盖。
-DB_PATH = os.getenv("STORE_MANAGER_DB_PATH", "/opt/meiye-wuyou/data/store_manager_workbench.db")
+# V0.1.3 使用独立测试库环境变量与隔离默认路径（不进主库、不与 V0.1.2 同库、不写生产目录）。
+# 默认指向测试隔离目录；如需自定义用 STORE_MANAGER_V013_DB_PATH 覆盖。
+DEFAULT_V013_DB_PATH = "/opt/meiye-wuyou-test/data/store_manager_workbench_v013.db"
+# 生产库目录（禁止 V0.1.3 写入）
+_PROD_DB_DIR = "/opt/meiye-wuyou/data"
+
+DB_PATH = os.getenv("STORE_MANAGER_V013_DB_PATH", DEFAULT_V013_DB_PATH)
+
+# 安全护栏（fail-fast）：V0.1.3 绝不允许写入生产库目录，避免漏配环境变量时静默落到生产路径。
+if os.path.normpath(os.path.dirname(DB_PATH) or ".") == os.path.normpath(_PROD_DB_DIR):
+    raise RuntimeError(
+        "V0.1.3 拒绝写入生产库目录 %s。请将 STORE_MANAGER_V013_DB_PATH 配置到测试隔离路径"
+        "（默认 %s）。" % (_PROD_DB_DIR, DEFAULT_V013_DB_PATH)
+    )
 
 # api_version 仅用于内部日志/调试（补丁4：前缀不变，不启 /api/v2）。
 API_VERSION = "v0.1.3"

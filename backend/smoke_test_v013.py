@@ -18,11 +18,11 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-if not os.getenv("STORE_MANAGER_DB_PATH"):
-    os.environ["STORE_MANAGER_DB_PATH"] = os.path.join(tempfile.gettempdir(), "store_manager_v013_smoke.db")
+if not os.getenv("STORE_MANAGER_V013_DB_PATH"):
+    os.environ["STORE_MANAGER_V013_DB_PATH"] = os.path.join(tempfile.gettempdir(), "store_manager_v013_smoke.db")
     # 干净起点
     try:
-        os.remove(os.environ["STORE_MANAGER_DB_PATH"])
+        os.remove(os.environ["STORE_MANAGER_V013_DB_PATH"])
     except OSError:
         pass
 
@@ -130,9 +130,19 @@ def run():
     board = client.get(f"{B}/demand-board", params={"store_id": SID}).json()["data"]
     check("G7+G8 demand-board 可成交标💰", board["summary"]["dealable_count"] >= 1
           and any(d.get("flag") == "💰" for d in board["dealable_demands"]))
+    # P1-5 归属校验：用错误 customer 消耗项目 / 改需求 → 404
+    check("归属校验：错误customer消耗项目→404",
+          client.post(f"{B}/customers/999999/projects/{pid}/consume").status_code == 404)
+    check("归属校验：错误customer改需求→404",
+          client.put(f"{B}/customers/999999/demands/{demand_id}", json={"progress_score": 7}).status_code == 404)
+
     # 9 生成顾客经营任务
     tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": SID, "date": DATE}).json()["data"]
     check("G9 预警触发生成 store_action_task", len(tasks) >= 1)
+    # P1-6 优先级数字统一：P0=0 / P1=1
+    check("优先级数字 P0=0/P1=1 且 label 一致",
+          all(t["priority"] in (0, 1, 2, 3) for t in tasks)
+          and all((t["priority"] == 0) == (t["priority_label"] == "P0") for t in tasks))
     # 10 完成任务 + 提交复盘
     if tasks:
         check("G10 PUT task status", client.put(f"{B}/tasks/{tasks[0]['id']}/status",

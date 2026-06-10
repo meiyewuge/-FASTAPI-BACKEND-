@@ -189,10 +189,13 @@ def post_project(customer_id: int, req: ProjectCreate):
 def post_consume(customer_id: int, project_id: int):
     conn = db.connect()
     try:
-        p = ops.consume_project(conn, project_id)
-        if not p:
+        proj = ops.get_project(conn, project_id)
+        if not proj:
             raise HTTPException(status_code=404, detail="project not found")
-        return ok(p)
+        # 校验归属：项目必须属于 URL 中的 customer_id，防止跨顾客串改
+        if int(proj["customer_id"]) != int(customer_id):
+            raise HTTPException(status_code=404, detail="project not found for this customer")
+        return ok(ops.consume_project(conn, project_id))
     finally:
         conn.close()
 
@@ -223,6 +226,12 @@ def post_demand(customer_id: int, req: DemandCreate):
 def put_demand_progress(customer_id: int, demand_id: int, req: DemandProgressUpdate):
     conn = db.connect()
     try:
+        dm = ops.get_demand(conn, demand_id)
+        if not dm:
+            raise HTTPException(status_code=404, detail="demand not found")
+        # 校验归属：需求必须属于 URL 中的 customer_id
+        if int(dm["customer_id"]) != int(customer_id):
+            raise HTTPException(status_code=404, detail="demand not found for this customer")
         return ok(ops.update_demand_progress(conn, demand_id, req.progress_score))
     finally:
         conn.close()

@@ -64,7 +64,8 @@ def create_diagnosis(conn, payload: dict) -> dict:
 
     raw = save_daily_raw_data(conn, store_id, report_date, fields)
     metrics = compute_metrics(raw)
-    save_metrics(conn, store_id, report_date, raw["id"], metrics)
+    metrics_row = save_metrics(conn, store_id, report_date, raw["id"], metrics)
+    metrics_id = metrics_row["id"]
 
     cfg = dg.get_benchmark(conn, store_id)
     diag = dg.run_diagnosis(raw, metrics, cfg)
@@ -81,7 +82,7 @@ def create_diagnosis(conn, payload: dict) -> dict:
          json.dumps(diag["top_issues"], ensure_ascii=False),
          json.dumps({}, ensure_ascii=False),
          json.dumps([], ensure_ascii=False),
-         raw["id"], None),
+         raw["id"], metrics_id),
     )
     diagnosis_id = cur.lastrowid
     if not diagnosis_id:
