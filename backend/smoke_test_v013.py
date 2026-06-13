@@ -85,6 +85,10 @@ def run():
     check("诊断含 top3 + 规则文案(非AI智能)", len(diag["top_issues"]) <= 3 and diag["method"] == "规则诊断"
           and "AI智能" not in diag["source_label"])
     check("get diagnosis", client.get(f"{B}/diagnosis/{diag['id']}").status_code == 200)
+    # 桥接：诊断生成后 today-tasks 应非空（issue → store_action_task）
+    bridged = client.get(f"{B}/today-tasks", params={"store_id": SID, "date": DATE}).json()["data"]
+    check("★诊断后 today-tasks 非空(issue→task 桥接)", len(bridged) > 0, f"{len(bridged)}条")
+    check("桥接任务含 diagnosis_issue 来源", any(t["source_type"] == "diagnosis_issue" for t in bridged))
 
     r = client.get(f"{B}/computed-metrics", params={"store_id": SID, "report_date": DATE})
     m = r.json()["data"]
@@ -149,9 +153,14 @@ def run():
     check("归属校验：错误customer改需求→404",
           client.put(f"{B}/customers/999999/demands/{demand_id}", json={"progress_score": 7}).status_code == 404)
 
-    # 9 生成顾客经营任务
+    # 9 生成顾客经营任务（聚合 diagnosis_issue + customer_ops 两类来源）
     tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": SID, "date": DATE}).json()["data"]
     check("G9 预警触发生成 store_action_task", len(tasks) >= 1)
+    check("G9 聚合两类来源(diagnosis + customer_ops)",
+          any(t["source_type"] == "diagnosis_issue" for t in tasks)
+          and any(t["source_type"] == "customer_ops" for t in tasks))
+    _p0 = [t for t in tasks if t["priority"] == 0]
+    check("G9 P0限流: 非豁免P0≤3", len([t for t in _p0 if not t.get("force_p0")]) <= 3, f"P0={len(_p0)}")
     # P1-6 优先级数字统一：P0=0 / P1=1
     check("优先级数字 P0=0/P1=1 且 label 一致",
           all(t["priority"] in (0, 1, 2, 3) for t in tasks)

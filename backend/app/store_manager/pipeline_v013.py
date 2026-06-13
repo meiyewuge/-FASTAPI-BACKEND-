@@ -3,6 +3,7 @@ import json
 
 from .metrics_v013 import compute_metrics, RAW_FIELDS
 from . import diagnosis_v013 as dg
+from . import tasks_v013 as tk
 from ._util_v013 import today_cst
 
 
@@ -102,6 +103,8 @@ def create_diagnosis(conn, payload: dict) -> dict:
              json.dumps(it["library_ref"], ensure_ascii=False), it["today_action"], it["day15_action"], it["sort_order"]),
         )
     conn.commit()
+    # 桥接：诊断生成后立即据 issue.today_action 落库 store_action_task（保证 today-tasks 非空）
+    tk.sync_diagnosis_tasks(conn, store_id, report_date)
     return get_diagnosis(conn, diagnosis_id)
 
 

@@ -81,23 +81,94 @@ def _card_title(card):
     return f"{card['customer_name']}：{card['items'][0]['desc']}"
 
 
-def generate_today_tasks(conn, store_id="default_store", report_date=None) -> list:
-    """生成今日任务并写入 store_action_task（先清当日自动生成任务再重建）。"""
+def sync_diagnosis_tasks(conn, store_id, report_date) -> None:
+    """桥接：根据最新诊断的 top3 问题(issue.today_action) 生成/同步 store_action_task。
+
+    幂等：以 source_id='diagnosis_issue:{issue_id}' 为键，保留已完成状态；
+    不再属于 top3 的旧诊断任务（未完成）清除。诊断 POST 时即调用，保证 today-tasks 非空。
+    """
     report_date = report_date or _today()
+    existing = {
+        r["source_id"]: dict(r)
+        for r in conn.execute(
+            "SELECT * FROM store_action_task WHERE store_id=? AND report_date=? AND source_type='diagnosis_issue'",
+            (store_id, report_date),
+        ).fetchall()
+    }
+    diag = conn.execute(
+        "SELECT id FROM store_diagnosis_result WHERE store_id=? AND report_date=? ORDER BY id DESC LIMIT 1",
+        (store_id, report_date),
+    ).fetchone()
+    wanted = set()
+    if diag:
+        issues = conn.execute(
+            "SELECT * FROM store_diagnosis_issue WHERE diagnosis_id=? ORDER BY sort_order ASC, severity DESC LIMIT 3",
+            (diag["id"],),
+        ).fetchall()
+        for it in issues:
+            sid = f"diagnosis_issue:{it['id']}"
+            wanted.add(sid)
+            title = it["issue_name"]
+            desc = it["today_action"] or it["issue_name"]
+            pr = it["priority"] if it["priority"] in (0, 1, 2, 3) else (P0 if it["severity"] >= 8 else P1)
+            if sid in existing:
+                ex = existing[sid]
+                conn.execute(
+                    "UPDATE store_action_task SET title=?, description=?, priority=? WHERE id=?",
+                    (title, desc, pr, ex["id"]),
+                )  # 保留 status/completed_at/review_note
+            else:
+                conn.execute(
+                    "INSERT INTO store_action_task (store_id, report_date, title, description, priority, source_type, "
+                    "source_id, status, force_p0, keep_red_tag, is_throttled_to_p1, merged_warning_count) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (store_id, report_date, title, desc, pr, "diagnosis_issue",
+                     sid, "pending", 0, 0, 0, 1),
+                )
+    for sid, ex in existing.items():
+        if sid not in wanted and ex["status"] not in ("done", "completed"):
+            conn.execute("DELETE FROM store_action_task WHERE id=?", (ex["id"],))
+    conn.commit()
+
+
+def _apply_global_p0_limit(conn, store_id, report_date) -> None:
+    """全局 P0 限流：每天 P0≤3（投诉/退款/差评 force_p0=1 豁免，永远 P0）。
+
+    超限的非豁免 P0 降为 P1（保留红标），按「红标 > 合并数 > 时效(id)」排序保留。
+    幂等：每次按基准优先级重算降级，可重复调用。
+    """
+    pend = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM store_action_task WHERE store_id=? AND report_date=? "
+            "AND priority=0 AND status NOT IN ('done','completed')",
+            (store_id, report_date),
+        ).fetchall()
+    ]
+    force = [t for t in pend if t.get("force_p0")]
+    others = [t for t in pend if not t.get("force_p0")]
+    others.sort(key=lambda t: (-(t["keep_red_tag"] or 0), -(t["merged_warning_count"] or 0), t["id"]))
+    keep_n = max(0, P0_DAILY_LIMIT - len(force))
+    keep, demote = others[:keep_n], others[keep_n:]
+    for t in keep + force:
+        conn.execute("UPDATE store_action_task SET is_throttled_to_p1=0 WHERE id=?", (t["id"],))
+    for t in demote:
+        conn.execute("UPDATE store_action_task SET priority=?, is_throttled_to_p1=1 WHERE id=?", (P1, t["id"]))
+    conn.commit()
+
+
+def generate_today_tasks(conn, store_id="default_store", report_date=None) -> list:
+    """生成今日任务：聚合 diagnosis_issue + customer_ops 两类来源，应用 P0 限流。
+
+    幂等：以 source_id 为键 upsert，保留 done/completed；不丢已完成状态。
+    """
+    report_date = report_date or _today()
+
+    # 1) 桥接诊断问题 → 诊断任务（保证有可执行任务）
+    sync_diagnosis_tasks(conn, store_id, report_date)
+
+    # 2) 顾客经营候选（预警/需求/项目消耗）→ upsert
     cards = _gather_candidates(conn, store_id)
-
-    always_p0 = [c for c in cards if c["is_complaint"]]
-    throttleable = [c for c in cards if not c["is_complaint"]]
-    # 排序：金额风险 > 顾客价值 > 时效性(越早越前)
-    throttleable.sort(key=lambda c: (-c["amount_risk"], -RFM_RANK.get(c["rfm_label"], 0), c["earliest"] or ""))
-
-    remaining_slots = max(0, P0_DAILY_LIMIT - len(always_p0))
-    selected_p0 = throttleable[:remaining_slots]
-    demoted = throttleable[remaining_slots:]  # 降为 P1，保留红标
-
-    # 幂等保护（P1-1）：不再 DELETE 重建，避免已完成任务状态丢失。
-    # 以 source_id 为幂等键：已存在则只更新展示/限流字段、保留 status/completed_at/review_note；
-    # 不存在则新建；本次不再出现的旧候选——已完成的保留，未完成的(过期候选)清除。
     existing = {
         r["source_id"]: dict(r)
         for r in conn.execute(
@@ -105,43 +176,41 @@ def generate_today_tasks(conn, store_id="default_store", report_date=None) -> li
             (store_id, report_date),
         ).fetchall()
     }
+    current = set()
 
-    def upsert(card, priority, throttled, keep_red):
+    def upsert(card):
         sid = f"customer:{card['customer_id']}"
+        current.add(sid)
         title = _card_title(card)
         desc = json.dumps(card["items"], ensure_ascii=False)
         cnt = len(card["items"])
+        force = 1 if card["is_complaint"] else 0   # 投诉/退款/差评永远 P0
         if sid in existing:
-            ex = existing.pop(sid)
-            # 保留 status / completed_at / review_note，仅刷新展示与限流标记
+            ex = existing[sid]
             conn.execute(
                 "UPDATE store_action_task SET title=?, description=?, priority=?, "
-                "is_throttled_to_p1=?, keep_red_tag=?, merged_warning_count=?, related_customer_id=? WHERE id=?",
-                (title, desc, priority, 1 if throttled else 0, 1 if keep_red else 0, cnt, card["customer_id"], ex["id"]),
-            )
+                "keep_red_tag=1, merged_warning_count=?, related_customer_id=?, force_p0=? WHERE id=?",
+                (title, desc, P0, cnt, card["customer_id"], force, ex["id"]),
+            )  # 保留 status/completed_at/review_note
         else:
             conn.execute(
                 "INSERT INTO store_action_task (store_id, report_date, title, description, priority, source_type, "
-                "source_id, related_customer_id, status, is_throttled_to_p1, keep_red_tag, merged_warning_count) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (store_id, report_date, title, desc, priority, "customer_ops",
-                 sid, card["customer_id"], "pending",
-                 1 if throttled else 0, 1 if keep_red else 0, cnt),
+                "source_id, related_customer_id, status, is_throttled_to_p1, keep_red_tag, merged_warning_count, force_p0) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (store_id, report_date, title, desc, P0, "customer_ops",
+                 sid, card["customer_id"], "pending", 0, 1, cnt, force),
             )
 
-    for c in always_p0:
-        upsert(c, P0, throttled=False, keep_red=True)
-    for c in selected_p0:
-        upsert(c, P0, throttled=False, keep_red=True)
-    for c in demoted:
-        upsert(c, P1, throttled=True, keep_red=True)  # 降级但保留红标
-
-    # 本次未再出现的旧候选：已完成的保留（防状态丢失），未完成的过期候选清除
+    for c in cards:
+        upsert(c)
+    # 本次未再出现的旧 customer_ops 候选：已完成保留，未完成清除
     for sid, ex in existing.items():
-        if ex["status"] in ("done", "completed"):
-            continue
-        conn.execute("DELETE FROM store_action_task WHERE id=?", (ex["id"],))
+        if sid not in current and ex["status"] not in ("done", "completed"):
+            conn.execute("DELETE FROM store_action_task WHERE id=?", (ex["id"],))
     conn.commit()
+
+    # 3) 全局 P0 限流（≤3，force 豁免）
+    _apply_global_p0_limit(conn, store_id, report_date)
 
     return get_today_tasks(conn, store_id, report_date)
 
@@ -162,6 +231,7 @@ def get_today_tasks(conn, store_id="default_store", report_date=None) -> list:
             t["items"] = []
         t["priority_label"] = PRIORITY_LABELS.get(t["priority"], "P?")
         t["red_tag"] = "🔥" if t["keep_red_tag"] else ""
+        t["action"] = t.get("description") or ""   # diagnosis 任务的 today_action / 顾客任务的 items json
         out.append(t)
     return out
 

@@ -71,6 +71,10 @@ def run():
     # GET /today-tasks
     r = client.get(f"{B}/today-tasks", params={"store_id": "app1", "date": "2026-06-09"})
     check("GET /today-tasks → v0.1.3", r.status_code == 200 and r.json().get("api_version") == "v0.1.3")
+    # 桥接：诊断后 today-tasks 非空（issue → store_action_task）
+    bridged = r.json()["data"]
+    check("★app级 诊断后 today-tasks 非空(桥接生效)",
+          len(bridged) > 0 and any(t["source_type"] == "diagnosis_issue" for t in bridged), f"{len(bridged)}条")
     # PUT /tasks/{id}/status — v0.1.3 用整型 id；构造一个任务
     cust = client.post(f"{B}/customers", json={"store_id": "app1", "name": "应用级顾客", "phone": "13600000001"}).json()["data"]
     proj = client.post(f"{B}/customers/{cust['id']}/projects", json={"project_name": "P", "total_quantity": 1, "total_amount": 1000}).json()["data"]

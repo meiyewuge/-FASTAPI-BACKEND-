@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS store_action_task (
     is_throttled_to_p1 INTEGER NOT NULL DEFAULT 0,
     keep_red_tag INTEGER NOT NULL DEFAULT 0,
     merged_warning_count INTEGER NOT NULL DEFAULT 0,
+    force_p0 INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (related_customer_id) REFERENCES customer_profile(id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_date ON store_action_task(report_date);
@@ -352,6 +353,7 @@ def connect():
 def init_db(conn):
     conn.executescript(SCHEMA)
     _migrate_benchmark_columns(conn)
+    _migrate_task_columns(conn)
     conn.commit()
 
 
@@ -369,6 +371,19 @@ def _migrate_benchmark_columns(conn):
     for name, ddl in _BENCHMARK_NEW_COLUMNS.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE store_benchmark_config ADD COLUMN {name} {ddl}")
+
+
+# store_action_task 新增列 → 对已存在旧测试库安全补列。
+_TASK_NEW_COLUMNS = {
+    "force_p0": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def _migrate_task_columns(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(store_action_task)").fetchall()}
+    for name, ddl in _TASK_NEW_COLUMNS.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE store_action_task ADD COLUMN {name} {ddl}")
 
 
 def table_names():
