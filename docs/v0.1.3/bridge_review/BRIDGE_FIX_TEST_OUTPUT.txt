@@ -1,0 +1,88 @@
+================ V0.1.3 桥接修复 · 测试输出 (HEAD 5484630) ================
+
+######## 1) isolated smoke (smoke_test_v013.py) ########
+=== 基础端点 ===
+  [PASS] health
+  [PASS] daily-raw-data — 200
+  [PASS] monthly-diagnosis — 200
+  [PASS] 诊断含 top3 + 规则文案(非AI智能)
+  [PASS] get diagnosis
+  [PASS] ★诊断后 today-tasks 非空(issue→task 桥接) — 2条
+  [PASS] 桥接任务含 diagnosis_issue 来源
+  [PASS] computed-metrics 13项
+  [PASS] 除零安全(指标均数值)
+  [PASS] benchmark-config GET 默认值
+  [PASS] 阈值配置化: traffic_visits_min=20
+  [PASS] 阈值配置化: new_conversion_rate_green=40
+  [PASS] 阈值配置化: recharge_ratio_green=20
+  [PASS] 阈值配置化: main_project_ratio_green=40
+  [PASS] benchmark-config PUT
+  [PASS] store_id 校验: 路径类字符→400
+  [PASS] store_id 校验: 空格→400
+  [PASS] store_id 校验: 合法→非400
+=== 第四闸门：顾客经营全链路 11 步 ===
+  [PASS] G1 POST /customers 201/200 + phone唯一
+  [PASS] G1 phone唯一约束生效(400) — 400
+  [PASS] G2 POST projects
+  [PASS] G3 consume remaining-1
+  [PASS] G4 消耗至0生成red预警
+  [PASS] G5 POST home-products
+  [PASS] G6 POST demands
+  [PASS] G7+G8 demand-board 可成交标💰
+  [PASS] 归属校验：错误customer消耗项目→404
+  [PASS] 归属校验：错误customer改需求→404
+  [PASS] G9 预警触发生成 store_action_task
+  [PASS] G9 聚合两类来源(diagnosis + customer_ops)
+  [PASS] G9 P0限流: 非豁免P0≤3 — P0=3
+  [PASS] 优先级数字 P0=0/P1=1 且 label 一致
+  [PASS] G10 PUT task status
+  [PASS] G11 复盘返回 tomorrow_actions
+  [PASS] 幂等: 重复generate保留已完成任务状态 — status=done
+  [PASS] today-tasks GET
+  [PASS] daily-review/history
+  [PASS] customers list
+  [PASS] customer detail
+
+=== smoke 结果：39 PASS / 0 FAIL ===
+
+######## 2) app-level smoke (smoke_app_level_v013.py) ########
+=== app 级：health 与路由加载 ===
+  [PASS] health
+=== app 级：4 个原冲突端点现由 V0.1.3 生效（响应含 api_version=v0.1.3）===
+  [PASS] POST /monthly-diagnoses → v0.1.3 — api_version=v0.1.3
+  [PASS] POST /today-tasks/generate → v0.1.3
+  [PASS] GET /today-tasks → v0.1.3
+  [PASS] ★app级 诊断后 today-tasks 非空(桥接生效) — 2条
+  [PASS] PUT /tasks/{id}/status → v0.1.3
+=== app 级：V0.1.2 老 router 独有端点仍可达（未被破坏）===
+  [PASS] GET /history (V0.1.2) 仍可达
+  [PASS] GET /monthly-diagnoses/{id} (V0.1.2) 路由可达 — 404
+=== app 级：V0.1.3 专属端点可达 ===
+  [PASS] GET /benchmark-config (v0.1.3)
+  [PASS] GET /demand-board (v0.1.3)
+
+=== app 级 smoke 结果：10 PASS / 0 FAIL ===
+
+######## 3) four_gate_check_v013.py (第四闸门) ########
+=== V0.1.3 第四闸门验收（in-process TestClient）store=gate_20260614000609790 ===
+  [PASS] [闸门1] GET /health == 200 — 200
+  [PASS] [闸门2] 诊断 200 + 生成 issue
+  [PASS] [闸门2] 诊断后 today-tasks 非空(issue→task) — 2条
+  [PASS] [闸门2] 含 diagnosis_issue 任务
+  [PASS] [闸门3] 建档(phone唯一)
+  [PASS] [闸门3] phone 唯一冲突→400
+  [PASS] [闸门3] 录入项目
+  [PASS] [闸门3] 消耗 remaining-1
+  [PASS] [闸门3] 消耗至0生成 red 预警
+  [PASS] [闸门3] 录入家居产品
+  [PASS] [闸门3] 看板可成交标💰
+  [PASS] [闸门4] 今日任务 >0 — 3条
+  [PASS] [闸门4] 聚合两类来源
+  [PASS] [闸门4] P0限流: 非豁免P0≤3 — P0=3
+  [PASS] [闸门4] 标记任务 done
+  [PASS] [闸门4] 幂等: 重复generate保留done
+  [PASS] [闸门4] 复盘后明日3件事非空 — 2条
+  [PASS] [边界] 全零数据不 5xx — 200
+
+=== 第四闸门结果：18 PASS / 0 FAIL（通过标准=100% PASS）===
+✅ 第四闸门 PASS
