@@ -185,6 +185,29 @@ def run():
     check("customers list", client.get(f"{B}/customers", params={"store_id": SID}).status_code == 200)
     check("customer detail", client.get(f"{B}/customers/{cid}").status_code == 200)
 
+    print("=== P2 回归：diagnosis-only P0限流 + force_p0=0 负测试 ===")
+    # diagnosis-only：诊断 POST 后(未调 generate)，非豁免 P0 必须已 ≤3（P1-1 桥接即限流）
+    SID2 = "p2diag"
+    client.post(f"{B}/monthly-diagnoses", json={"store_id": SID2, "report_date": DATE, "form_data": SAMPLE_RAW})
+    t2 = client.get(f"{B}/today-tasks", params={"store_id": SID2, "date": DATE}).json()["data"]
+    nf_p0 = [t for t in t2 if t["priority"] == 0 and not t.get("force_p0")]
+    check("diagnosis-only 后 非豁免P0≤3(桥接即限流)", len(nf_p0) <= 3, f"{len(nf_p0)}条")
+
+    # force_p0=0 负测试：非投诉红警(force_p0=0)可被限流降级，且降级保留红标
+    SID3 = "p2nonforce"
+    for i in range(5):
+        c = client.post(f"{B}/customers", json={"store_id": SID3, "name": f"NF{i}", "phone": f"137{i:08d}"}).json()["data"]
+        pj = client.post(f"{B}/customers/{c['id']}/projects",
+                         json={"project_name": "P", "total_quantity": 1, "total_amount": 100}).json()["data"]
+        client.post(f"{B}/customers/{c['id']}/projects/{pj['id']}/consume")  # 消耗至0→red(非投诉)
+    nf_tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": SID3, "date": DATE}).json()["data"]
+    nf_p0_3 = [t for t in nf_tasks if t["priority"] == 0]
+    demoted = [t for t in nf_tasks if t["priority"] == 1 and t.get("is_throttled_to_p1")]
+    check("force_p0=0 非投诉: 全部 force_p0=0", all(not t.get("force_p0") for t in nf_tasks))
+    check("force_p0=0 非投诉: 非豁免P0≤3", len(nf_p0_3) <= 3, f"P0={len(nf_p0_3)}")
+    check("force_p0=0 非投诉: 超限被降级(>3张时有P1)", len(nf_tasks) <= 3 or len(demoted) >= 1, f"{len(demoted)}张降级")
+    check("降级任务保留红标 keep_red_tag", all(t.get("keep_red_tag") for t in demoted) if demoted else True)
+
     print(f"\n=== smoke 结果：{_passed} PASS / {_failed} FAIL ===")
     return _failed == 0
 

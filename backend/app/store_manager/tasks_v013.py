@@ -113,10 +113,12 @@ def sync_diagnosis_tasks(conn, store_id, report_date) -> None:
             pr = it["priority"] if it["priority"] in (0, 1, 2, 3) else (P0 if it["severity"] >= 8 else P1)
             if sid in existing:
                 ex = existing[sid]
-                conn.execute(
-                    "UPDATE store_action_task SET title=?, description=?, priority=? WHERE id=?",
-                    (title, desc, pr, ex["id"]),
-                )  # 保留 status/completed_at/review_note
+                # P2: done/completed 行不再刷新 title/description/priority
+                if ex["status"] not in ("done", "completed"):
+                    conn.execute(
+                        "UPDATE store_action_task SET title=?, description=?, priority=? WHERE id=?",
+                        (title, desc, pr, ex["id"]),
+                    )  # 保留 status/completed_at/review_note
             else:
                 conn.execute(
                     "INSERT INTO store_action_task (store_id, report_date, title, description, priority, source_type, "
@@ -129,6 +131,8 @@ def sync_diagnosis_tasks(conn, store_id, report_date) -> None:
         if sid not in wanted and ex["status"] not in ("done", "completed"):
             conn.execute("DELETE FROM store_action_task WHERE id=?", (ex["id"],))
     conn.commit()
+    # P1-1: 桥接后立即做全局 P0 限流，避免 diagnosis POST 后短暂暴露 >3 个非豁免 P0
+    _apply_global_p0_limit(conn, store_id, report_date)
 
 
 def _apply_global_p0_limit(conn, store_id, report_date) -> None:
@@ -153,7 +157,11 @@ def _apply_global_p0_limit(conn, store_id, report_date) -> None:
     for t in keep + force:
         conn.execute("UPDATE store_action_task SET is_throttled_to_p1=0 WHERE id=?", (t["id"],))
     for t in demote:
-        conn.execute("UPDATE store_action_task SET priority=?, is_throttled_to_p1=1 WHERE id=?", (P1, t["id"]))
+        # 降级到 P1 仍保留红色标签(keep_red_tag=1)且标记限流(is_throttled_to_p1=1)
+        conn.execute(
+            "UPDATE store_action_task SET priority=?, is_throttled_to_p1=1, keep_red_tag=1 WHERE id=?",
+            (P1, t["id"]),
+        )
     conn.commit()
 
 
@@ -187,11 +195,13 @@ def generate_today_tasks(conn, store_id="default_store", report_date=None) -> li
         force = 1 if card["is_complaint"] else 0   # 投诉/退款/差评永远 P0
         if sid in existing:
             ex = existing[sid]
-            conn.execute(
-                "UPDATE store_action_task SET title=?, description=?, priority=?, "
-                "keep_red_tag=1, merged_warning_count=?, related_customer_id=?, force_p0=? WHERE id=?",
-                (title, desc, P0, cnt, card["customer_id"], force, ex["id"]),
-            )  # 保留 status/completed_at/review_note
+            # P2: done/completed 行不再刷新 title/description/priority 等
+            if ex["status"] not in ("done", "completed"):
+                conn.execute(
+                    "UPDATE store_action_task SET title=?, description=?, priority=?, "
+                    "keep_red_tag=1, merged_warning_count=?, related_customer_id=?, force_p0=? WHERE id=?",
+                    (title, desc, P0, cnt, card["customer_id"], force, ex["id"]),
+                )  # 保留 status/completed_at/review_note
         else:
             conn.execute(
                 "INSERT INTO store_action_task (store_id, report_date, title, description, priority, source_type, "
