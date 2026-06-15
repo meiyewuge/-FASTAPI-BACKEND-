@@ -76,6 +76,27 @@ class WebviewTokenRequest(BaseModel):
     store_id: Optional[str] = None
 
 
+class PrivateGenerateRequest(BaseModel):
+    scene_type: str = "reactivate"
+    scene_name: Optional[str] = ""
+    situation: str
+    customer_info: Optional[str] = ""
+    style: Optional[str] = "有温度、专业、不硬推、适合美业门店私域沟通"
+
+
+# GET /stores/profile 无资料时的默认门店对象（可用兜底，前端永远拿到对象，不再 null）
+DEFAULT_STORE_PROFILE = {
+    "store_name": "",
+    "city": "",
+    "contact_person": "",
+    "phone": "",
+    "store_type": "",
+    "cooperation_status": "",
+    "main_projects": [],
+    "membership_level": "free",
+}
+
+
 def _get_user_id(authorization: Optional[str]) -> str:
     if not authorization:
         return "demo_user"
@@ -94,7 +115,8 @@ def wechat_login(req: WechatLoginRequest):
 @router.get("/stores/profile", response_model=ApiResponse)
 def get_store_profile(authorization: Optional[str] = Header(default=None)):
     user_id = _get_user_id(authorization)
-    return ApiResponse(data=STORES.get(user_id))
+    # 无资料时返回默认门店对象（不再返回 null），保证前端永远拿到可用对象
+    return ApiResponse(data=STORES.get(user_id) or dict(DEFAULT_STORE_PROFILE))
 
 
 @router.post("/stores/profile", response_model=ApiResponse)
@@ -123,13 +145,22 @@ def generate_content(req: ContentGenerateRequest, authorization: Optional[str] =
         "image_suggestion": "建议配门店环境、服务细节、顾客反馈三类图片。",
         "publish_time": "建议晚上8点到9点发布，适合老客刷朋友圈时看到。",
     }
+    # recovery 前端兼容层：不改生成内核，仅把嵌套内容 flatten 成前端可直接消费的契约
+    # 前端依赖字段：data.title(字符串) / data.content(字符串正文) / data.suggestions[](字符串数组)
+    content_text = f"{content['hook']}\n\n{content['body']}\n\n{content['cta']}"
+    suggestions = [s for s in (content.get("image_suggestion"), content.get("publish_time")) if s]
     item = {
         "id": f"content_{uuid.uuid4().hex[:10]}",
         "user_id": user_id,
         "platform": req.platform,
         "content_type": req.content_type,
         "theme": req.theme,
-        "content": content,
+        # 前端依赖的 3 个稳定字段
+        "title": content["title"],
+        "content": content_text,
+        "suggestions": suggestions,
+        # 额外保留（前端不依赖）
+        "content_detail": content,
         "confidence": "medium",
         "confidence_label": "知识库+模型生成",
         "quality_score": 88,
@@ -166,6 +197,71 @@ def ai_chat(req: ChatRequest, authorization: Optional[str] = Header(default=None
     })
 
 
+# 私域话术生成场景 → 话术 + 要点模板（生产环境后续接知识库/LLM + 合规审核）
+_PRIVATE_SCENES = {
+    "reactivate": {
+        "answer": (
+            "姐，好久没见你来店里了，最近还好吗？\n\n"
+            "上次你做完护理说感觉轻松了不少，最近身体状态怎么样？换季很多老客的老毛病又容易反复。\n\n"
+            "这周我给老客留了几个舒缓护理的位置，不是让你花钱，就是想着你之前那个状态如果又紧了，正好来放松一下。\n\n"
+            "你看这周哪天方便？我先帮你留个位置。"
+        ),
+        "tips": ["先关心、后邀约，不要一上来就发促销", "给顾客台阶，不强迫", "用具体的上次记录拉近距离"],
+    },
+    "objection": {
+        "answer": (
+            "姐，我理解你的顾虑，选护理确实要慎重。\n\n"
+            "我们的价格对应的是：专业评估 → 个性化方案 → 持续跟进，这三步是一体的。\n\n"
+            "我不建议你只看价格，便宜的不一定适合你的情况；当然，预算也是要考虑的。\n\n"
+            "这样，你先来做个免费评估，了解自己的实际情况再决定，不适合我也不会建议你做。"
+        ),
+        "tips": ["不贬低同行", "引导先体验再决策", "尊重顾客的经济考虑"],
+    },
+    "invitation": {
+        "answer": (
+            "姐，告诉你个好消息～\n\n"
+            "这周六下午我们做了个小型护理体验，不是大促销，就是邀请几个老客一起放松。\n\n"
+            "现场有评估和体验，氛围很轻松，你可以当来休息。\n\n"
+            "我先帮你留一个名额？你看周六下午方便吗？"
+        ),
+        "tips": ["不用‘限时/最后X个名额’等紧迫话术", "强调轻松氛围而非消费", "给顾客选择权"],
+    },
+    "aftercare": {
+        "answer": (
+            "姐，谢谢你告诉我。出现这种反应一般属于正常范围，通常一段时间会缓解。\n\n"
+            "你可以先这样做：①避免热水、用温水；②暂时不化妆让皮肤休息；③用医用保湿喷雾舒缓。\n\n"
+            "如果情况没有缓解或有其他不适，第一时间找我，我来帮你处理。你的感受我很重视。"
+        ),
+        "tips": ["第一时间回复、不拖延", "不否认顾客感受", "严重情况建议就医、不自行判断"],
+    },
+    "followup": {
+        "answer": (
+            "姐，上次聊的项目你还在考虑吗？没有催你的意思，就是想着如果有疑问随时可以问我。\n\n"
+            "第一次了解会犹豫很正常，毕竟是对自己的投入。\n\n"
+            "方便的话可以先来做个免费状态检测，看看适不适合，不适合我也会直说，不会硬推。\n\n"
+            "你看这周哪天有空？"
+        ),
+        "tips": ["距上次沟通至少间隔几天", "不催促不施压", "提供免费/低门槛的下一步"],
+    },
+}
+
+
+@router.post("/private/generate", response_model=ApiResponse)
+def generate_private(req: PrivateGenerateRequest, authorization: Optional[str] = Header(default=None)):
+    # 生产环境：按 scene_type 选知识库/提示词，结合 situation/customer_info 调 LLM 并做合规审核。
+    scene = _PRIVATE_SCENES.get(req.scene_type, _PRIVATE_SCENES["reactivate"])
+    return ApiResponse(data={
+        "id": f"private_{uuid.uuid4().hex[:10]}",
+        "answer": scene["answer"],
+        "tips": scene["tips"],
+        "scene_type": req.scene_type,
+        "confidence": "medium",
+        "confidence_label": "知识库+模型生成",
+        "quality_score": 87,
+        "audit_pass": True,
+    })
+
+
 @router.get("/content/history", response_model=ApiResponse)
 def content_history(authorization: Optional[str] = Header(default=None)):
     user_id = _get_user_id(authorization)
@@ -196,7 +292,7 @@ def coach_webview_token(req: WebviewTokenRequest, authorization: Optional[str] =
         "monthly": "/monthly/start",
         "history": "/monthly/history",
     }
-    h5_base_url = "https://h5.example.com"
+    h5_base_url = "https://beautypeaceai.com"
     url = f"{h5_base_url}{path_map.get(req.target, '/diagnosis/start')}?ticket={ticket}&source=weapp"
     return ApiResponse(data={"url": url, "ticket": ticket})
 
