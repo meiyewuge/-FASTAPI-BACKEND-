@@ -1,0 +1,216 @@
+"""V0.1.3 店长工作台 · 后端 smoke_test。
+
+覆盖：health / daily-raw-data / computed-metrics / benchmark-config /
+monthly-diagnosis / today-tasks / customer / project / home-product /
+demand / warnings / demand-board / task-status / review +
+第四闸门「顾客经营全链路 11 步」（补丁3）。
+
+用法：
+    STORE_MANAGER_DB_PATH=/tmp/smoke.db STORE_MANAGER_ADMIN_KEY=k python smoke_test_v013.py
+
+说明：本脚本用最小 FastAPI app 挂载 v0.1.3 路由 + health 进行隔离 smoke，
+不依赖 weasyprint 等无关系统库；整库启动冒烟由部署前环境执行。
+零容忍项：任何 5xx / traceback / 写入失败 / 计算除零错误。
+"""
+import os
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+if not os.getenv("STORE_MANAGER_V013_DB_PATH"):
+    os.environ["STORE_MANAGER_V013_DB_PATH"] = os.path.join(tempfile.gettempdir(), "store_manager_v013_smoke.db")
+    # 干净起点
+    try:
+        os.remove(os.environ["STORE_MANAGER_V013_DB_PATH"])
+    except OSError:
+        pass
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app.store_manager.router_v013 import router as v013_router
+
+app = FastAPI(title="store-manager-v0.1.3-smoke")
+app.include_router(v013_router)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "module": "store-manager", "version": "v0.1.3"}
+
+
+client = TestClient(app)
+
+_passed = 0
+_failed = 0
+_results = []
+
+
+def check(name, cond, detail=""):
+    global _passed, _failed
+    ok = bool(cond)
+    _passed += ok
+    _failed += (not ok)
+    _results.append((ok, name, detail))
+    print(f"  [{'PASS' if ok else 'FAIL'}] {name}{' — ' + detail if detail else ''}")
+    return ok
+
+
+def no5xx(resp):
+    return resp.status_code < 500
+
+
+SAMPLE_RAW = {
+    "daily_revenue": 32000, "daily_recharge_amount": 12500, "daily_product_retail": 4500,
+    "daily_visits": 35, "daily_new_customers": 8, "daily_valid_appointments": 20,
+    "daily_appointment_arrivals": 17, "daily_transaction_customers": 18, "daily_transaction_orders": 18,
+    "daily_new_transaction": 5, "daily_project_sales": 15000, "daily_main_project_sales": 7500,
+    "daily_service_count": 50, "daily_staff_count": 15, "daily_complaints": 2,
+}
+SID = "smoke_store"
+DATE = "2026-06-09"
+B = "/api/store-manager"
+
+
+def run():
+    print("=== 基础端点 ===")
+    check("health", client.get("/health").json().get("status") == "ok")
+
+    r = client.post(f"{B}/daily-raw-data", json={"store_id": SID, "report_date": DATE, "form_data": SAMPLE_RAW})
+    check("daily-raw-data", no5xx(r) and r.status_code == 200, str(r.status_code))
+
+    r = client.post(f"{B}/monthly-diagnoses", json={"store_id": SID, "report_date": DATE, "form_data": SAMPLE_RAW})
+    check("monthly-diagnosis", no5xx(r) and r.status_code == 200, str(r.status_code))
+    diag = r.json()["data"]
+    check("诊断含 top3 + 规则文案(非AI智能)", len(diag["top_issues"]) <= 3 and diag["method"] == "规则诊断"
+          and "AI智能" not in diag["source_label"])
+    check("get diagnosis", client.get(f"{B}/diagnosis/{diag['id']}").status_code == 200)
+    # 桥接：诊断生成后 today-tasks 应非空（issue → store_action_task）
+    bridged = client.get(f"{B}/today-tasks", params={"store_id": SID, "date": DATE}).json()["data"]
+    check("★诊断后 today-tasks 非空(issue→task 桥接)", len(bridged) > 0, f"{len(bridged)}条")
+    check("桥接任务含 diagnosis_issue 来源", any(t["source_type"] == "diagnosis_issue" for t in bridged))
+
+    r = client.get(f"{B}/computed-metrics", params={"store_id": SID, "report_date": DATE})
+    m = r.json()["data"]
+    check("computed-metrics 13项", no5xx(r) and len(m) >= 13 and "conversion_rate" in m)
+    check("除零安全(指标均数值)", all(isinstance(m[k], (int, float)) for k in
+          ["conversion_rate", "avg_order_value", "complaint_risk_index"]))
+
+    cfg = client.get(f"{B}/benchmark-config", params={"store_id": SID}).json()["data"]
+    check("benchmark-config GET 默认值", cfg["conversion_rate_green"] == 60)
+    # 阈值配置化（4 个阈值已入 store_benchmark_config 默认值）
+    check("阈值配置化: traffic_visits_min=20", float(cfg.get("traffic_visits_min")) == 20)
+    check("阈值配置化: new_conversion_rate_green=40", float(cfg.get("new_conversion_rate_green")) == 40)
+    check("阈值配置化: recharge_ratio_green=20", float(cfg.get("recharge_ratio_green")) == 20)
+    check("阈值配置化: main_project_ratio_green=40", float(cfg.get("main_project_ratio_green")) == 40)
+    check("benchmark-config PUT", client.put(f"{B}/benchmark-config", params={"store_id": SID},
+          json={"conversion_rate_green": 65}).status_code == 200)
+
+    # store_id 输入校验（非法→400）
+    check("store_id 校验: 路径类字符→400",
+          client.get(f"{B}/computed-metrics", params={"store_id": "../etc/passwd"}).status_code == 400)
+    check("store_id 校验: 空格→400",
+          client.get(f"{B}/warnings", params={"store_id": "a b"}).status_code == 400)
+    check("store_id 校验: 合法→非400",
+          client.get(f"{B}/warnings", params={"store_id": "store_001"}).status_code == 200)
+
+    print("=== 第四闸门：顾客经营全链路 11 步 ===")
+    # 1 新建顾客
+    r = client.post(f"{B}/customers", json={"store_id": SID, "name": "闸门顾客", "phone": "13700000001"})
+    check("G1 POST /customers 201/200 + phone唯一", r.status_code in (200, 201))
+    cid = r.json()["data"]["id"]
+    dup = client.post(f"{B}/customers", json={"store_id": SID, "name": "重复", "phone": "13700000001"})
+    check("G1 phone唯一约束生效(400)", dup.status_code == 400, str(dup.status_code))
+    # 2 录入在店项目
+    r = client.post(f"{B}/customers/{cid}/projects", json={"project_name": "颈肩调理", "project_type": "理疗",
+                    "total_quantity": 3, "total_amount": 3000})
+    check("G2 POST projects", r.status_code == 200)
+    pid = r.json()["data"]["id"]
+    # 3 项目消耗 remaining-1
+    r = client.post(f"{B}/customers/{cid}/projects/{pid}/consume")
+    check("G3 consume remaining-1", r.json()["data"]["remaining_quantity"] == 2)
+    # 4 消耗至0触发红警
+    client.post(f"{B}/customers/{cid}/projects/{pid}/consume")
+    client.post(f"{B}/customers/{cid}/projects/{pid}/consume")
+    w = client.get(f"{B}/warnings", params={"store_id": SID}).json()["data"]
+    check("G4 消耗至0生成red预警", any(x["warning_level"] == "red" and x["customer_id"] == cid for x in w))
+    # 5 录入家居产品
+    check("G5 POST home-products", client.post(f"{B}/customers/{cid}/home-products",
+          json={"product_name": "精华", "purchase_date": "2026-06-01", "estimated_cycle": 30}).status_code == 200)
+    # 6 录入需求
+    r = client.post(f"{B}/customers/{cid}/demands", json={"demand_desc": "想改善法令纹", "demand_type": "抗衰", "progress_score": 5})
+    check("G6 POST demands", r.status_code == 200)
+    demand_id = r.json()["data"]["id"]
+    # 7 需求进度≥8进可成交
+    client.put(f"{B}/customers/{cid}/demands/{demand_id}", json={"progress_score": 9})
+    # 8 今日需求看板
+    board = client.get(f"{B}/demand-board", params={"store_id": SID}).json()["data"]
+    check("G7+G8 demand-board 可成交标💰", board["summary"]["dealable_count"] >= 1
+          and any(d.get("flag") == "💰" for d in board["dealable_demands"]))
+    # P1-5 归属校验：用错误 customer 消耗项目 / 改需求 → 404
+    check("归属校验：错误customer消耗项目→404",
+          client.post(f"{B}/customers/999999/projects/{pid}/consume").status_code == 404)
+    check("归属校验：错误customer改需求→404",
+          client.put(f"{B}/customers/999999/demands/{demand_id}", json={"progress_score": 7}).status_code == 404)
+
+    # 9 生成顾客经营任务（聚合 diagnosis_issue + customer_ops 两类来源）
+    tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": SID, "date": DATE}).json()["data"]
+    check("G9 预警触发生成 store_action_task", len(tasks) >= 1)
+    check("G9 聚合两类来源(diagnosis + customer_ops)",
+          any(t["source_type"] == "diagnosis_issue" for t in tasks)
+          and any(t["source_type"] == "customer_ops" for t in tasks))
+    _p0 = [t for t in tasks if t["priority"] == 0]
+    check("G9 P0限流: 非豁免P0≤3", len([t for t in _p0 if not t.get("force_p0")]) <= 3, f"P0={len(_p0)}")
+    # P1-6 优先级数字统一：P0=0 / P1=1
+    check("优先级数字 P0=0/P1=1 且 label 一致",
+          all(t["priority"] in (0, 1, 2, 3) for t in tasks)
+          and all((t["priority"] == 0) == (t["priority_label"] == "P0") for t in tasks))
+    # 10 完成任务 + 提交复盘
+    if tasks:
+        check("G10 PUT task status", client.put(f"{B}/tasks/{tasks[0]['id']}/status",
+              json={"status": "done"}).status_code == 200)
+    rev = client.post(f"{B}/daily-review", json={"store_id": SID, "report_date": DATE, "review_content": "smoke"}).json()["data"]
+    # 11 复盘含 tomorrow_actions
+    check("G11 复盘返回 tomorrow_actions", "tomorrow_actions" in rev)
+
+    # 幂等保护：重复 generate 不丢已完成状态
+    if tasks:
+        done_id = tasks[0]["id"]
+        regen = client.post(f"{B}/today-tasks/generate", params={"store_id": SID, "date": DATE}).json()["data"]
+        still = next((t for t in regen if t["id"] == done_id), None)
+        check("幂等: 重复generate保留已完成任务状态", still is not None and still["status"] == "done",
+              f"status={still['status'] if still else 'GONE'}")
+    check("today-tasks GET", client.get(f"{B}/today-tasks", params={"store_id": SID, "date": DATE}).status_code == 200)
+    check("daily-review/history", client.get(f"{B}/daily-review/history", params={"store_id": SID}).status_code == 200)
+    check("customers list", client.get(f"{B}/customers", params={"store_id": SID}).status_code == 200)
+    check("customer detail", client.get(f"{B}/customers/{cid}").status_code == 200)
+
+    print("=== P2 回归：diagnosis-only P0限流 + force_p0=0 负测试 ===")
+    # diagnosis-only：诊断 POST 后(未调 generate)，非豁免 P0 必须已 ≤3（P1-1 桥接即限流）
+    SID2 = "p2diag"
+    client.post(f"{B}/monthly-diagnoses", json={"store_id": SID2, "report_date": DATE, "form_data": SAMPLE_RAW})
+    t2 = client.get(f"{B}/today-tasks", params={"store_id": SID2, "date": DATE}).json()["data"]
+    nf_p0 = [t for t in t2 if t["priority"] == 0 and not t.get("force_p0")]
+    check("diagnosis-only 后 非豁免P0≤3(桥接即限流)", len(nf_p0) <= 3, f"{len(nf_p0)}条")
+
+    # force_p0=0 负测试：非投诉红警(force_p0=0)可被限流降级，且降级保留红标
+    SID3 = "p2nonforce"
+    for i in range(5):
+        c = client.post(f"{B}/customers", json={"store_id": SID3, "name": f"NF{i}", "phone": f"137{i:08d}"}).json()["data"]
+        pj = client.post(f"{B}/customers/{c['id']}/projects",
+                         json={"project_name": "P", "total_quantity": 1, "total_amount": 100}).json()["data"]
+        client.post(f"{B}/customers/{c['id']}/projects/{pj['id']}/consume")  # 消耗至0→red(非投诉)
+    nf_tasks = client.post(f"{B}/today-tasks/generate", params={"store_id": SID3, "date": DATE}).json()["data"]
+    nf_p0_3 = [t for t in nf_tasks if t["priority"] == 0]
+    demoted = [t for t in nf_tasks if t["priority"] == 1 and t.get("is_throttled_to_p1")]
+    check("force_p0=0 非投诉: 全部 force_p0=0", all(not t.get("force_p0") for t in nf_tasks))
+    check("force_p0=0 非投诉: 非豁免P0≤3", len(nf_p0_3) <= 3, f"P0={len(nf_p0_3)}")
+    check("force_p0=0 非投诉: 超限被降级(>3张时有P1)", len(nf_tasks) <= 3 or len(demoted) >= 1, f"{len(demoted)}张降级")
+    check("降级任务保留红标 keep_red_tag", all(t.get("keep_red_tag") for t in demoted) if demoted else True)
+
+    print(f"\n=== smoke 结果：{_passed} PASS / {_failed} FAIL ===")
+    return _failed == 0
+
+
+if __name__ == "__main__":
+    sys.exit(0 if run() else 1)

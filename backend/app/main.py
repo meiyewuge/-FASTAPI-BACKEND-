@@ -4,6 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from .database import Base, engine
 from .config import settings
 from .routers import diagnoses, monthly, admin, weapp
+from .store_manager.router import router as store_manager_router
+from .store_manager.router_v013 import router as store_manager_v013_router
 import os
 
 Base.metadata.create_all(bind=engine)
@@ -23,6 +25,13 @@ app.include_router(diagnoses.router)
 app.include_router(monthly.router)
 app.include_router(admin.router)
 app.include_router(weapp.router, prefix="/api", tags=["weapp"])
+# V0.1.3 路由先注册：与 V0.1.2 store_manager 在 /api/store-manager 下有 4 个同 path+method
+# 重叠端点(monthly-diagnoses[POST]、today-tasks[GET]、today-tasks/generate[POST]、
+# tasks/{id}/status[PUT])。FastAPI 首个匹配生效，故 V0.1.3 先注册以保证其为权威实现；
+# V0.1.2 独有端点(history、monthly-diagnoses/{id}、tasks/{id}/review、admin/mark)仍由老 router 提供。
+# 注：V0.1.2 测试服务(18080)运行 V0.1.2 分支、不含 v013 路由，不受此顺序影响。
+app.include_router(store_manager_v013_router)
+app.include_router(store_manager_router)
 
 app.mount("/reports", StaticFiles(directory=settings.report_storage_path), name="reports")
 
