@@ -1,0 +1,12 @@
+===== STEP1 chat Coze 接入 本地测试(base main ab29dc5 → 04bc8ba) =====
+  [PASS] ①开关false→降级 source=local_fallback/degraded
+  [PASS] ①模板不假标(无'知识库+模型生成')
+  [PASS] ①answer非空
+  [PASS] ②enabled但缺token/id→降级
+  [PASS] ③Coze成功→source=coze/degraded=false/扣子知识库+模型生成
+  [PASS] ③answer来自Coze
+  [PASS] ④医疗问题追加免责
+  [PASS] ④免责只追加一次 — 1次
+  [PASS] ⑤Coze异常→降级且不假标
+
+结果: 9 PASS / 0 FAIL
