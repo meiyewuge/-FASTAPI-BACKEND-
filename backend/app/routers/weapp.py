@@ -23,6 +23,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import coze_client
+from ..config import settings
 
 router = APIRouter()
 
@@ -288,18 +289,81 @@ _PRIVATE_SCENES = {
 }
 
 
+# private 硬护栏：禁止项 → 软化（命中即替换违规措辞；无法软化由上层降级）
+_PRIVATE_SOFTEN = [
+    ("最后一个名额", "名额有限"), ("最后名额", "名额有限"),
+    ("限时", "近期"), ("错过没有了", "欢迎随时了解"),
+    ("隔壁家差", "每家定位不同"), ("别家骗人", "建议综合判断"), ("同行垃圾", "每家各有特色"),
+    ("保证治好", "帮助改善体验"), ("一定见效", "因人而异"), ("根治", "调理改善"),
+]
+
+
+def _soften_private(text: str) -> str:
+    out = text or ""
+    for bad, good in _PRIVATE_SOFTEN:
+        out = out.replace(bad, good)
+    return out
+
+
 @router.post("/private/generate", response_model=ApiResponse)
-def generate_private(req: PrivateGenerateRequest, authorization: Optional[str] = Header(default=None)):
-    # 生产环境：按 scene_type 选知识库/提示词，结合 situation/customer_info 调 LLM 并做合规审核。
-    scene = _PRIVATE_SCENES.get(req.scene_type, _PRIVATE_SCENES["reactivate"])
+async def generate_private(req: PrivateGenerateRequest, authorization: Optional[str] = Header(default=None)):
+    # scene_type 5 场景分流，非法/缺失统一兜底 reactivate
+    scene_type = req.scene_type if req.scene_type in _PRIVATE_SCENES else "reactivate"
+
+    answer = ""
+    tips = []
+    source = "local_fallback"
+    confidence_label = "本地模板(降级)"
+    confidence = "low"
+    degraded = True
+
+    # 真实链路：灰度开启且配置完整时走 Coze Workflow；任何失败均降级到本地模板
+    if coze_client.private_configured():
+        try:
+            data = await coze_client.run_workflow(
+                settings.coze_private_workflow_id,
+                {
+                    "scene_type": scene_type,
+                    "scene_name": req.scene_name or "",
+                    "situation": req.situation,
+                    "customer_info": req.customer_info or "",
+                    "style": req.style or "",
+                    "knowledge_scope": ["guardrail", "private_rules", "product", "wuge_ip"],
+                },
+            )
+            answer = (data.get("answer") or "").strip()
+            t = data.get("tips")
+            tips = t if isinstance(t, list) else []
+            if answer:
+                source = "coze"
+                confidence_label = "扣子知识库+模型生成"
+                confidence = "medium"
+                degraded = False
+        except coze_client.CozeError:
+            answer = ""  # 触发模板兜底
+
+    if not answer:
+        scene = _PRIVATE_SCENES[scene_type]
+        answer = scene["answer"]
+        tips = list(scene["tips"])
+        source = "local_fallback"
+        confidence_label = "本地模板(降级)"
+        confidence = "low"
+        degraded = True
+
+    # private 护栏：不硬推/不贬同行/不紧迫逼单 → 软化（真实/降级都生效）
+    answer = _soften_private(answer)
+
     return ApiResponse(data={
         "id": f"private_{uuid.uuid4().hex[:10]}",
-        "answer": scene["answer"],
-        "tips": scene["tips"],
-        "scene_type": req.scene_type,
-        "confidence": "medium",
-        "confidence_label": "知识库+模型生成",
-        "quality_score": 87,
+        "answer": answer or "稍后我再根据您的情况给您一个更稳妥的建议。",
+        "tips": tips if isinstance(tips, list) else [],
+        "scene_type": scene_type,
+        "source": source,
+        "confidence": confidence,
+        "confidence_label": confidence_label,
+        "degraded": degraded,
+        "quality_score": 87 if source == "coze" else 60,
         "audit_pass": True,
     })
 

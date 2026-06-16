@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import time
 import asyncio
 import logging
@@ -25,6 +26,50 @@ class CozeError(Exception):
 
 def chat_configured() -> bool:
     return bool(settings.coze_chat_enabled and settings.coze_api_token and settings.coze_chat_bot_id)
+
+
+def private_configured() -> bool:
+    return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_workflow_id)
+
+
+async def run_workflow(workflow_id: str, parameters: dict, timeout: Optional[int] = None) -> dict:
+    """调用 Coze Workflow（非流式），返回 workflow 输出 dict。失败抛 CozeError。
+
+    Coze /v1/workflow/run 的 data 为 JSON 字符串，需二次解析。
+    """
+    if not (settings.coze_api_token and workflow_id):
+        raise CozeError("coze workflow not configured")
+
+    base = settings.coze_api_base.rstrip("/")
+    headers = {
+        "Authorization": f"Bearer {settings.coze_api_token}",
+        "Content-Type": "application/json",
+    }
+    body = {"workflow_id": workflow_id, "parameters": parameters or {}}
+    total_timeout = timeout or settings.coze_timeout
+
+    try:
+        async with httpx.AsyncClient(timeout=total_timeout) as client:
+            resp = await client.post(f"{base}/v1/workflow/run", headers=headers, json=body)
+            resp.raise_for_status()
+            payload = resp.json() or {}
+            if payload.get("code") not in (0, None):
+                raise CozeError(f"coze workflow: code={payload.get('code')}")
+            data = payload.get("data")
+            # data 可能是 JSON 字符串，也可能已是 dict
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (ValueError, TypeError):
+                    raise CozeError("coze workflow: data not json")
+            if not isinstance(data, dict):
+                raise CozeError("coze workflow: data not object")
+            return data
+    except CozeError:
+        raise
+    except Exception as exc:
+        logger.warning("coze workflow call failed: %s", type(exc).__name__)
+        raise CozeError(f"coze workflow call failed: {type(exc).__name__}") from exc
 
 
 async def chat_bot(message: str, user_id: str, timeout: Optional[int] = None) -> str:
