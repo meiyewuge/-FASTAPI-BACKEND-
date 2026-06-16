@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from .. import coze_client
+
 router = APIRouter()
 
 # MVP 示例内存存储。生产环境必须替换为数据库。
@@ -172,27 +174,67 @@ def generate_content(req: ContentGenerateRequest, authorization: Optional[str] =
     return ApiResponse(data=item)
 
 
+# chat 医疗/敏感词 → 追加免责（后端硬护栏，只追加一次）
+_CHAT_SAFE_WORDS = ["医美", "祛斑", "热玛吉", "水光", "治疗", "疼", "过敏", "睡眠"]
+_CHAT_SAFE_NOTE = "\n\n⚠️ 内容仅供参考，具体请遵医嘱或结合门店实际情况判断。"
+
+_CHAT_FALLBACK_ANSWER = (
+    "吴哥建议你先把问题分清楚：这是流量问题、转化问题、复购问题，还是表达问题。\n\n"
+    "第一步，先问清楚顾客真实需求；\n"
+    "第二步，用专业但不吓人的话讲清楚；\n"
+    "第三步，给一个可以马上执行的小动作。\n\n"
+    "可直接用的话术：\n"
+    "“亲爱的，我不建议您盲目选择项目。您先把现在的情况跟我说一下，我根据您的状态给您一个更稳妥的建议。”"
+)
+
+
+def _apply_chat_guardrail(message: str, answer: str) -> str:
+    """医疗/敏感问题追加免责，只追加一次。"""
+    if any(w in (message or "") for w in _CHAT_SAFE_WORDS) or any(w in (answer or "") for w in _CHAT_SAFE_WORDS):
+        if _CHAT_SAFE_NOTE.strip() not in (answer or ""):
+            answer = (answer or "") + _CHAT_SAFE_NOTE
+    return answer
+
+
 @router.post("/ai/chat", response_model=ApiResponse)
-def ai_chat(req: ChatRequest, authorization: Optional[str] = Header(default=None)):
-    # 生产环境：基于 module 选择知识库、提示词和合规策略。
-    safe_note = ""
-    if any(word in req.message for word in ["医美", "祛斑", "热玛吉", "水光", "治疗", "疼", "过敏", "睡眠"]):
-        safe_note = "\n\n⚠️ 内容仅供参考，具体请遵医嘱或结合门店实际情况判断。"
-    answer = (
-        "吴哥建议你先把问题分清楚：这是流量问题、转化问题、复购问题，还是表达问题。\n\n"
-        "第一步，先问清楚顾客真实需求；\n"
-        "第二步，用专业但不吓人的话讲清楚；\n"
-        "第三步，给一个可以马上执行的小动作。\n\n"
-        "可直接用的话术：\n"
-        "“亲爱的，我不建议您盲目选择项目。您先把现在的情况跟我说一下，我根据您的状态给您一个更稳妥的建议。”"
-        f"{safe_note}"
-    )
+async def ai_chat(req: ChatRequest, authorization: Optional[str] = Header(default=None)):
+    user_id = _get_user_id(authorization)
+    answer = ""
+    source = "local_fallback"
+    confidence_label = "本地模板(降级)"
+    confidence = "low"
+    degraded = True
+
+    # 真实链路：仅当灰度开启且配置完整时调 Coze Bot；任何失败均降级到本地模板
+    if coze_client.chat_configured():
+        try:
+            answer = await coze_client.chat_bot(req.message, user_id)
+            source = "coze"
+            confidence_label = "扣子知识库+模型生成"
+            confidence = "medium"
+            degraded = False
+        except coze_client.CozeError:
+            answer = ""  # 触发下方模板兜底
+
+    if not answer:
+        # 本地模板降级（绝不标"知识库+模型生成"）
+        answer = _CHAT_FALLBACK_ANSWER
+        source = "local_fallback"
+        confidence_label = "本地模板(降级)"
+        confidence = "low"
+        degraded = True
+
+    # 后端硬护栏：医疗/敏感问题追加免责（只一次，真实/降级都生效）
+    answer = _apply_chat_guardrail(req.message, answer)
+
     return ApiResponse(data={
         "id": f"msg_{uuid.uuid4().hex[:10]}",
-        "answer": answer,
-        "confidence": "medium",
-        "confidence_label": "知识库+模型生成",
-        "quality_score": 86,
+        "answer": answer or "暂无回复，请稍后重试",
+        "source": source,
+        "confidence": confidence,
+        "confidence_label": confidence_label,
+        "degraded": degraded,
+        "quality_score": 86 if source == "coze" else 60,
         "audit_pass": True,
     })
 

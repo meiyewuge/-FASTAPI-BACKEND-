@@ -14,6 +14,13 @@ class Settings(BaseSettings):
 
     report_storage_path: str = "./storage/reports"
 
+    # Coze 接入（当前仅 chat 阶段；真实值经环境变量注入，不写死、不入库）
+    coze_chat_enabled: bool = False
+    coze_api_base: str = "https://api.coze.cn"
+    coze_api_token: str | None = None
+    coze_chat_bot_id: str | None = None
+    coze_timeout: int = 30
+
     class Config:
         env_file = ".env"
         extra = "ignore"
