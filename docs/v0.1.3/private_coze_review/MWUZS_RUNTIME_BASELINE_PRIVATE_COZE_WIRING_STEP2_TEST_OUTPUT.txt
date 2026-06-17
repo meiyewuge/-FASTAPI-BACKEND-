@@ -1,0 +1,13 @@
+===== STEP2 private Coze Workflow 接入 本地测试(增量 04bc8ba→405f341) =====
+  [PASS] ①开关false→降级 local_fallback/degraded
+  [PASS] ①不假标
+  [PASS] ①answer非空+tips数组
+  [PASS] ②enabled但缺token/wfid→降级
+  [PASS] ③Workflow成功→source=coze/degraded=false/扣子知识库+模型生成
+  [PASS] ③answer/tips来自Workflow
+  [PASS] ④非法scene_type兜底reactivate
+  [PASS] ④缺scene_type兜底reactivate
+  [PASS] ⑤违规词软化(不硬推/不贬同行/不逼单/不承诺) — 每家定位不同，近期优惠，名额有限，帮助改善体验！
+  [PASS] ⑥Coze异常→降级不假标
+
+结果: 10 PASS / 0 FAIL
