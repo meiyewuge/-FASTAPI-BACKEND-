@@ -1,0 +1,14 @@
+===== STEP3 content Coze Workflow 接入 本地测试(增量 405f341→1e6aabc) =====
+  [PASS] ①开关false→降级 local_fallback/degraded
+  [PASS] ①不假标
+  [PASS] ①契约 title/content(str含换行)/suggestions[]
+  [PASS] ②enabled但缺token/wfid→降级
+  [PASS] ③Workflow成功(直返)→source=coze/degraded=false
+  [PASS] ③三字段来自Workflow
+  [PASS] ④hook/body/cta flatten 为正文
+  [PASS] ④image/publish flatten 为 suggestions
+  [PASS] ⑤医疗/夸大/绝对化/收益软化 — 大多数情况调理改善颈椎 | 通常较为有效，明显改善，帮助经营！
+  [PASS] ⑥无有效正文→降级模板不假标
+  [PASS] ⑦Coze异常→降级不假标
+
+结果: 11 PASS / 0 FAIL
