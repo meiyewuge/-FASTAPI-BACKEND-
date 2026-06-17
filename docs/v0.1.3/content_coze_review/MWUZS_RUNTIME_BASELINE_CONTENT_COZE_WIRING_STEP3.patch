@@ -1,0 +1,175 @@
+diff --git a/backend/app/config.py b/backend/app/config.py
+index b1ab5a4..3913e06 100644
+--- a/backend/app/config.py
++++ b/backend/app/config.py
+@@ -25,6 +25,10 @@ class Settings(BaseSettings):
+     coze_private_enabled: bool = False
+     coze_private_workflow_id: str | None = None
+ 
++    # content 阶段（Coze Workflow）
++    coze_content_enabled: bool = False
++    coze_content_workflow_id: str | None = None
++
+     class Config:
+         env_file = ".env"
+         extra = "ignore"
+diff --git a/backend/app/coze_client.py b/backend/app/coze_client.py
+index 2229097..8c24039 100644
+--- a/backend/app/coze_client.py
++++ b/backend/app/coze_client.py
+@@ -32,6 +32,10 @@ def private_configured() -> bool:
+     return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_workflow_id)
+ 
+ 
++def content_configured() -> bool:
++    return bool(settings.coze_content_enabled and settings.coze_api_token and settings.coze_content_workflow_id)
++
++
+ async def run_workflow(workflow_id: str, parameters: dict, timeout: Optional[int] = None) -> dict:
+     """调用 Coze Workflow（非流式），返回 workflow 输出 dict。失败抛 CozeError。
+ 
+diff --git a/backend/app/routers/weapp.py b/backend/app/routers/weapp.py
+index 0675ae5..ca87a53 100644
+--- a/backend/app/routers/weapp.py
++++ b/backend/app/routers/weapp.py
+@@ -61,6 +61,7 @@ class ContentGenerateRequest(BaseModel):
+     theme: str
+     style: str = "专业有温度"
+     extra_info: Optional[str] = ""
++    target_customer: Optional[str] = ""
+ 
+ 
+ class ChatRequest(BaseModel):
+@@ -132,11 +133,25 @@ def save_store_profile(profile: StoreProfile, authorization: Optional[str] = Hea
+     return ApiResponse(data=data)
+ 
+ 
+-@router.post("/content/generate", response_model=ApiResponse)
+-def generate_content(req: ContentGenerateRequest, authorization: Optional[str] = Header(default=None)):
+-    user_id = _get_user_id(authorization)
+-    # 生产环境：检索私有知识库，组装提示词，调用大模型，执行合规审核。
+-    content = {
++# content 硬护栏：医疗/夸大/绝对化/收益 → 软化（平台差异在 Coze prompt + 本表共同约束）
++_CONTENT_SOFTEN = [
++    ("根治", "调理改善"), ("治愈", "改善"), ("治疗", "调理"),
++    ("100%", "大多数情况"), ("百分百", "大多数情况"), ("绝对", "通常"),
++    ("彻底", "明显"), ("永久", "长期"), ("特效", "明显效果"), ("立竿见影", "见效较快"),
++    ("最有效", "较为有效"), ("最好的", "优质的"), ("天下第一", "领先"),
++    ("保证赚钱", "帮助经营"), ("稳赚", "有助于"), ("包回本", "辅助提升"),
++]
++
++
++def _soften_content(text: str) -> str:
++    out = text or ""
++    for bad, good in _CONTENT_SOFTEN:
++        out = out.replace(bad, good)
++    return out
++
++
++def _content_template(req: "ContentGenerateRequest") -> dict:
++    return {
+         "title": f"{req.theme}｜{_platform_name(req.platform)}内容",
+         "hook": "很多门店不是没有好项目，而是没有把项目价值讲明白。",
+         "body": (
+@@ -148,10 +163,73 @@ def generate_content(req: ContentGenerateRequest, authorization: Optional[str] =
+         "image_suggestion": "建议配门店环境、服务细节、顾客反馈三类图片。",
+         "publish_time": "建议晚上8点到9点发布，适合老客刷朋友圈时看到。",
+     }
+-    # recovery 前端兼容层：不改生成内核，仅把嵌套内容 flatten 成前端可直接消费的契约
+-    # 前端依赖字段：data.title(字符串) / data.content(字符串正文) / data.suggestions[](字符串数组)
+-    content_text = f"{content['hook']}\n\n{content['body']}\n\n{content['cta']}"
+-    suggestions = [s for s in (content.get("image_suggestion"), content.get("publish_time")) if s]
++
++
++def _flatten_content(data: dict, req: "ContentGenerateRequest"):
++    """兼容 Coze 直返 {title,content,suggestions} 或分段 {hook,body,cta,image_suggestion,publish_time}。"""
++    title = (data.get("title") or "").strip() or f"{req.theme}｜{_platform_name(req.platform)}内容"
++    content_text = (data.get("content") or "").strip()
++    if not content_text:
++        parts = [p for p in (data.get("hook"), data.get("body"), data.get("cta")) if p]
++        content_text = "\n\n".join(parts).strip()
++    sugg = data.get("suggestions")
++    if not (isinstance(sugg, list) and sugg):
++        sugg = [s for s in (data.get("image_suggestion"), data.get("publish_time")) if s]
++    return title, content_text, (sugg if isinstance(sugg, list) else [])
++
++
++@router.post("/content/generate", response_model=ApiResponse)
++async def generate_content(req: ContentGenerateRequest, authorization: Optional[str] = Header(default=None)):
++    user_id = _get_user_id(authorization)
++    title = ""
++    content_text = ""
++    suggestions = []
++    content_detail = None
++    source = "local_fallback"
++    confidence_label = "本地模板(降级)"
++    confidence = "low"
++    degraded = True
++
++    # 真实链路：灰度开启且配置完整时走 Coze Workflow；任何失败均降级到本地模板
++    if coze_client.content_configured():
++        try:
++            data = await coze_client.run_workflow(
++                settings.coze_content_workflow_id,
++                {
++                    "platform": req.platform,
++                    "content_type": req.content_type,
++                    "theme": req.theme,
++                    "target_customer": req.target_customer or "",
++                    "extra_info": req.extra_info or "",
++                    "style": req.style or "",
++                    "knowledge_scope": ["product", "public_promo", "guardrail", "wuge_ip"],
++                },
++            )
++            t, ct, sg = _flatten_content(data, req)
++            if ct:  # 有可渲染正文才算有效输出
++                title, content_text, suggestions, content_detail = t, ct, sg, data
++                source = "coze"
++                confidence_label = "扣子知识库+模型生成"
++                confidence = "medium"
++                degraded = False
++        except coze_client.CozeError:
++            content_text = ""  # 触发模板兜底
++
++    if not content_text:
++        content = _content_template(req)
++        title = content["title"]
++        content_text = f"{content['hook']}\n\n{content['body']}\n\n{content['cta']}"
++        suggestions = [s for s in (content.get("image_suggestion"), content.get("publish_time")) if s]
++        content_detail = content
++        source = "local_fallback"
++        confidence_label = "本地模板(降级)"
++        confidence = "low"
++        degraded = True
++
++    # 护栏：医疗/夸大/绝对化/收益软化（真实/降级都生效；平台差异另由 Coze prompt 约束）
++    title = _soften_content(title)
++    content_text = _soften_content(content_text)
++
+     item = {
+         "id": f"content_{uuid.uuid4().hex[:10]}",
+         "user_id": user_id,
+@@ -159,14 +237,16 @@ def generate_content(req: ContentGenerateRequest, authorization: Optional[str] =
+         "content_type": req.content_type,
+         "theme": req.theme,
+         # 前端依赖的 3 个稳定字段
+-        "title": content["title"],
+-        "content": content_text,
+-        "suggestions": suggestions,
++        "title": title or f"{req.theme}｜{_platform_name(req.platform)}内容",
++        "content": content_text or "建议先到店做一次基础评估，我们不盲目推荐。",
++        "suggestions": suggestions if isinstance(suggestions, list) else [],
+         # 额外保留（前端不依赖）
+-        "content_detail": content,
+-        "confidence": "medium",
+-        "confidence_label": "知识库+模型生成",
+-        "quality_score": 88,
++        "content_detail": content_detail,
++        "source": source,
++        "confidence": confidence,
++        "confidence_label": confidence_label,
++        "degraded": degraded,
++        "quality_score": 88 if source == "coze" else 60,
+         "audit_pass": True,
+         "is_favorite": False,
+         "created_at": time.time(),

@@ -1,0 +1,189 @@
+diff --git a/backend/app/config.py b/backend/app/config.py
+index e6acb6b..b1ab5a4 100644
+--- a/backend/app/config.py
++++ b/backend/app/config.py
+@@ -14,13 +14,17 @@ class Settings(BaseSettings):
+ 
+     report_storage_path: str = "./storage/reports"
+ 
+-    # Coze 接入（当前仅 chat 阶段；真实值经环境变量注入，不写死、不入库）
++    # Coze 接入（真实值经环境变量注入，不写死、不入库）
+     coze_chat_enabled: bool = False
+     coze_api_base: str = "https://api.coze.cn"
+     coze_api_token: str | None = None
+     coze_chat_bot_id: str | None = None
+     coze_timeout: int = 30
+ 
++    # private 阶段（Coze Workflow）
++    coze_private_enabled: bool = False
++    coze_private_workflow_id: str | None = None
++
+     class Config:
+         env_file = ".env"
+         extra = "ignore"
+diff --git a/backend/app/coze_client.py b/backend/app/coze_client.py
+index 38976b3..2229097 100644
+--- a/backend/app/coze_client.py
++++ b/backend/app/coze_client.py
+@@ -7,6 +7,7 @@
+ """
+ from __future__ import annotations
+ 
++import json
+ import time
+ import asyncio
+ import logging
+@@ -27,6 +28,50 @@ def chat_configured() -> bool:
+     return bool(settings.coze_chat_enabled and settings.coze_api_token and settings.coze_chat_bot_id)
+ 
+ 
++def private_configured() -> bool:
++    return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_workflow_id)
++
++
++async def run_workflow(workflow_id: str, parameters: dict, timeout: Optional[int] = None) -> dict:
++    """调用 Coze Workflow（非流式），返回 workflow 输出 dict。失败抛 CozeError。
++
++    Coze /v1/workflow/run 的 data 为 JSON 字符串，需二次解析。
++    """
++    if not (settings.coze_api_token and workflow_id):
++        raise CozeError("coze workflow not configured")
++
++    base = settings.coze_api_base.rstrip("/")
++    headers = {
++        "Authorization": f"Bearer {settings.coze_api_token}",
++        "Content-Type": "application/json",
++    }
++    body = {"workflow_id": workflow_id, "parameters": parameters or {}}
++    total_timeout = timeout or settings.coze_timeout
++
++    try:
++        async with httpx.AsyncClient(timeout=total_timeout) as client:
++            resp = await client.post(f"{base}/v1/workflow/run", headers=headers, json=body)
++            resp.raise_for_status()
++            payload = resp.json() or {}
++            if payload.get("code") not in (0, None):
++                raise CozeError(f"coze workflow: code={payload.get('code')}")
++            data = payload.get("data")
++            # data 可能是 JSON 字符串，也可能已是 dict
++            if isinstance(data, str):
++                try:
++                    data = json.loads(data)
++                except (ValueError, TypeError):
++                    raise CozeError("coze workflow: data not json")
++            if not isinstance(data, dict):
++                raise CozeError("coze workflow: data not object")
++            return data
++    except CozeError:
++        raise
++    except Exception as exc:
++        logger.warning("coze workflow call failed: %s", type(exc).__name__)
++        raise CozeError(f"coze workflow call failed: {type(exc).__name__}") from exc
++
++
+ async def chat_bot(message: str, user_id: str, timeout: Optional[int] = None) -> str:
+     """调用 Coze Bot Chat（v3，非流式），返回 assistant 文本答案。失败抛 CozeError。"""
+     if not (settings.coze_api_token and settings.coze_chat_bot_id):
+diff --git a/backend/app/routers/weapp.py b/backend/app/routers/weapp.py
+index 0f4b718..0675ae5 100644
+--- a/backend/app/routers/weapp.py
++++ b/backend/app/routers/weapp.py
+@@ -23,6 +23,7 @@ from fastapi import APIRouter, Header, HTTPException
+ from pydantic import BaseModel, Field
+ 
+ from .. import coze_client
++from ..config import settings
+ 
+ router = APIRouter()
+ 
+@@ -288,18 +289,81 @@ _PRIVATE_SCENES = {
+ }
+ 
+ 
++# private 硬护栏：禁止项 → 软化（命中即替换违规措辞；无法软化由上层降级）
++_PRIVATE_SOFTEN = [
++    ("最后一个名额", "名额有限"), ("最后名额", "名额有限"),
++    ("限时", "近期"), ("错过没有了", "欢迎随时了解"),
++    ("隔壁家差", "每家定位不同"), ("别家骗人", "建议综合判断"), ("同行垃圾", "每家各有特色"),
++    ("保证治好", "帮助改善体验"), ("一定见效", "因人而异"), ("根治", "调理改善"),
++]
++
++
++def _soften_private(text: str) -> str:
++    out = text or ""
++    for bad, good in _PRIVATE_SOFTEN:
++        out = out.replace(bad, good)
++    return out
++
++
+ @router.post("/private/generate", response_model=ApiResponse)
+-def generate_private(req: PrivateGenerateRequest, authorization: Optional[str] = Header(default=None)):
+-    # 生产环境：按 scene_type 选知识库/提示词，结合 situation/customer_info 调 LLM 并做合规审核。
+-    scene = _PRIVATE_SCENES.get(req.scene_type, _PRIVATE_SCENES["reactivate"])
++async def generate_private(req: PrivateGenerateRequest, authorization: Optional[str] = Header(default=None)):
++    # scene_type 5 场景分流，非法/缺失统一兜底 reactivate
++    scene_type = req.scene_type if req.scene_type in _PRIVATE_SCENES else "reactivate"
++
++    answer = ""
++    tips = []
++    source = "local_fallback"
++    confidence_label = "本地模板(降级)"
++    confidence = "low"
++    degraded = True
++
++    # 真实链路：灰度开启且配置完整时走 Coze Workflow；任何失败均降级到本地模板
++    if coze_client.private_configured():
++        try:
++            data = await coze_client.run_workflow(
++                settings.coze_private_workflow_id,
++                {
++                    "scene_type": scene_type,
++                    "scene_name": req.scene_name or "",
++                    "situation": req.situation,
++                    "customer_info": req.customer_info or "",
++                    "style": req.style or "",
++                    "knowledge_scope": ["guardrail", "private_rules", "product", "wuge_ip"],
++                },
++            )
++            answer = (data.get("answer") or "").strip()
++            t = data.get("tips")
++            tips = t if isinstance(t, list) else []
++            if answer:
++                source = "coze"
++                confidence_label = "扣子知识库+模型生成"
++                confidence = "medium"
++                degraded = False
++        except coze_client.CozeError:
++            answer = ""  # 触发模板兜底
++
++    if not answer:
++        scene = _PRIVATE_SCENES[scene_type]
++        answer = scene["answer"]
++        tips = list(scene["tips"])
++        source = "local_fallback"
++        confidence_label = "本地模板(降级)"
++        confidence = "low"
++        degraded = True
++
++    # private 护栏：不硬推/不贬同行/不紧迫逼单 → 软化（真实/降级都生效）
++    answer = _soften_private(answer)
++
+     return ApiResponse(data={
+         "id": f"private_{uuid.uuid4().hex[:10]}",
+-        "answer": scene["answer"],
+-        "tips": scene["tips"],
+-        "scene_type": req.scene_type,
+-        "confidence": "medium",
+-        "confidence_label": "知识库+模型生成",
+-        "quality_score": 87,
++        "answer": answer or "稍后我再根据您的情况给您一个更稳妥的建议。",
++        "tips": tips if isinstance(tips, list) else [],
++        "scene_type": scene_type,
++        "source": source,
++        "confidence": confidence,
++        "confidence_label": confidence_label,
++        "degraded": degraded,
++        "quality_score": 87 if source == "coze" else 60,
+         "audit_pass": True,
+     })
+ 
