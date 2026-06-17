@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     coze_private_enabled: bool = False
     coze_private_workflow_id: str | None = None
 
+    # content 阶段（Coze Workflow）
+    coze_content_enabled: bool = False
+    coze_content_workflow_id: str | None = None
+
     class Config:
         env_file = ".env"
         extra = "ignore"

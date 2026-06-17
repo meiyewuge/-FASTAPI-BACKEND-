@@ -32,6 +32,10 @@ def private_configured() -> bool:
     return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_workflow_id)
 
 
+def content_configured() -> bool:
+    return bool(settings.coze_content_enabled and settings.coze_api_token and settings.coze_content_workflow_id)
+
+
 async def run_workflow(workflow_id: str, parameters: dict, timeout: Optional[int] = None) -> dict:
     """调用 Coze Workflow（非流式），返回 workflow 输出 dict。失败抛 CozeError。
 
