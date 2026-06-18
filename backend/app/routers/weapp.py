@@ -8,6 +8,7 @@ Coze 调用 → coze_client.py
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -300,23 +301,33 @@ async def generate_private(
     tips: list = []
     meta = meta_fallback(quality_score=60)
 
-    # ── 真实链路：灰度开启且配置完整时走 Coze Workflow ──
+    # ── 真实链路：灰度开启且配置完整时走 Coze Bot Chat ──
     if coze_client.private_configured():
         try:
-            data = await coze_client.run_workflow(
-                settings.coze_private_workflow_id,  # type: ignore[arg-type]
-                {
-                    "scene_type": scene_type,
-                    "scene_name": req.scene_name or "",
-                    "situation": req.situation,
-                    "customer_info": req.customer_info or "",
-                    "style": req.style or "",
-                    "knowledge_scope": ["guardrail", "private_rules", "product", "wuge_ip"],
-                },
+            # 构造带场景上下文的 prompt
+            prompt = f"""场景：{scene_type} - {req.scene_name or ''}
+客户信息：{req.customer_info or ''}
+情境：{req.situation}
+风格：{req.style or ''}
+请生成专业的美业私密咨询回答，输出JSON格式：{{"answer":"回答内容","tips":["建议1","建议2"]}}"""
+            raw = await coze_client.chat_bot(
+                message=prompt,
+                user_id=user_id,
             )
-            answer = (data.get("answer") or "").strip()
-            t = data.get("tips")
-            tips = t if isinstance(t, list) else []
+            # 尝试从 Bot 回复中解析 JSON
+            import json as _json
+            try:
+                # 提取 JSON 块（Bot 可能输出 markdown 包裹的 JSON）
+                json_match = re.search(r'\{[^{}]*"answer"[^{}]*\}', raw, re.DOTALL)
+                if json_match:
+                    data = _json.loads(json_match.group())
+                    answer = (data.get("answer") or "").strip()
+                    t = data.get("tips")
+                    tips = t if isinstance(t, list) else []
+                else:
+                    answer = raw.strip()
+            except (_json.JSONDecodeError, ValueError):
+                answer = raw.strip()
             if answer:
                 meta = meta_success(quality_score=87)
         except coze_client.CozeError:

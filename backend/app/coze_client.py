@@ -46,7 +46,7 @@ def chat_configured() -> bool:
 
 def private_configured() -> bool:
     """private 灰度开关 + token + workflow_id 均已配置。"""
-    return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_workflow_id)
+    return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_bot_id)
 
 
 def content_configured() -> bool:
