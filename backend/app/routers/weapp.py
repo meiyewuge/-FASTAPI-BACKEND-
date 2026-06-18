@@ -7,6 +7,7 @@ Coze 调用 → coze_client.py
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -314,19 +315,38 @@ async def generate_private(
                 message=prompt,
                 user_id=user_id,
             )
-            # 尝试从 Bot 回复中解析 JSON
-            import json as _json
+            # 尝试从 Bot 回复中解析 JSON（三级策略：代码块 → 括号匹配 → 原文兜底）
             try:
-                # 提取 JSON 块（Bot 可能输出 markdown 包裹的 JSON）
-                json_match = re.search(r'\{[^{}]*"answer"[^{}]*\}', raw, re.DOTALL)
-                if json_match:
-                    data = _json.loads(json_match.group())
+                json_str = None
+
+                # 策略1：提取 ```json ... ``` 代码块
+                code_block = re.search(r"```json\s*\n?(.*?)\n?```", raw, re.DOTALL)
+                if code_block:
+                    json_str = code_block.group(1).strip()
+
+                # 策略2：从第一个 { 开始，逐字符匹配大括号层级，提取完整 JSON 对象
+                if not json_str:
+                    start = raw.find("{")
+                    if start != -1:
+                        depth = 0
+                        for i in range(start, len(raw)):
+                            if raw[i] == "{":
+                                depth += 1
+                            elif raw[i] == "}":
+                                depth -= 1
+                                if depth == 0:
+                                    json_str = raw[start : i + 1]
+                                    break
+
+                if json_str:
+                    data = json.loads(json_str)
                     answer = (data.get("answer") or "").strip()
                     t = data.get("tips")
                     tips = t if isinstance(t, list) else []
                 else:
+                    # 策略3：fallback 到整个回复作为 answer
                     answer = raw.strip()
-            except (_json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError):
                 answer = raw.strip()
             if answer:
                 meta = meta_success(quality_score=87)
