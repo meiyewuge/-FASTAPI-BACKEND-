@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     coze_private_enabled: bool = False         # 灰度开关，默认关闭走模板
     coze_private_bot_id: str | None = None  # ← 环境变量 COZE_PRIVATE_BOT_ID
 
-    # ── Coze · content（Workflow）─────────────────────────────────
+    # ── Coze · content（Bot Chat）─────────────────────────────────
     coze_content_enabled: bool = False         # 灰度开关，默认关闭走模板
-    coze_content_workflow_id: str | None = None  # ← 环境变量 COZE_CONTENT_WORKFLOW_ID
+    coze_content_bot_id: str | None = None     # ← 环境变量 COZE_CONTENT_BOT_ID
 
     class Config:
         env_file = ".env"

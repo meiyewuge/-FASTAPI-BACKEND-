@@ -155,8 +155,60 @@ def save_store_profile(profile: StoreProfile, authorization: Optional[str] = Hea
     return ApiResponse(data=data)
 
 
+def _extract_bot_json(raw: str) -> Optional[dict]:
+    """从 Bot 文本回复中容错解析 JSON 对象。
+
+    三级策略：(1) ```json 代码块；(2) 第一个 { 起的大括号层级匹配；(3) 整体直接解析。
+    任一得到 dict 即返回；全部失败返回 None（由上层走降级兜底，绝不 500）。
+    """
+    if not raw:
+        return None
+    json_str: Optional[str] = None
+
+    # 策略1：提取 ```json ... ``` 代码块
+    code_block = re.search(r"```json\s*\n?(.*?)\n?```", raw, re.DOTALL)
+    if code_block:
+        json_str = code_block.group(1).strip()
+
+    # 策略2：从第一个 { 开始，逐字符匹配大括号层级，提取完整 JSON 对象
+    if not json_str:
+        start = raw.find("{")
+        if start != -1:
+            depth = 0
+            for i in range(start, len(raw)):
+                if raw[i] == "{":
+                    depth += 1
+                elif raw[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        json_str = raw[start : i + 1]
+                        break
+
+    # 策略3：兜底整体解析
+    if not json_str:
+        json_str = raw.strip()
+
+    try:
+        obj = json.loads(json_str)
+        return obj if isinstance(obj, dict) else None
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+
+def _content_prompt(req: "ContentGenerateRequest") -> str:
+    """把 content 请求字段拼成给 Bot 的指令，要求其以 JSON 返回 title/content/suggestions。"""
+    return f"""平台：{platform_name(req.platform)}
+内容类型：{req.content_type}
+业务/品类：{req.business_type}
+主题：{req.theme}
+目标客户：{req.target_customer or ''}
+风格：{req.style or ''}
+补充信息：{req.extra_info or ''}
+请生成一条美业内容文案，输出JSON格式：{{"title":"标题","content":"正文","suggestions":["建议1","建议2"]}}"""
+
+
 # ──────────────────────────────────────────────────────────────────────
-# POST /content/generate — 内容生成（Coze Workflow / 本地模板降级）
+# POST /content/generate — 内容生成（Coze Bot Chat / 本地模板降级）
 # 前端契约：{ title, content, suggestions[] }  ← 不可变更
 # ──────────────────────────────────────────────────────────────────────
 @router.post("/content/generate", response_model=ApiResponse)
@@ -174,25 +226,21 @@ async def generate_content(
     content_detail: Optional[dict] = None
     meta = meta_fallback(quality_score=60)
 
-    # ── 真实链路：灰度开启且配置完整时走 Coze Workflow ──
+    # ── 真实链路：灰度开启且配置完整时走 Coze Bot Chat（content 专用 Bot）──
     if coze_client.content_configured():
         try:
-            data = await coze_client.run_workflow(
-                settings.coze_content_workflow_id,  # type: ignore[arg-type]
-                {
-                    "platform": req.platform,
-                    "content_type": req.content_type,
-                    "theme": req.theme,
-                    "target_customer": req.target_customer or "",
-                    "extra_info": req.extra_info or "",
-                    "style": req.style or "",
-                    "knowledge_scope": ["product", "public_promo", "guardrail", "wuge_ip"],
-                },
+            raw = await coze_client.chat_bot(
+                message=_content_prompt(req),
+                user_id=user_id,
+                bot_id=settings.coze_content_bot_id,
             )
-            t, ct, sg = flatten_content(data, req.theme, req.platform)
-            if ct:  # 有可渲染正文才算有效输出
-                title, content_text, suggestions, content_detail = t, ct, sg, data
-                meta = meta_success(quality_score=88)
+            data = _extract_bot_json(raw)  # 容错：代码块 / 括号匹配 / 整体解析；失败 None
+            if isinstance(data, dict):
+                t, ct, sg = flatten_content(data, req.theme, req.platform)
+                if ct:  # 有可渲染正文才算有效输出
+                    title, content_text, suggestions, content_detail = t, ct, sg, data
+                    meta = meta_success(quality_score=88)
+            # 解析失败或无正文 → content_text 仍为空 → 走下方模板兜底（不 500）
         except coze_client.CozeError:
             logger.info("content: coze failed, fallback to template | theme=%s", req.theme)
             content_text = ""  # 触发下方模板兜底
@@ -314,6 +362,7 @@ async def generate_private(
             raw = await coze_client.chat_bot(
                 message=prompt,
                 user_id=user_id,
+                bot_id=settings.coze_private_bot_id,
             )
             # 尝试从 Bot 回复中解析 JSON（三级策略：代码块 → 括号匹配 → 原文兜底）
             try:
