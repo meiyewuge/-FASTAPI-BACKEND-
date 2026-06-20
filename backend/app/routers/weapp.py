@@ -332,7 +332,7 @@ async def ai_chat(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# POST /private/generate — 私域话术（Coze Workflow / 本地模板降级）
+# POST /private/generate — 私域话术（Coze Bot Chat / 本地模板降级）
 # 前端契约：{ answer, tips[] }  ← 不可变更
 # ──────────────────────────────────────────────────────────────────────
 @router.post("/private/generate", response_model=ApiResponse)
@@ -364,39 +364,12 @@ async def generate_private(
                 user_id=user_id,
                 bot_id=settings.coze_private_bot_id,
             )
-            # 尝试从 Bot 回复中解析 JSON（三级策略：代码块 → 括号匹配 → 原文兜底）
-            try:
-                json_str = None
-
-                # 策略1：提取 ```json ... ``` 代码块
-                code_block = re.search(r"```json\s*\n?(.*?)\n?```", raw, re.DOTALL)
-                if code_block:
-                    json_str = code_block.group(1).strip()
-
-                # 策略2：从第一个 { 开始，逐字符匹配大括号层级，提取完整 JSON 对象
-                if not json_str:
-                    start = raw.find("{")
-                    if start != -1:
-                        depth = 0
-                        for i in range(start, len(raw)):
-                            if raw[i] == "{":
-                                depth += 1
-                            elif raw[i] == "}":
-                                depth -= 1
-                                if depth == 0:
-                                    json_str = raw[start : i + 1]
-                                    break
-
-                if json_str:
-                    data = json.loads(json_str)
-                    answer = (data.get("answer") or "").strip()
-                    t = data.get("tips")
-                    tips = t if isinstance(t, list) else []
-                else:
-                    # 策略3：fallback 到整个回复作为 answer
-                    answer = raw.strip()
-            except (json.JSONDecodeError, ValueError):
-                answer = raw.strip()
+            # 从 Bot 回复中容错解析 JSON（复用 _extract_bot_json 三级策略）
+            data = _extract_bot_json(raw)
+            if data:
+                answer = (data.get("answer") or "").strip()
+                t = data.get("tips")
+                tips = t if isinstance(t, list) else []
             if answer:
                 meta = meta_success(quality_score=87)
         except coze_client.CozeError:
