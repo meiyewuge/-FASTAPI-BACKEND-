@@ -45,13 +45,13 @@ def chat_configured() -> bool:
 
 
 def private_configured() -> bool:
-    """private 灰度开关 + token + workflow_id 均已配置。"""
-    return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_workflow_id)
+    """private 灰度开关 + token + bot_id 均已配置。"""
+    return bool(settings.coze_private_enabled and settings.coze_api_token and settings.coze_private_bot_id)
 
 
 def content_configured() -> bool:
-    """content 灰度开关 + token + workflow_id 均已配置。"""
-    return bool(settings.coze_content_enabled and settings.coze_api_token and settings.coze_content_workflow_id)
+    """content 灰度开关 + token + bot_id 均已配置。"""
+    return bool(settings.coze_content_enabled and settings.coze_api_token and settings.coze_content_bot_id)
 
 
 # ---------------------------------------------------------------------------
@@ -135,23 +135,27 @@ async def run_workflow(
 
 
 # ---------------------------------------------------------------------------
-# Bot Chat 调用（chat 专用）
+# Bot Chat 调用（chat / private / content 共用）
 # ---------------------------------------------------------------------------
 async def chat_bot(
     message: str,
     user_id: str,
+    bot_id: Optional[str] = None,
     timeout: Optional[int] = None,
 ) -> str:
     """调用 Coze Bot Chat（v3，非流式），返回 assistant 文本答案。
 
     流程：发起对话 → 轮询至完成 → 取 assistant answer。
+    bot_id：显式指定要对话的 Bot；不传则回退 settings.coze_chat_bot_id（chat 现有行为不变）。
+    private / content 通过传入各自专用 bot_id 复用本函数。
     失败时抛 CozeError。
     """
-    if not (settings.coze_api_token and settings.coze_chat_bot_id):
+    use_bot_id = bot_id or settings.coze_chat_bot_id
+    if not (settings.coze_api_token and use_bot_id):
         raise CozeError("coze chat not configured")
 
     total_timeout = timeout or settings.coze_timeout
-    bot_id: str = settings.coze_chat_bot_id  # type: ignore[assignment]
+    bot_id = use_bot_id  # type: ignore[assignment]
     body: Dict[str, Any] = {
         "bot_id": bot_id,
         "user_id": user_id,
