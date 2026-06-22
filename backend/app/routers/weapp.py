@@ -1,9 +1,9 @@
 """美业无忧助手小程序接口 — 路由层。
 
-本文件是 Coze 三拍（chat / private / content）接入的路由入口。
+本文件是小程序三接口（chat / private / content）的路由入口。
+生成链路：9200 知识检索 → DeepSeek LLM 生成 → 本地模板兜底
 护栏逻辑 → guardrails.py
 降级模板 → templates.py
-Coze 调用 → coze_client.py
 """
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import coze_client
+import httpx
+
 from ..config import settings
 from ..guardrails import (
     apply_chat_guardrail,
@@ -195,6 +196,63 @@ def _extract_bot_json(raw: str) -> Optional[dict]:
         return None
 
 
+def _kb_search(query: str, top_k: int = 5) -> str:
+    """POST 9200 知识检索，返回拼接的上下文文本。失败返回空字符串。"""
+    try:
+        resp = httpx.post(
+            "http://127.0.0.1:9200/search",
+            json={"query": query, "top_k": top_k},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return ""
+        data = resp.json()
+        results = data.get("results") or data.get("data") or []
+        if isinstance(results, list):
+            return "\n\n".join(
+                (r.get("content") or r.get("text") or r.get("chunk") or "").strip()
+                for r in results
+                if isinstance(r, dict)
+            ).strip()
+        return ""
+    except Exception:
+        logger.warning("kb_search failed | query=%s", query[:60])
+        return ""
+
+
+_WEAPP_LLM_SYSTEM_PROMPT = (
+    "你是“美业吴哥门店经营陪跑系统”的专业助手。"
+    "输出风格：专业、接地气、不夸大、适合美业门店对顾客沟通。"
+    "请只输出JSON，不要输出Markdown。"
+)
+
+
+def _llm_generate(messages: list) -> Optional[str]:
+    """调用 DeepSeek LLM 生成内容。失败返回 None。"""
+    if not settings.llm_api_key:
+        return None
+    url = settings.llm_base_url.rstrip("/") + "/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.llm_api_key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": settings.llm_model,
+        "messages": messages,
+        "temperature": 0.3,
+    }
+    try:
+        resp = httpx.post(url, headers=headers, json=body, timeout=30)
+        if resp.status_code >= 400:
+            alt_url = settings.llm_base_url.rstrip("/") + "/chat/completions"
+            resp = httpx.post(alt_url, headers=headers, json=body, timeout=30)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+    except Exception:
+        logger.warning("llm_generate failed")
+        return None
+
+
 def _content_prompt(req: "ContentGenerateRequest") -> str:
     """把 content 请求字段拼成给 Bot 的指令，要求其以 JSON 返回 title/content/suggestions。"""
     return f"""平台：{platform_name(req.platform)}
@@ -208,7 +266,7 @@ def _content_prompt(req: "ContentGenerateRequest") -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# POST /content/generate — 内容生成（Coze Bot Chat / 本地模板降级）
+# POST /content/generate — 内容生成（9200 知识检索 → DeepSeek LLM → 本地模板降级）
 # 前端契约：{ title, content, suggestions[] }  ← 不可变更
 # ──────────────────────────────────────────────────────────────────────
 @router.post("/content/generate", response_model=ApiResponse)
@@ -226,24 +284,26 @@ async def generate_content(
     content_detail: Optional[dict] = None
     meta = meta_fallback(quality_score=60)
 
-    # ── 真实链路：灰度开启且配置完整时走 Coze Bot Chat（content 专用 Bot）──
-    if coze_client.content_configured():
-        try:
-            raw = await coze_client.chat_bot(
-                message=_content_prompt(req),
-                user_id=user_id,
-                bot_id=settings.coze_content_bot_id,
-            )
-            data = _extract_bot_json(raw)  # 容错：代码块 / 括号匹配 / 整体解析；失败 None
+    # ── 真实链路：9200 知识检索 → DeepSeek LLM ──
+    try:
+        kb_context = _kb_search(f"{req.theme} {platform_name(req.platform)} 美业内容文案")
+        prompt = _content_prompt(req)
+        if kb_context:
+            prompt = f"参考知识库内容：\n{kb_context}\n\n{prompt}"
+        raw = _llm_generate([
+            {"role": "system", "content": _WEAPP_LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        if raw:
+            data = _extract_bot_json(raw)
             if isinstance(data, dict):
                 t, ct, sg = flatten_content(data, req.theme, req.platform)
-                if ct:  # 有可渲染正文才算有效输出
+                if ct:
                     title, content_text, suggestions, content_detail = t, ct, sg, data
                     meta = meta_success(quality_score=88)
-            # 解析失败或无正文 → content_text 仍为空 → 走下方模板兜底（不 500）
-        except coze_client.CozeError:
-            logger.info("content: coze failed, fallback to template | theme=%s", req.theme)
-            content_text = ""  # 触发下方模板兜底
+    except Exception:
+        logger.info("content: pipeline failed, fallback to template | theme=%s", req.theme)
+        content_text = ""
 
     # ── 降级链路：本地模板 ──
     if not content_text:
@@ -286,7 +346,7 @@ async def generate_content(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# POST /ai/chat — 专业问答（Coze Bot Chat / 本地模板降级）
+# POST /ai/chat — 专业问答（9200 知识检索 → DeepSeek LLM → 本地模板降级）
 # 前端契约：{ answer }  ← 不可变更
 # ──────────────────────────────────────────────────────────────────────
 @router.post("/ai/chat", response_model=ApiResponse)
@@ -300,14 +360,22 @@ async def ai_chat(
     answer = ""
     meta = meta_fallback(quality_score=60)
 
-    # ── 真实链路：灰度开启且配置完整时调 Coze Bot ──
-    if coze_client.chat_configured():
-        try:
-            answer = await coze_client.chat_bot(req.message, user_id)
+    # ── 真实链路：9200 知识检索 → DeepSeek LLM ──
+    try:
+        kb_context = _kb_search(f"美业门店 {req.module} {req.message}")
+        user_prompt = req.message
+        if kb_context:
+            user_prompt = f"参考知识库内容：\n{kb_context}\n\n用户问题：{req.message}"
+        raw = _llm_generate([
+            {"role": "system", "content": _WEAPP_LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ])
+        if raw:
+            answer = raw.strip()
             meta = meta_success(quality_score=86)
-        except coze_client.CozeError:
-            logger.info("chat: coze failed, fallback to template | module=%s", req.module)
-            answer = ""  # 触发下方模板兜底
+    except Exception:
+        logger.info("chat: pipeline failed, fallback to template | module=%s", req.module)
+        answer = ""
 
     # ── 降级链路：本地模板 ──
     if not answer:
@@ -332,7 +400,7 @@ async def ai_chat(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# POST /private/generate — 私域话术（Coze Bot Chat / 本地模板降级）
+# POST /private/generate — 私域话术（9200 知识检索 → DeepSeek LLM → 本地模板降级）
 # 前端契约：{ answer, tips[] }  ← 不可变更
 # ──────────────────────────────────────────────────────────────────────
 @router.post("/private/generate", response_model=ApiResponse)
@@ -350,21 +418,21 @@ async def generate_private(
     tips: list = []
     meta = meta_fallback(quality_score=60)
 
-    # ── 真实链路：灰度开启且配置完整时走 Coze Bot Chat ──
-    if coze_client.private_configured():
-        try:
-            # 构造带场景上下文的 prompt
-            prompt = f"""场景：{scene_type} - {req.scene_name or ''}
+    # ── 真实链路：9200 知识检索 → DeepSeek LLM ──
+    try:
+        kb_context = _kb_search(f"美业门店 私域话术 {scene_type} {req.scene_name or ''}")
+        prompt = f"""场景：{scene_type} - {req.scene_name or ''}
 客户信息：{req.customer_info or ''}
 情境：{req.situation}
 风格：{req.style or ''}
 请生成专业的美业私密咨询回答，输出JSON格式：{{"answer":"回答内容","tips":["建议1","建议2"]}}"""
-            raw = await coze_client.chat_bot(
-                message=prompt,
-                user_id=user_id,
-                bot_id=settings.coze_private_bot_id,
-            )
-            # 从 Bot 回复中容错解析 JSON（复用 _extract_bot_json 三级策略）
+        if kb_context:
+            prompt = f"参考知识库内容：\n{kb_context}\n\n{prompt}"
+        raw = _llm_generate([
+            {"role": "system", "content": _WEAPP_LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        if raw:
             data = _extract_bot_json(raw)
             if data:
                 answer = (data.get("answer") or "").strip()
@@ -372,9 +440,9 @@ async def generate_private(
                 tips = t if isinstance(t, list) else []
             if answer:
                 meta = meta_success(quality_score=87)
-        except coze_client.CozeError:
-            logger.info("private: coze failed, fallback to template | scene=%s", scene_type)
-            answer = ""  # 触发下方模板兜底
+    except Exception:
+        logger.info("private: pipeline failed, fallback to template | scene=%s", scene_type)
+        answer = ""
 
     # ── 降级链路：本地模板 ──
     if not answer:

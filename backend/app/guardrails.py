@@ -12,11 +12,11 @@ from typing import Any, Dict, List, Optional
 # ──────────────────────────────────────────────────────────────────────
 # 真实标签三态（绝不假标）
 # ──────────────────────────────────────────────────────────────────────
-def meta_success(source: str = "coze", quality_score: int = 88) -> Dict[str, Any]:
-    """Coze 真实生成成功时的标签元数据。"""
+def meta_success(source: str = "aliyun", quality_score: int = 88) -> Dict[str, Any]:
+    """阿里云知识库真实生成成功时的标签元数据。"""
     return {
         "source": source,
-        "confidence_label": "扣子知识库+模型生成",
+        "confidence_label": "阿里云知识库+模型生成",
         "confidence": "medium",
         "degraded": False,
         "quality_score": quality_score,
@@ -35,10 +35,10 @@ def meta_fallback(quality_score: int = 60) -> Dict[str, Any]:
 
 
 def meta_guardrail_corrected(quality_score: int = 88) -> Dict[str, Any]:
-    """Coze 真实生成但被后端追加合规修正时的标签元数据。"""
+    """阿里云知识库真实生成但被后端追加合规修正时的标签元数据。"""
     return {
-        "source": "coze",
-        "confidence_label": "扣子知识库+模型生成(含合规修正)",
+        "source": "aliyun",
+        "confidence_label": "阿里云知识库+模型生成(含合规修正)",
         "confidence": "medium",
         "degraded": False,
         "quality_score": quality_score,
