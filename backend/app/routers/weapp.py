@@ -202,7 +202,7 @@ def _kb_search(query: str, top_k: int = 5) -> str:
         resp = httpx.post(
             "http://127.0.0.1:9200/search",
             json={"query": query, "top_k": top_k},
-            timeout=10,
+            timeout=20,
         )
         if resp.status_code != 200:
             return ""
