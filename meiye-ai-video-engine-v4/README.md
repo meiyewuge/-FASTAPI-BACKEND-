@@ -97,7 +97,8 @@ curl localhost:8000/api/cost/summary         # 成本统计
 - 多租户：所有表带 `tenant_id`，查询强制隔离
 - 成本系统：按租户记录 + 配额熔断（超额返回 `code 4029`）
 
-🟡 **待接真实能力** —— 视频生成/配音目前走 Mock 适配器；接真实 provider 只需在
-`backend/utils/video_provider.py` 实现一个子类并在 `.env` 切 `VIDEO_PROVIDER`，上层不动。
+🟡 **待接真实能力** —— 视频生成走 Mock；**生产级 Provider 框架已就位**（统一接口 +
+异步轮询基类 `HTTPVideoProvider` + `FallbackProvider` 兜底）。接真实厂商（可灵/即梦/Runway/火山）
+只需照 [`docs/provider.md`](docs/provider.md) 写一个子类并切 `.env`，上层零改动；真实失败自动回退 Mock。
 
 前端（Login + Workbench）为 skeleton，由 Qoder 接管。后续按 `docs/workflow.md` 分支策略推进。
