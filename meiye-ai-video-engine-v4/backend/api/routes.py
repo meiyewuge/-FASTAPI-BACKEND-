@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from api.deps import get_db, get_tenant_id
 from config import settings
+from b_engine.strategies import STRATEGIES
 from intent import parse_intent
 from models import Store, Video
 from schemas.dto import AGenerateIn, BGenerateIn, IntentIn, LoginIn, Resp
@@ -107,12 +108,22 @@ def b_generate(
     """B台：母视频 → 批量裂变（异步，返回 task_id）。"""
     try:
         task = orchestrator.submit_b(
-            db, tenant_id, body.source_video_id, body.count, body.prompt
+            db, tenant_id, body.source_video_id, body.count, body.prompt, body.strategy
         )
     except QuotaExceeded as e:
         return Resp(code=4029, msg=str(e))
     bg.add_task(execute_task, task.id)
     return Resp(data={"task_id": task.id})
+
+
+@api_router.get("/b/strategies")
+def b_strategies() -> Resp:
+    """B台可选内容策略（供前端选择）。"""
+    items = [
+        {"key": k, "label": v["label"], "goal": v["goal"], "cta": v["cta"]}
+        for k, v in STRATEGIES.items()
+    ]
+    return Resp(data={"items": items})
 
 
 # ---------------- 任务 ----------------

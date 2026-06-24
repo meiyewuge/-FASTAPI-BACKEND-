@@ -8,13 +8,14 @@ from sqlalchemy.orm import Session
 
 from b_engine.remixer import remix_videos
 from models import Video
-from services import cost_service
+from services import cost_service, store_service
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     source_id = payload["source_video_id"]
     count = payload.get("count", 10)
     prompt = payload.get("prompt")
+    strategy = payload.get("strategy", "mix")
 
     source = (
         db.query(Video)
@@ -24,12 +25,19 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     if source is None:
         raise ValueError(f"母视频不存在或不属于该租户：id={source_id}")
 
-    outputs = remix_videos(tenant_id, source.download_url, count, prompt)
+    # 门店差异化：取租户门店作为差异化/归因目标（可为空）
+    stores = [
+        {"id": s.id, "name": s.name, "city": s.city}
+        for s in store_service.list_stores(db, tenant_id)
+    ]
+
+    outputs = remix_videos(tenant_id, source.download_url, count, prompt, strategy, stores)
 
     videos = []
     for o in outputs:
         v = Video(
             tenant_id=tenant_id,
+            store_id=o.get("store_id"),
             type="viral",
             title=o["title"],
             source_video_id=source.id,
@@ -47,6 +55,8 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
             {
                 "video_id": v.id,
                 "type": "viral",
+                "strategy": o.get("strategy"),
+                "store_id": o.get("store_id"),
                 "download_url": v.download_url,
                 "share_url": v.share_url,
             }

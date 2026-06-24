@@ -26,7 +26,12 @@ def submit_a(db: Session, tenant_id: str, prompt: str, title: str | None = None)
 
 
 def submit_b(
-    db: Session, tenant_id: str, source_video_id: int, count: int, prompt: str | None = None
+    db: Session,
+    tenant_id: str,
+    source_video_id: int,
+    count: int,
+    prompt: str | None = None,
+    strategy: str | None = "mix",
 ) -> Task:
     estimated = count * settings.cost_per_clip
     cost_service.ensure_budget(db, tenant_id, estimated)
@@ -34,7 +39,12 @@ def submit_b(
         db,
         tenant_id,
         "b",
-        {"source_video_id": source_video_id, "count": count, "prompt": prompt},
+        {
+            "source_video_id": source_video_id,
+            "count": count,
+            "prompt": prompt,
+            "strategy": strategy,
+        },
     )
 
 

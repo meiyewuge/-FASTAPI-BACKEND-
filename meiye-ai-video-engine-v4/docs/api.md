@@ -54,15 +54,27 @@
 // 成本超配额时：{ "code":4029, "msg":"...成本熔断..." }
 ```
 
-## B台 · 混剪裂变
+## B台 · 混剪裂变（商业内容生成器）
+内容策略分型（引流型/成交型/IP型/招商型/获客型）+ 情绪结构 4 拍 + 门店差异化。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/b/generate` | 母视频 → 批量裂变（异步，10~50 条） |
+| POST | `/api/b/generate` | 母视频 → 批量裂变（异步，10~50 条，可选策略） |
+| GET  | `/api/b/strategies` | 可选内容策略列表（供前端选择） |
 
 ```jsonc
 // POST /api/b/generate
-{ "source_video_id": 1, "count": 20, "prompt": "可选" }
+{ "source_video_id": 1, "count": 20,
+  "strategy": "mix",            // mix(轮换5型) | 引流型 | 成交型 | IP型 | 招商型 | 获客型
+  "prompt": "可选主题" }
 → { "code":0, "data": { "task_id": "..." } }
+
+// 任务结果中每条裂变带 strategy + store_id（门店归因），
+// meta.changes 含 structure(情绪结构4拍) 与 store_version(如「广州版」)
+
+// GET /api/b/strategies
+→ { "code":0, "data": { "items": [
+     { "key":"引流型", "label":"引流型", "goal":"涨粉引流", "cta":"关注解锁更多干货" }, ... ] } }
 ```
 
 ## 任务

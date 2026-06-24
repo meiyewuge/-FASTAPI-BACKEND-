@@ -37,3 +37,6 @@ class BGenerateIn(BaseModel):
     source_video_id: int
     count: int = Field(10, ge=1, le=50, description="产出条数 10~50")
     prompt: Optional[str] = None
+    strategy: Optional[str] = Field(
+        "mix", description="内容策略：mix(轮换) / 引流型 / 成交型 / IP型 / 招商型 / 获客型"
+    )
