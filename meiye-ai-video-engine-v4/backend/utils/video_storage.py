@@ -17,20 +17,24 @@ import httpx
 from config import settings
 
 
-def local_path(video_id: int) -> str:
-    return os.path.join(settings.storage_dir, f"{video_id}.mp4")
+def local_path(video_id: int, subdir: str = "") -> str:
+    return os.path.join(settings.storage_dir, subdir, f"{video_id}.mp4")
 
 
-def local_url(video_id: int) -> str | None:
+def local_url(video_id: int, subdir: str = "") -> str | None:
     if not settings.storage_base_url:
         return None
-    return f"{settings.storage_base_url.rstrip('/')}/{video_id}.mp4"
+    base = settings.storage_base_url.rstrip("/")
+    seg = f"{subdir}/" if subdir else ""
+    return f"{base}/{seg}{video_id}.mp4"
 
 
-def download_and_store(video_id: int, cdn_url: str, timeout: float = 60.0) -> dict:
-    """下载 CDN mp4 到本地。返回 {cdn_url, local_path, local_url, ok}。失败不抛，回退 CDN。"""
-    os.makedirs(settings.storage_dir, exist_ok=True)
-    path = local_path(video_id)
+def download_and_store(video_id: int, cdn_url: str, subdir: str = "", timeout: float = 60.0) -> dict:
+    """下载 CDN mp4 到本地（按 subdir 分类：mother/viral）。
+    返回 {cdn_url, local_path, local_url, ok}。失败不抛，回退 CDN。"""
+    target_dir = os.path.join(settings.storage_dir, subdir)
+    os.makedirs(target_dir, exist_ok=True)
+    path = local_path(video_id, subdir)
     try:
         with httpx.stream("GET", cdn_url, timeout=timeout, follow_redirects=True) as r:
             r.raise_for_status()
@@ -43,7 +47,7 @@ def download_and_store(video_id: int, cdn_url: str, timeout: float = 60.0) -> di
     return {
         "cdn_url": cdn_url,
         "local_path": path if ok else None,
-        "local_url": local_url(video_id) if ok else None,
+        "local_url": local_url(video_id, subdir) if ok else None,
         "ok": ok,
     }
 

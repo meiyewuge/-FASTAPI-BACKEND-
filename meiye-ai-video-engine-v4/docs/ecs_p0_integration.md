@@ -25,10 +25,11 @@
    ALTER TABLE videos ADD COLUMN cdn_url   VARCHAR(1024);
    ALTER TABLE videos ADD COLUMN local_url VARCHAR(512);
    ```
-4. **本地存储目录 + nginx 静态**：
+4. **本地存储目录 + nginx 静态**（母/裂变分目录，代码会自动建 mother/ viral/）：
    ```
-   mkdir -p /opt/v4-video-engine/storage/videos
+   mkdir -p /opt/v4-video-engine/storage/videos/{mother,viral}
    # nginx：location /static/videos/ { alias /opt/v4-video-engine/storage/videos/; }
+   # 落盘：mother/{id}.mp4、viral/{id}.mp4
    ```
 5. **.env 开启存储**：
    ```

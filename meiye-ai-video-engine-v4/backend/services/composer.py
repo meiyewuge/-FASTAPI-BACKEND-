@@ -22,6 +22,16 @@ def plan_segments(total_seconds: int, segment_seconds: int = 5) -> list[int]:
     return [segment_seconds] * n
 
 
+def segment_options(total_seconds: int) -> dict:
+    """长视频切片预设：主 15s / 备 10s / 裂变 5s。返回各方案 segments list。
+    例 120s → {"main":[15×8], "backup":[10×12], "viral":[5×24]}。"""
+    return {
+        "main": plan_segments(total_seconds, 15),
+        "backup": plan_segments(total_seconds, 10),
+        "viral": plan_segments(total_seconds, 5),
+    }
+
+
 def split_storyboard(prompt: str, n: int) -> list[str]:
     """分镜拆解（规则版）：把一句话拆成 n 个分镜提示。可替换为 LLM 拆解器。"""
     parts = [p.strip() for p in prompt.replace("，", "。").split("。") if p.strip()]

@@ -33,7 +33,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
 
     # P0：生成成功后落本地（本地优先，CDN 兜底）。dev/mock 默认关闭，ECS 置 STORAGE_ENABLED=true。
     if settings.storage_enabled:
-        st = video_storage.download_and_store(video.id, cdn_url)
+        st = video_storage.download_and_store(video.id, cdn_url, subdir="mother")
         video.local_url = st["local_url"]
         video.download_url = video_storage.resolve_download_url(cdn_url, st["local_url"])
 

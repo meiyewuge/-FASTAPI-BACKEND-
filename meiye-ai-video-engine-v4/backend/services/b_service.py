@@ -55,7 +55,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         db.add(v)
         db.flush()
         if settings.storage_enabled:
-            st = video_storage.download_and_store(v.id, o["url"])
+            st = video_storage.download_and_store(v.id, o["url"], subdir="viral")
             v.local_url = st["local_url"]
             v.download_url = video_storage.resolve_download_url(o["url"], st["local_url"])
         provider = o["meta"].get("served_by") or o["meta"].get("provider") or ""
