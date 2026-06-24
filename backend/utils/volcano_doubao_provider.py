@@ -49,7 +49,12 @@ class _VolcanoBase(HTTPVideoProvider):
 
     def _submit(self, prompt: str, params: dict) -> str:
         url = f"{self.base}/api/v3/contents/generations/tasks"
-        payload = {"model": self.model, "content": [{"type": "text", "text": prompt}]}
+        content = [{"type": "text", "text": prompt}]
+        # B7：B台视频输入（video-to-video）——母视频 mp4 作为输入参考，含视频输入计费更省(0.57元/秒)。
+        # ⚠️ 字段名按火山「含视频输入」API 文档确认（image_url / video_url），ECS 联调时校准。
+        if params.get("source"):
+            content.append({"type": "image_url", "image_url": {"url": params["source"]}})
+        payload = {"model": self.model, "content": content}
         # Seedance 2.0 supports duration [4,15] and resolution 480p/720p/1080p
         if params.get("duration"):
             payload["duration"] = int(params["duration"])
