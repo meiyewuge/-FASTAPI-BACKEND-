@@ -1,10 +1,38 @@
-"""A台 · 母视频生成引擎（skeleton）。
+"""A台 · 母视频生成引擎。
 
-职责：一句话需求 → AI 脚本 → 调用视频生成 → 输出 1 条精品母视频。
-约束：禁止 import b_engine；共享能力经 utils / services。
+链路：一句话需求 → 脚本 → 分镜 → 调用视频 provider → 母视频。
+约束：禁止 import b_engine；视频能力经 utils.video_provider。
+引擎保持纯净：不碰 DB，返回数据 + 成本，由 service 落库与记账。
 """
 
+from __future__ import annotations
 
-def generate_mother_video(tenant_id: str, prompt: str) -> dict:
-    """生成 1 条母视频，返回 video 元信息（含下载/分发链接）。"""
-    raise NotImplementedError
+from typing import Any
+
+from utils.video_provider import get_provider
+
+
+def build_script(prompt: str) -> str:
+    """把一句话需求扩写为脚本（占位：真实可接 LLM）。"""
+    return f"【脚本】围绕「{prompt}」：开场抓眼球 → 核心卖点 → 行动号召。"
+
+
+def build_storyboard(script: str) -> list[str]:
+    """脚本 → 分镜列表（占位：按句切分）。"""
+    parts = [s.strip() for s in script.replace("：", "。").split("。") if s.strip()]
+    return parts or [script]
+
+
+def generate_mother_video(tenant_id: str, prompt: str) -> dict[str, Any]:
+    """生成 1 条母视频，返回 {title, url, cover, duration, cost, meta}。"""
+    script = build_script(prompt)
+    storyboard = build_storyboard(script)
+    result = get_provider().generate_mother(tenant_id, prompt, storyboard)
+    return {
+        "title": prompt[:50],
+        "url": result["url"],
+        "cover": result.get("cover"),
+        "duration": result.get("duration"),
+        "cost": result["cost"],
+        "meta": {"prompt": prompt, "script": script, **result.get("meta", {})},
+    }

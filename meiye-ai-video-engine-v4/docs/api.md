@@ -1,77 +1,88 @@
-# API 设计 · api.md
+# API 列表 · api.md
 
-所有接口统一前缀 `/api`。鉴权通过 `Authorization: Bearer <token>`，后端据此解析 `tenant_id`。
-本文件为 **契约草案（skeleton）**，字段会在实现阶段细化。
+统一前缀 `/api`。统一响应包 `{ "code": 0, "msg": "ok", "data": ... }`，`code != 0` 为错误。
+租户：请求头 `X-Tenant-Id`（缺省 = `default`）。视频生成异步：提交返回 `task_id`，轮询任务状态。
 
-## 约定
+> 实现状态：✅ 全部可运行（默认 Mock 视频 provider）。接真实视频 provider 见 `backend/utils/video_provider.py`。
 
-- 统一响应包：`{ "code": 0, "msg": "ok", "data": {...} }`，`code != 0` 表示错误。
-- 视频生成为异步：提交后返回 `task_id`，前端轮询任务状态。
-- 所有列表/任务均按 `tenant_id` 隔离。
+## 鉴权
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/auth/login` | 手机号/token 登录，返回 `{token, tenant_id}` |
 
-## 1. 鉴权
-
-### POST /api/auth/login
-登录，自动绑定 tenant_id。
-```json
-// req
-{ "phone": "138...", "code": "1234" }     // 或 { "token": "..." }
-// resp.data
-{ "token": "jwt...", "tenant_id": "t_001" }
+```jsonc
+// POST /api/auth/login
+{ "phone": "13800000000" }          // 或 { "token": "..." }
+→ { "code":0, "data": { "token":"tk_default", "tenant_id":"default" } }
 ```
 
-## 2. A台 · 母视频
+## A台 · 母视频
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/a/generate` | 一句话 → 母视频（异步） |
 
-### POST /api/a/generate
-输入一句话需求，生成 1 条精品母视频（异步）。
-```json
-// req
-{ "prompt": "给做轻医美的门店做一条招商视频" }
-// resp.data
-{ "task_id": "task_a_..." }
+```jsonc
+// POST /api/a/generate
+{ "prompt": "给轻医美门店做一条招商视频", "title": "可选" }
+→ { "code":0, "data": { "task_id": "..." } }
+// 成本超配额时：{ "code":4029, "msg":"...成本熔断..." }
 ```
 
-## 3. B台 · 混剪裂变
+## B台 · 混剪裂变
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/b/generate` | 母视频 → 批量裂变（异步，10~50 条） |
 
-### POST /api/b/generate
-选择母视频，批量产出裂变版本（异步）。
-```json
-// req
-{ "source_video_id": "v_001", "count": 20, "prompt": "门店矩阵分发，去重" }
-// resp.data
-{ "task_id": "task_b_..." }
+```jsonc
+// POST /api/b/generate
+{ "source_video_id": 1, "count": 20, "prompt": "可选" }
+→ { "code":0, "data": { "task_id": "..." } }
 ```
 
-## 4. 任务状态
+## 任务
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET  | `/api/tasks/{task_id}` | 查询任务（pending/running/done/failed + result） |
+| GET  | `/api/tasks` | 当前租户任务列表 |
+| POST | `/api/tasks/{task_id}/retry` | 重试（仅 failed 任务） |
 
-### GET /api/tasks/{task_id}
-```json
-// resp.data
-{
-  "task_id": "task_a_...",
-  "type": "a | b",
-  "status": "pending | running | done | failed",
-  "progress": 0.6,
-  "outputs": [
-    { "video_id": "v_010", "download_url": "...", "share_url": "..." }
-  ]
-}
+```jsonc
+// GET /api/tasks/{task_id}
+→ { "code":0, "data": {
+      "task_id":"...", "type":"a", "status":"done", "progress":1.0,
+      "retry_count":0,
+      "result": { "videos":[ { "video_id":1, "type":"mother",
+                  "download_url":"...", "share_url":"..." } ] },
+      "error": null } }
 ```
 
-## 5. 历史视频
+## 历史视频
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/videos?type=mother\|viral&page=1&page_size=20` | 视频列表，按租户隔离 |
 
-### GET /api/videos?type=mother|viral&page=1
-```json
-// resp.data
-{ "items": [ { "video_id": "...", "type": "mother", "created_at": "...", "download_url": "...", "share_url": "..." } ], "total": 123 }
+## 成本
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/cost/summary` | 当前租户：配额/已花/剩余/分项 |
+
+```jsonc
+→ { "code":0, "data": {
+      "tenant_id":"default", "quota":100.0, "spend":1.5, "remaining":98.5,
+      "by_api": { "video.generate.a":1.0, "video.remix.b":0.5 } } }
 ```
 
-## 错误码（草案）
+## 其它
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/health` | 健康检查 |
+| GET | `/api/info` | 服务信息（当前 provider/env） |
+| GET | `/docs` | Swagger 文档（自动） |
 
+## 错误码
 | code | 含义 |
 | --- | --- |
 | 0 | 成功 |
-| 1001 | 未登录 / token 失效 |
-| 2001 | 参数错误 |
+| 2001 | 参数错误（如非失败任务重试） |
 | 3001 | 任务不存在 |
-| 5001 | 引擎/上游服务错误 |
+| 4029 | 成本熔断（超配额） |

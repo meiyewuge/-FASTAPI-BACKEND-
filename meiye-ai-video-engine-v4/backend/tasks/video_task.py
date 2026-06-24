@@ -1,10 +1,17 @@
-"""任务系统（独立模块，skeleton）。
+"""任务系统（独立模块）：创建 / 查询 / 状态流转 / retry。
 
-视频生成为长耗时操作，必须在此异步执行，API 层只投递 + 查询状态。
-后续可接 Celery / RQ / Arq 等队列；当前仅定义状态枚举与接口占位。
+异步执行见 tasks.runner。状态机：pending → running → done | failed。
 """
 
+from __future__ import annotations
+
+import json
+import uuid
 from enum import Enum
+
+from sqlalchemy.orm import Session
+
+from models import Task
 
 
 class TaskStatus(str, Enum):
@@ -14,16 +21,61 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
-def submit_mother_video_task(tenant_id: str, prompt: str) -> str:
-    """A台：投递母视频生成任务，返回 task_id。"""
-    raise NotImplementedError
+def create_task(db: Session, tenant_id: str, ttype: str, payload: dict) -> Task:
+    task = Task(
+        id=uuid.uuid4().hex,
+        tenant_id=tenant_id,
+        type=ttype,
+        status=TaskStatus.PENDING.value,
+        payload=json.dumps(payload, ensure_ascii=False),
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return task
 
 
-def submit_viral_video_task(tenant_id: str, source_video_id: str, count: int) -> str:
-    """B台：投递混剪裂变任务，返回 task_id。"""
-    raise NotImplementedError
+def get_task(db: Session, tenant_id: str, task_id: str) -> Task | None:
+    return (
+        db.query(Task)
+        .filter(Task.id == task_id, Task.tenant_id == tenant_id)
+        .first()
+    )
 
 
-def get_task_status(tenant_id: str, task_id: str) -> dict:
-    """查询任务状态与产出。"""
-    raise NotImplementedError
+def get_task_any(db: Session, task_id: str) -> Task | None:
+    return db.get(Task, task_id)
+
+
+def list_tasks(db: Session, tenant_id: str, limit: int = 50) -> list[Task]:
+    return (
+        db.query(Task)
+        .filter(Task.tenant_id == tenant_id)
+        .order_by(Task.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def set_status(
+    db: Session,
+    task_id: str,
+    status: str,
+    progress: float | None = None,
+    result: str | None = None,
+    error: str | None = None,
+    inc_retry: bool = False,
+) -> None:
+    task = db.get(Task, task_id)
+    if task is None:
+        return
+    task.status = status
+    if progress is not None:
+        task.progress = progress
+    if result is not None:
+        task.result = result
+    if error is not None:
+        task.error = error
+    if inc_retry:
+        task.retry_count = (task.retry_count or 0) + 1
+    db.commit()

@@ -69,7 +69,33 @@ meiye-ai-video-engine-v4/
 3. 所有请求统一走 `/api/*`；禁止前端直连数据库、禁止引擎互调。
 4. 任务系统独立模块（`backend/tasks/video_task.py`）。
 
+## 后端快速启动
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # 默认 SQLite + Mock provider，零依赖即可跑
+uvicorn main:app --reload     # http://127.0.0.1:8000/docs
+```
+
+最小闭环验证：
+```bash
+curl -X POST localhost:8000/api/a/generate -H 'Content-Type: application/json' -d '{"prompt":"门店招商视频"}'
+curl localhost:8000/api/tasks/<task_id>      # status=done 后含 video
+curl localhost:8000/api/cost/summary         # 成本统计
+```
+
 ## 当前状态
 
-🟡 **脚手架阶段（skeleton）** —— 目录结构 + 架构文档 + 占位模块已就位，**尚未实现真实视频生成逻辑**。
-后续按 `docs/workflow.md` 分支策略（feature/a、feature/b、feature/ui）逐步落地。
+🟢 **后端地基可运行** —— A台/B台/任务系统/成本系统/API 全部跑通（默认 Mock 视频 provider）：
+- A台：一句话 → 脚本 → 分镜 → provider → 母视频
+- B台：母视频 → 切片/重组/改字幕开头结尾 → 10~50 条裂变视频
+- 调度层 orchestrator：成本预检（熔断）+ 任务投递 + 按类型分派
+- 多租户：所有表带 `tenant_id`，查询强制隔离
+- 成本系统：按租户记录 + 配额熔断（超额返回 `code 4029`）
+
+🟡 **待接真实能力** —— 视频生成/配音目前走 Mock 适配器；接真实 provider 只需在
+`backend/utils/video_provider.py` 实现一个子类并在 `.env` 切 `VIDEO_PROVIDER`，上层不动。
+
+前端（Login + Workbench）为 skeleton，由 Qoder 接管。后续按 `docs/workflow.md` 分支策略推进。
