@@ -244,6 +244,43 @@ export default function Workbench() {
     navigate("/login", { replace: true });
   };
 
+  // ---- 费用预估（F2 核心）----
+  // 从 metrics.videos_per_cost_unit 推导单条成本
+  const costPerVideo = metrics && metrics.videos_per_cost_unit > 0
+    ? 1 / metrics.videos_per_cost_unit
+    : null;
+
+  // 从输入文本中提取数量（如"10个" → 10），未识别默认 1
+  const parseCount = (text: string): number => {
+    const m = text.match(/(\d+)\s*[个条份张]/);
+    return m ? parseInt(m[1], 10) : 1;
+  };
+
+  const batchCount = parseCount(prompt);
+  const estimateBatch = costPerVideo ? costPerVideo * batchCount : null;
+  const estimateA = costPerVideo; // 单条
+  const estimateB = costPerVideo ? costPerVideo * 5 : null; // B台默认5条
+
+  // ---- 批量下载（F8 关键）----
+  const handleBatchDownload = (videoList: VideoItem[]) => {
+    const downloadable = videoList.filter((v) => v.download_url);
+    if (downloadable.length === 0) {
+      showToast("没有可下载的视频");
+      return;
+    }
+    downloadable.forEach((v, i) => {
+      setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = v.download_url;
+        a.download = v.title || `视频_${v.video_id}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }, i * 300); // 间隔 300ms 避免浏览器拦截
+    });
+    showToast(`正在下载 ${downloadable.length} 个视频`);
+  };
+
   const resultVideos = activeTask?.result?.videos || [];
   const progressPct = Math.round((activeTask?.progress || 0) * 100);
 
@@ -305,6 +342,23 @@ export default function Workbench() {
             🔁 B台·裂变
           </button>
         </div>
+        {/* F2: 费用预估 */}
+        {costPerVideo && prompt.trim() && (
+          <div className="cost-estimate">
+            <span className="cost-estimate-label">预估费用：</span>
+            {batchCount > 1 && (
+              <span>批量 {batchCount} 条 ≈ <strong>¥{estimateBatch!.toFixed(2)}</strong></span>
+            )}
+            <span className="cost-estimate-sep">|</span>
+            <span>A台单条 ≈ ¥{estimateA!.toFixed(2)}</span>
+            <span className="cost-estimate-sep">|</span>
+            <span>B台5条 ≈ ¥{estimateB!.toFixed(2)}</span>
+            <span className="cost-estimate-sep">|</span>
+            <span className="cost-estimate-remaining">
+              剩余额度 ¥{cost?.remaining?.toFixed(2) ?? "--"}
+            </span>
+          </div>
+        )}
       </section>
 
       {/* ===== 3. 任务状态区 ===== */}
@@ -353,7 +407,17 @@ export default function Workbench() {
         {/* 生成结果视频 */}
         {resultVideos.length > 0 && (
           <div className="result-videos">
-            <h3>生成结果（{resultVideos.length} 条）</h3>
+            <div className="result-header">
+              <h3>生成结果（{resultVideos.length} 条）</h3>
+              {resultVideos.some((v) => v.download_url) && (
+                <button
+                  className="btn btn-download-all"
+                  onClick={() => handleBatchDownload(resultVideos)}
+                >
+                  📥 全部下载（{resultVideos.filter((v) => v.download_url).length}）
+                </button>
+              )}
+            </div>
             <div className="video-grid">
               {resultVideos.map((v, i) => (
                 <div key={v.video_id || i} className="video-card">
