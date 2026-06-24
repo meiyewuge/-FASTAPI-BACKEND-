@@ -27,14 +27,12 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     db.add(video)
     db.flush()
 
-    cost = data["cost"]
     provider = data["meta"].get("served_by") or data["meta"].get("provider") or ""
     cost_service.record(
         db,
         tenant_id,
         "video.generate.a",
-        cost["units"],
-        cost["amount"],
+        data.get("units", 1),
         task_id,
         provider=provider,
         store_id=payload.get("store_id"),

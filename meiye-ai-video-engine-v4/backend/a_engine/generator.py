@@ -33,6 +33,6 @@ def generate_mother_video(tenant_id: str, prompt: str) -> dict[str, Any]:
         "url": result["url"],
         "cover": result.get("cover"),
         "duration": result.get("duration"),
-        "cost": result["cost"],
+        "units": result.get("units", 1),
         "meta": {"prompt": prompt, "script": script, **result.get("meta", {})},
     }

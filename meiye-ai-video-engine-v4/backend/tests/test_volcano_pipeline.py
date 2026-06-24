@@ -30,7 +30,6 @@ def _fresh_app():
     config.settings.video_fallback = True
     config.settings.provider_retries = 3
     config.settings.video_provider = "volcano_seedance"
-    config.settings.volc_auth_mode = "bearer"
     from fastapi.testclient import TestClient
     from main import app
     _db.init_db()
@@ -110,6 +109,21 @@ def test_mock_fallback_on_failure():
     assert last.provider == "mock"
 
 
+def test_two_providers_split():
+    # volcano_seedance = Bearer；volcano_legacy = AK/SK 签名（双 provider，不混用）
+    config.settings.video_api_key = "ark-key"
+    config.settings.volc_ak = "AKID"
+    config.settings.volc_sk = "SECRET"
+    from utils.volcano_doubao_provider import VolcanoLegacyProvider, VolcanoSeedanceProvider
+
+    sd = VolcanoSeedanceProvider()._auth_headers("POST", "https://x/api", b"{}")
+    assert sd["Authorization"] == "Bearer ark-key"
+
+    lg = VolcanoLegacyProvider()._auth_headers("POST", "https://x/api", b"{}")
+    assert lg["Authorization"].startswith("HMAC-SHA256 Credential=AKID/")
+    assert "X-Date" in lg and "X-Content-Sha256" in lg
+
+
 def test_aksk_signature_deterministic():
     from datetime import datetime, timezone
     from utils import auth_sign
@@ -126,7 +140,8 @@ def test_aksk_signature_deterministic():
 
 if __name__ == "__main__":
     for fn in [test_a_pipeline_and_cost, test_b_remix_pipeline,
-               test_mock_fallback_on_failure, test_aksk_signature_deterministic]:
+               test_mock_fallback_on_failure, test_two_providers_split,
+               test_aksk_signature_deterministic]:
         fn()
         print(f"  ✔ {fn.__name__}")
     if os.path.exists("./_pipeline_test.db"):

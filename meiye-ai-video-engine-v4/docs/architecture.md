@@ -73,3 +73,15 @@
 - 每个请求携带 token，后端解析出 `tenant_id` 并贯穿 service / task / 存储路径。
 - 数据模型从第一天就带 `tenant_id` 维度，便于后续按租户拆分与计费。
 - 成本统计、调用日志按 `tenant_id` 聚合。
+
+## 7. 三层解耦：业务 / 执行 / 观测
+
+```
+[业务层] intent → orchestrator → store / a_engine / b_engine
+[执行层] provider（纯执行：只产视频，返回 url/duration/units，不决定金额）
+[观测层] cost_service（独立计价 + 记录 + 配额熔断）
+```
+
+- **provider 纯执行**：返回 `units`（用量），不返回金额。换厂商（火山/可灵/Runway）不影响计费。
+- **计价收敛在 cost_service**：金额 = 计价层换算（`price(api_name, units, duration)`）。改单价/改计费规则只动这一层。
+- **一个模型 = 一套鉴权**：`volcano_seedance`(Bearer) 与 `volcano_legacy`(AK/SK) 是两个 provider，不在单个 provider 里混两代 API。

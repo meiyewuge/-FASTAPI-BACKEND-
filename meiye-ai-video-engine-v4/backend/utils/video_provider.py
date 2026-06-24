@@ -26,15 +26,21 @@ class ProviderError(Exception):
 
 
 class VideoProvider(ABC):
+    """纯执行层：只管生成视频，返回 {url, duration, units, meta}。
+
+    ❗provider 不决定「钱」。金额由成本系统（cost_service）统一计价，
+    换厂商不影响计费逻辑。units = 计费用量（条/秒），由计价层换算成金额。
+    """
+
     name: str = "base"
 
     @abstractmethod
     def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str]) -> dict[str, Any]:
-        """A台：生成 1 条母视频。返回 {"url","cost":{"units","amount"},...}"""
+        """A台：生成 1 条母视频。返回 {"url","duration","units","meta"}"""
 
     @abstractmethod
     def remix(self, tenant_id: str, source_url: str, index: int, changes: dict) -> dict[str, Any]:
-        """B台：产出第 index 条裂变视频。返回 {"url","cost":{"units","amount"},...}"""
+        """B台：产出第 index 条裂变视频。返回 {"url","duration","units","meta"}"""
 
 
 # ---------------- Mock（默认 + 最终兜底）----------------
@@ -47,7 +53,7 @@ class MockVideoProvider(VideoProvider):
             "url": f"https://mock.cdn/{tenant_id}/mother/{slug}.mp4",
             "cover": f"https://mock.cdn/{tenant_id}/mother/{slug}.jpg",
             "duration": 15 + len(storyboard),
-            "cost": {"units": 1, "amount": settings.cost_per_mother},
+            "units": 1,
             "meta": {"provider": self.name, "storyboard": storyboard},
         }
 
@@ -56,7 +62,7 @@ class MockVideoProvider(VideoProvider):
         return {
             "url": f"https://mock.cdn/{tenant_id}/viral/{slug}.mp4",
             "duration": 12,
-            "cost": {"units": 1, "amount": settings.cost_per_clip},
+            "units": 1,
             "meta": {"provider": self.name, "index": index, "changes": changes},
         }
 
@@ -104,7 +110,7 @@ class HTTPVideoProvider(VideoProvider):
         return {
             "url": url,
             "duration": duration,
-            "cost": {"units": 1, "amount": settings.cost_per_mother},
+            "units": 1,
             "meta": {"provider": self.name},
         }
 
@@ -115,7 +121,7 @@ class HTTPVideoProvider(VideoProvider):
         return {
             "url": url,
             "duration": duration,
-            "cost": {"units": 1, "amount": settings.cost_per_clip},
+            "units": 1,
             "meta": {"provider": self.name, "index": index, "changes": changes},
         }
 
@@ -159,11 +165,11 @@ _PROVIDERS: dict[str, type[VideoProvider]] = {
 
 
 def _build(name: str) -> VideoProvider:
-    if name in ("volcano", "volcano_seedance", "volcano_doubao"):
+    if name.startswith("volcano"):
         # 延迟导入，避免与本模块循环依赖
         from utils.video_provider_volcano import build_volcano
 
-        return build_volcano()
+        return build_volcano(name)
     return _PROVIDERS.get(name, MockVideoProvider)()
 
 

@@ -57,7 +57,7 @@ def remix_videos(
                 "store_id": store["id"] if store else None,
                 "url": r["url"],
                 "duration": r.get("duration"),
-                "cost": r["cost"],
+                "units": r.get("units", 1),
                 "meta": {"changes": changes, **r.get("meta", {})},
             }
         )

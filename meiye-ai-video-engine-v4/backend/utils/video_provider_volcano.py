@@ -1,18 +1,20 @@
-"""火山 provider 注册实现。
+"""火山 provider 注册实现（双 Provider）。
 
-把 VolcanoDoubaoProvider 注册进 video_provider 的 provider 注册表，
-并提供 build_volcano() 供 get_provider 构建（延迟导入，避免循环依赖）。
+VIDEO_PROVIDER 取值：
+  volcano_seedance → VolcanoSeedanceProvider（Ark, Bearer，默认）
+  volcano_legacy   → VolcanoLegacyProvider（旧 OpenAPI, AK/SK）
 """
 
 from __future__ import annotations
 
 from utils.video_provider import _PROVIDERS, VideoProvider
-from utils.volcano_doubao_provider import VolcanoDoubaoProvider
+from utils.volcano_doubao_provider import VolcanoLegacyProvider, VolcanoSeedanceProvider
 
-# 注册（cost.provider 记 volcano_seedance；别名 volcano / volcano_doubao 亦可）
-for _alias in ("volcano", "volcano_seedance", "volcano_doubao"):
-    _PROVIDERS[_alias] = VolcanoDoubaoProvider
+_PROVIDERS["volcano_seedance"] = VolcanoSeedanceProvider
+_PROVIDERS["volcano"] = VolcanoSeedanceProvider          # 别名
+_PROVIDERS["volcano_legacy"] = VolcanoLegacyProvider
 
 
-def build_volcano() -> VideoProvider:
-    return VolcanoDoubaoProvider()
+def build_volcano(name: str = "volcano_seedance") -> VideoProvider:
+    cls = _PROVIDERS.get(name, VolcanoSeedanceProvider)
+    return cls()

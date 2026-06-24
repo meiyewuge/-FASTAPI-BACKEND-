@@ -1,16 +1,13 @@
-"""火山方舟 Doubao Seedance 2.0 真实视频 Provider（生产级）。
+"""火山视频 Provider —— 双 Provider（一个模型 = 一套鉴权，不混用两代 API 体系）。
 
-接口（已确认）：
-  提交：POST {base}/api/v3/contents/generations/tasks  body {model, content:[{type:text,text:prompt}]}
-  查询：GET  {base}/api/v3/contents/generations/tasks/{task_id}  → status + video_url
-  模型：doubao-seedance-2.0-260128
+- VolcanoSeedanceProvider：火山方舟 Ark / Doubao Seedance 2.0，**仅 Bearer Token**（默认）。
+- VolcanoLegacyProvider：火山旧 OpenAPI 体系，**AK/SK + HMAC-SHA256 签名**（legacy/可选）。
 
-鉴权可切换（VOLC_AUTH_MODE）：
-  bearer（默认）：Authorization: Bearer <VIDEO_API_KEY>  —— Ark /api/v3 实际用这个
-  aksk          ：VOLC_AK/VOLC_SK + HMAC-SHA256 V4 签名（utils.auth_sign）
+两者共用「提交→轮询→取 mp4」异步流程（HTTPVideoProvider），只在鉴权与端点上不同。
+通过 VIDEO_PROVIDER 切换：volcano_seedance | volcano_legacy。默认 volcano_seedance。
 
-只扩展 provider 层；intent/orchestrator/store/A·B engine 不受影响。
-密钥仅从环境读取，绝不硬编码 / 不打印 / 不入响应。
+只扩展 provider 层；密钥仅从 env 读，绝不硬编码/不打印/不入响应。
+provider 只返回执行结果（url/duration/units），不决定金额（计价在 cost_service）。
 """
 
 from __future__ import annotations
@@ -39,27 +36,16 @@ _STATUS_MAP = {
 }
 
 
-class VolcanoDoubaoProvider(HTTPVideoProvider):
-    name = "volcano_seedance"  # cost.provider 记此值
+class _VolcanoBase(HTTPVideoProvider):
+    """火山视频公共流程：提交/轮询/解析。子类只实现 _auth_headers。"""
 
     def __init__(self) -> None:
         super().__init__()
         self.base = (self.api_base or _DEFAULT_BASE).rstrip("/")
         self.model = settings.volc_model
-        self.auth_mode = settings.volc_auth_mode
 
     def _auth_headers(self, method: str, url: str, body: bytes) -> dict:
-        headers = {"Content-Type": "application/json"}
-        if self.auth_mode == "aksk":
-            headers.update(
-                auth_sign.signed_headers(
-                    method, url, body, settings.volc_ak, settings.volc_sk,
-                    settings.volc_region, settings.volc_service,
-                )
-            )
-        else:  # bearer（默认）
-            headers["Authorization"] = f"Bearer {settings.video_api_key}"
-        return headers
+        raise NotImplementedError
 
     def _submit(self, prompt: str, params: dict) -> str:
         url = f"{self.base}/api/v3/contents/generations/tasks"
@@ -88,3 +74,31 @@ class VolcanoDoubaoProvider(HTTPVideoProvider):
         )
         duration = data.get("duration") or content.get("duration")
         return status, url_out, duration
+
+
+class VolcanoSeedanceProvider(_VolcanoBase):
+    """Ark / Doubao Seedance 2.0 —— 仅 Bearer Token。"""
+
+    name = "volcano_seedance"
+
+    def _auth_headers(self, method: str, url: str, body: bytes) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.video_api_key}",
+        }
+
+
+class VolcanoLegacyProvider(_VolcanoBase):
+    """火山旧 OpenAPI 体系 —— AK/SK + HMAC-SHA256 V4 签名（legacy/可选）。"""
+
+    name = "volcano_legacy"
+
+    def _auth_headers(self, method: str, url: str, body: bytes) -> dict:
+        headers = {"Content-Type": "application/json"}
+        headers.update(
+            auth_sign.signed_headers(
+                method, url, body, settings.volc_ak, settings.volc_sk,
+                settings.volc_region, settings.volc_service,
+            )
+        )
+        return headers

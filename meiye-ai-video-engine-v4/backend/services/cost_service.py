@@ -1,15 +1,33 @@
-"""成本系统：记录 + 按 tenant 统计 + 配额熔断（enforcement）。"""
+"""成本系统（独立观测层）：计价 + 记录 + 按 tenant 统计 + 配额熔断。
+
+❗计价集中在此层，provider 只返回执行用量(units)，不决定金额。
+换厂商/换计费规则只改这里，不动 provider / engine。
+"""
 
 from __future__ import annotations
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from config import settings
 from models import CostRecord, Tenant
 
 
 class QuotaExceeded(Exception):
     """成本超过租户配额，熔断。"""
+
+
+# 计价表：单位用量价格（未来可扩展为按 duration 秒计费）
+def _unit_price(api_name: str) -> float:
+    return {
+        "video.generate.a": settings.cost_per_mother,
+        "video.remix.b": settings.cost_per_clip,
+    }.get(api_name, 0.0)
+
+
+def price(api_name: str, units: float, duration: float | None = None) -> float:
+    """统一计价：金额 = 单价 × 用量。duration 预留给按秒计费。"""
+    return _unit_price(api_name) * (units or 1)
 
 
 def get_or_create_tenant(db: Session, tenant_id: str) -> Tenant:
@@ -46,19 +64,19 @@ def record(
     tenant_id: str,
     api_name: str,
     units: float,
-    amount: float,
     task_id: str | None = None,
     provider: str = "",
     store_id: int | None = None,
     duration: float | None = None,
 ) -> CostRecord:
+    """记录一条成本。金额由计价层统一换算，provider 不传金额。"""
     rec = CostRecord(
         tenant_id=tenant_id,
         store_id=store_id,
         api_name=api_name,
         provider=provider,
         units=units,
-        amount=amount,
+        amount=price(api_name, units, duration),
         task_id=task_id,
         duration=duration,
     )

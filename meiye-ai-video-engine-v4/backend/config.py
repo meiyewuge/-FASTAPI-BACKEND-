@@ -30,13 +30,13 @@ class Settings(BaseSettings):
     provider_timeout: float = 120.0     # 单次任务最长等待（秒）
     poll_interval: float = 3.0          # 轮询间隔（秒）
 
-    # 火山 Doubao Seedance
-    volc_auth_mode: str = "bearer"     # bearer | aksk
-    volc_ak: str = ""                  # AK/SK 模式：AccessKey
-    volc_sk: str = ""                  # AK/SK 模式：SecretKey
+    # 火山视频模型
+    volc_model: str = "doubao-seedance-2.0-260128"
+    # volcano_seedance(Ark, Bearer) 用 video_api_key；volcano_legacy(旧OpenAPI, AK/SK) 用下面
+    volc_ak: str = ""                  # legacy: AccessKey
+    volc_sk: str = ""                  # legacy: SecretKey
     volc_region: str = "cn-beijing"
     volc_service: str = "ark"
-    volc_model: str = "doubao-seedance-2.0-260128"
 
     # mock 成本参数（用于 cost 系统演示）
     cost_per_mother: float = 1.0   # 每条母视频成本
