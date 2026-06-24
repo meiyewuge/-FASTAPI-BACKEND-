@@ -1,13 +1,13 @@
 /**
- * 工作台 — 系统唯一核心界面。
+ * 工作台 — 极简生产稳定版（UI 冻结）
  *
- * 6 个模块：
- *  1. 顶部：租户信息 + 成本面板
- *  2. 输入区：文本框 + A台/B台按钮
- *  3. 任务状态区：轮询进度
- *  4. 视频结果区：母视频/裂变视频
- *  5. 历史视频区：分页列表
- *  6. B台策略选择器
+ * 固定结构：
+ *  1. 顶部：租户 + 成本面板
+ *  2. 输入区：文本框 + 一句话生成 / A台 / B台
+ *  3. 任务状态区：清晰进度 + 重试
+ *  4. 视频结果区：播放 / 下载
+ *  5. 视频库：母视频 / 裂变视频 + 导出
+ *  6. 产能指标（轻量数字卡片，非复杂图表）
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
@@ -22,6 +22,7 @@ import {
   strategies as fetchStrategies,
   metricsOverview,
   retryTask,
+  exportVideosCSV,
   getTenant,
   clearAuth,
   type TaskData,
@@ -31,7 +32,7 @@ import {
   type MetricsOverview,
 } from "../api/client";
 
-// ---- 状态标签颜色 ----
+// ---- 状态标签 ----
 function statusLabel(s: string) {
   const map: Record<string, { text: string; cls: string }> = {
     pending: { text: "排队中", cls: "tag-pending" },
@@ -49,6 +50,7 @@ export default function Workbench() {
   // ---- 状态 ----
   const [prompt, setPrompt] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [tasks, setTasks] = useState<TaskData[]>([]);
   const [activeTask, setActiveTask] = useState<TaskData | null>(null);
   const [videos, setVideos] = useState<VideoItem[]>([]);
@@ -103,7 +105,7 @@ export default function Workbench() {
     }
   };
 
-  // ---- 视频翻页 ----
+  // ---- 翻页 ----
   const loadVideoPage = async (page: number) => {
     setVideoPage(page);
     const r = await listVideos(videoTab, page, 20);
@@ -128,11 +130,10 @@ export default function Workbench() {
       setActiveTask(r.data);
       showToast(r.data.status === "done" ? "视频生成完成!" : "任务失败");
     }
-    // 刷新面板
     loadDashboard();
   };
 
-  // ---- 一句话生成（主入口）----
+  // ---- 一句话生成 ----
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       showToast("请输入视频需求");
@@ -143,12 +144,9 @@ export default function Workbench() {
     try {
       const r = await generate(prompt.trim());
       if (r.code === 0 && r.data) {
-        const plan = (r.data as { plan?: { task_ids?: string[] } }).plan;
-        const taskIds = plan?.task_ids || [];
+        const taskIds = r.data.plan?.task_ids || [];
         showToast(`已提交 ${taskIds.length} 个任务`);
-        if (taskIds.length > 0) {
-          startPoll(taskIds[0]);
-        }
+        if (taskIds.length > 0) startPoll(taskIds[0]);
       } else if (r.code === 4029) {
         showToast("配额不足: " + r.msg);
       } else {
@@ -214,7 +212,7 @@ export default function Workbench() {
     }
   };
 
-  // ---- 重试失败任务 ----
+  // ---- 重试 ----
   const handleRetry = async (taskId: string) => {
     const r = await retryTask(taskId);
     if (r.code === 0) {
@@ -225,18 +223,32 @@ export default function Workbench() {
     }
   };
 
+  // ---- 导出 CSV ----
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const ok = await exportVideosCSV({
+        type: videoTab,
+      });
+      showToast(ok ? "导出成功，正在下载" : "导出失败");
+    } catch {
+      showToast("导出异常");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // ---- 退出 ----
   const handleLogout = () => {
     clearAuth();
     navigate("/login", { replace: true });
   };
 
-  // ---- 任务结果中的视频 ----
   const resultVideos = activeTask?.result?.videos || [];
+  const progressPct = Math.round((activeTask?.progress || 0) * 100);
 
   return (
     <div className="workbench">
-      {/* ===== Toast ===== */}
       {toast && <div className="toast">{toast}</div>}
 
       {/* ===== 1. 顶部栏 ===== */}
@@ -249,17 +261,13 @@ export default function Workbench() {
           {cost && (
             <div className="cost-panel">
               <span className="cost-label">剩余额度</span>
-              <span className="cost-value">
-                ¥{cost.remaining?.toFixed(2) ?? "--"}
-              </span>
+              <span className="cost-value">¥{cost.remaining?.toFixed(2) ?? "--"}</span>
               <span className="cost-sub">
-                已用 ¥{cost.spend?.toFixed(2) ?? "0"} / ¥{cost.quota?.toFixed(2) ?? "0"}
+                已用 ¥{cost.spend?.toFixed(2) ?? "0"} / 配额 ¥{cost.quota?.toFixed(2) ?? "0"}
               </span>
             </div>
           )}
-          <button className="btn-logout" onClick={handleLogout}>
-            退出
-          </button>
+          <button className="btn-logout" onClick={handleLogout}>退出</button>
         </div>
       </header>
 
@@ -279,7 +287,7 @@ export default function Workbench() {
             onClick={handleGenerate}
             disabled={generating}
           >
-            {generating ? "生成中..." : "⚡ 一句话批量生成"}
+            {generating ? "提交中..." : "⚡ 一句话批量生成"}
           </button>
           <button
             className="btn btn-a"
@@ -302,30 +310,39 @@ export default function Workbench() {
       {/* ===== 3. 任务状态区 ===== */}
       <section className="wb-tasks">
         <h2>任务状态</h2>
+
+        {/* 当前活跃任务 */}
         {activeTask && (
           <div className="active-task">
             <div className="task-header">
-              <span>任务 {activeTask.task_id}</span>
-              {statusLabel(activeTask.status)}
-              <span className="task-type">
-                {activeTask.type === "a" ? "A台" : "B台"}
+              <span className="task-id">{activeTask.task_id.slice(0, 8)}</span>
+              <span className="task-type-badge">
+                {activeTask.type === "a" ? "A台·母视频" : "B台·裂变"}
               </span>
+              {statusLabel(activeTask.status)}
             </div>
+
+            {/* 清晰进度条 + 百分比 */}
             {activeTask.status === "running" && (
-              <div className="progress-bar">
-                <div
-                  className="progress-fill"
-                  style={{ width: `${(activeTask.progress || 0) * 100}%` }}
-                />
+              <div className="progress-section">
+                <div className="progress-bar">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+                <span className="progress-text">{progressPct}%</span>
               </div>
             )}
+
+            {activeTask.status === "pending" && (
+              <p className="task-hint">任务排队中，请稍候...</p>
+            )}
+
             {activeTask.error && (
               <div className="task-error">
-                {activeTask.error}
-                <button
-                  className="btn btn-sm"
-                  onClick={() => handleRetry(activeTask.task_id)}
-                >
+                <span>{activeTask.error}</span>
+                <button className="btn btn-sm" onClick={() => handleRetry(activeTask.task_id)}>
                   重试
                 </button>
               </div>
@@ -333,20 +350,16 @@ export default function Workbench() {
           </div>
         )}
 
-        {/* 任务结果视频 */}
+        {/* 生成结果视频 */}
         {resultVideos.length > 0 && (
           <div className="result-videos">
-            <h3>生成结果 ({resultVideos.length} 条)</h3>
+            <h3>生成结果（{resultVideos.length} 条）</h3>
             <div className="video-grid">
               {resultVideos.map((v, i) => (
                 <div key={v.video_id || i} className="video-card">
                   <div className="video-preview">
                     {v.download_url ? (
-                      <video
-                        src={v.download_url}
-                        controls
-                        preload="metadata"
-                      />
+                      <video src={v.download_url} controls preload="metadata" />
                     ) : (
                       <div className="video-placeholder">视频加载中</div>
                     )}
@@ -355,28 +368,10 @@ export default function Workbench() {
                     <span className="video-type-badge">
                       {v.type === "mother" ? "母视频" : "裂变"}
                     </span>
-                    {v.strategy && (
-                      <span className="video-strategy">{v.strategy}</span>
-                    )}
+                    {v.strategy && <span className="video-strategy">{v.strategy}</span>}
                     <div className="video-actions">
                       {v.download_url && (
-                        <a
-                          href={v.download_url}
-                          download
-                          className="btn btn-sm"
-                        >
-                          下载
-                        </a>
-                      )}
-                      {v.share_url && (
-                        <a
-                          href={v.share_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="btn btn-sm"
-                        >
-                          分享
-                        </a>
+                        <a href={v.download_url} download className="btn btn-sm">下载</a>
                       )}
                     </div>
                   </div>
@@ -386,14 +381,14 @@ export default function Workbench() {
           </div>
         )}
 
-        {/* 历史任务列表 */}
+        {/* 近期任务列表 */}
         {tasks.length > 0 && (
           <div className="task-list">
             <h3>近期任务</h3>
             <table className="task-table">
               <thead>
                 <tr>
-                  <th>ID</th>
+                  <th>编号</th>
                   <th>类型</th>
                   <th>状态</th>
                   <th>进度</th>
@@ -404,7 +399,7 @@ export default function Workbench() {
                 {tasks.slice(0, 10).map((t) => (
                   <tr
                     key={t.task_id}
-                    className={t === activeTask ? "active-row" : ""}
+                    className={activeTask?.task_id === t.task_id ? "active-row" : ""}
                     onClick={() => setActiveTask(t)}
                   >
                     <td>{t.task_id.slice(0, 8)}</td>
@@ -432,36 +427,43 @@ export default function Workbench() {
         )}
       </section>
 
-      {/* ===== 4 & 5. 视频列表 + B台策略 ===== */}
+      {/* ===== 4 & 5. 视频库 + 策略选择 + 导出 ===== */}
       <section className="wb-videos">
         <div className="video-section-header">
           <h2>视频库</h2>
-          <div className="video-tabs">
+          <div className="video-section-actions">
+            <div className="video-tabs">
+              <button
+                className={videoTab === "mother" ? "tab active" : "tab"}
+                onClick={() => switchVideoTab("mother")}
+              >
+                母视频
+              </button>
+              <button
+                className={videoTab === "viral" ? "tab active" : "tab"}
+                onClick={() => switchVideoTab("viral")}
+              >
+                裂变视频
+              </button>
+            </div>
             <button
-              className={videoTab === "mother" ? "tab active" : "tab"}
-              onClick={() => switchVideoTab("mother")}
+              className="btn btn-export"
+              onClick={handleExport}
+              disabled={exporting || videos.length === 0}
             >
-              母视频
-            </button>
-            <button
-              className={videoTab === "viral" ? "tab active" : "tab"}
-              onClick={() => switchVideoTab("viral")}
-            >
-              裂变视频
+              {exporting ? "导出中..." : "📥 导出CSV"}
             </button>
           </div>
         </div>
 
-        {/* B台策略选择（仅在选择母视频时显示） */}
+        {/* B台策略选择 */}
         {selectedVideo && strats.length > 0 && (
           <div className="strategy-bar">
             <span>裂变策略：</span>
             {strats.map((s) => (
               <button
                 key={s.key}
-                className={
-                  selectedStrategy === s.key ? "strat-btn active" : "strat-btn"
-                }
+                className={selectedStrategy === s.key ? "strat-btn active" : "strat-btn"}
                 onClick={() => setSelectedStrategy(s.key)}
                 title={s.goal}
               >
@@ -469,6 +471,13 @@ export default function Workbench() {
               </button>
             ))}
           </div>
+        )}
+
+        {selectedVideo && (
+          <p className="selected-hint">
+            已选母视频：{selectedVideo.title || `#${selectedVideo.video_id}`}
+            <button className="btn-text" onClick={() => setSelectedVideo(null)}>取消选择</button>
+          </p>
         )}
 
         {videos.length === 0 ? (
@@ -481,28 +490,18 @@ export default function Workbench() {
                   key={v.video_id}
                   className={`video-card ${selectedVideo?.video_id === v.video_id ? "selected" : ""}`}
                   onClick={() =>
-                    setSelectedVideo(
-                      selectedVideo?.video_id === v.video_id ? null : v,
-                    )
+                    setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v)
                   }
                 >
                   <div className="video-preview">
                     {v.download_url ? (
-                      <video
-                        src={v.download_url}
-                        controls
-                        preload="metadata"
-                      />
+                      <video src={v.download_url} controls preload="metadata" />
                     ) : (
-                      <div className="video-placeholder">
-                        {v.title || "视频"}
-                      </div>
+                      <div className="video-placeholder">{v.title || "视频"}</div>
                     )}
                   </div>
                   <div className="video-info">
-                    <span className="video-title">
-                      {v.title || `视频 #${v.video_id}`}
-                    </span>
+                    <span className="video-title">{v.title || `视频 #${v.video_id}`}</span>
                     <div className="video-actions">
                       {v.download_url && (
                         <a
@@ -519,18 +518,12 @@ export default function Workbench() {
                 </div>
               ))}
             </div>
-            {/* 分页 */}
             {videoTotal > 20 && (
               <div className="pagination">
-                <button
-                  disabled={videoPage <= 1}
-                  onClick={() => loadVideoPage(videoPage - 1)}
-                >
+                <button disabled={videoPage <= 1} onClick={() => loadVideoPage(videoPage - 1)}>
                   上一页
                 </button>
-                <span>
-                  {videoPage} / {Math.ceil(videoTotal / 20)}
-                </span>
+                <span>{videoPage} / {Math.ceil(videoTotal / 20)}</span>
                 <button
                   disabled={videoPage >= Math.ceil(videoTotal / 20)}
                   onClick={() => loadVideoPage(videoPage + 1)}
@@ -543,31 +536,25 @@ export default function Workbench() {
         )}
       </section>
 
-      {/* ===== 6. 指标面板（可选） ===== */}
+      {/* ===== 6. 产能指标（轻量数字，非复杂图表）===== */}
       {metrics && (
         <section className="wb-metrics">
-          <h2>运营指标</h2>
+          <h2>产能概览</h2>
           <div className="metrics-grid">
             <div className="metric-card">
               <span className="metric-value">{metrics.total_videos ?? 0}</span>
               <span className="metric-label">总视频数</span>
             </div>
             <div className="metric-card">
-              <span className="metric-value">
-                ¥{metrics.total_cost?.toFixed(2) ?? "0"}
-              </span>
+              <span className="metric-value">¥{metrics.total_cost?.toFixed(2) ?? "0"}</span>
               <span className="metric-label">总成本</span>
             </div>
             <div className="metric-card">
-              <span className="metric-value">
-                {metrics.videos_per_cost_unit?.toFixed(1) ?? "0"}
-              </span>
+              <span className="metric-value">{metrics.videos_per_cost_unit?.toFixed(1) ?? "0"}</span>
               <span className="metric-label">每元产出</span>
             </div>
             <div className="metric-card">
-              <span className="metric-value">
-                {metrics.remix_multiplier?.toFixed(1) ?? "0"}x
-              </span>
+              <span className="metric-value">{metrics.remix_multiplier?.toFixed(1) ?? "0"}x</span>
               <span className="metric-label">裂变倍率</span>
             </div>
           </div>

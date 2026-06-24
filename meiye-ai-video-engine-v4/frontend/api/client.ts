@@ -1,7 +1,10 @@
 /**
- * API 绑定层 — 对照 docs/frontend_contract.md
- * 前端只通过 /api/* 访问后端。
- * 增强：token/tenant 持久化到 localStorage，统一错误处理。
+ * API 绑定层 — 极简生产稳定版
+ * 仅依赖允许的端点：
+ *   /auth/login, /generate, /a/generate, /b/generate,
+ *   /b/strategies, /tasks/{id}, /tasks, /videos,
+ *   /cost/summary, /metrics/overview, /export
+ * 无 mock 依赖，直接对接真实后端。
  */
 
 const BASE = "/api";
@@ -84,6 +87,15 @@ export interface MetricsOverview {
   remix_multiplier: number;
 }
 
+export interface ExportParams {
+  video_ids?: number[];
+  type?: "mother" | "viral";
+  strategy?: string;
+  store_id?: number;
+  source_video_id?: number;
+  format?: "json" | "csv";
+}
+
 // ---- 底层请求 ----
 function headers(): Record<string, string> {
   return {
@@ -125,12 +137,10 @@ export async function login(phoneOrToken: string) {
   return r;
 }
 
-// ---- 一句话生成（统一入口，A台批量）----
-export const intentPlan = (text: string) => post("/intent/plan", { text });
+// ---- 生成 ----
+export const generate = (text: string) =>
+  post<{ plan?: { task_ids?: string[] } }>("/generate", { text });
 
-export const generate = (text: string) => post("/generate", { text });
-
-// ---- A台 / B台（单条入口）----
 export const aGenerate = (prompt: string, title?: string) =>
   post<{ task_id: string }>("/a/generate", { prompt, title });
 
@@ -173,23 +183,43 @@ export async function pollTask(
   }
 }
 
-// ---- 历史视频 ----
+// ---- 视频 ----
 export const listVideos = (
   type: "mother" | "viral" = "mother",
   page = 1,
   pageSize = 20,
-) => get<{ items: VideoItem[]; total: number }>(`/videos?type=${type}&page=${page}&page_size=${pageSize}`);
-
-// ---- 门店 ----
-export const listStores = () =>
-  get<{ items: { store_id: number; name: string; city: string; industry: string }[] }>("/stores");
+) =>
+  get<{ items: VideoItem[]; total: number }>(
+    `/videos?type=${type}&page=${page}&page_size=${pageSize}`,
+  );
 
 // ---- 成本 ----
 export const costSummary = () => get<CostSummary>("/cost/summary");
-export const costByStore = () => get<{ items: unknown[] }>("/cost/by-store");
-export const costByProvider = () => get<{ items: unknown[] }>("/cost/by-provider");
 
-// ---- 业务指标 ----
+// ---- 指标 ----
 export const metricsOverview = () => get<MetricsOverview>("/metrics/overview");
-export const metricsByStore = () => get<{ items: unknown[] }>("/metrics/by-store");
-export const metricsByStrategy = () => get<{ items: unknown[] }>("/metrics/by-strategy");
+
+// ---- 导出 ----
+/** JSON 导出（返回结构化数据） */
+export const exportVideos = (params: ExportParams) =>
+  post<{ count: number; items: unknown[] }>("/export", { ...params, format: "json" });
+
+/** CSV 导出（触发浏览器下载） */
+export async function exportVideosCSV(params: ExportParams): Promise<boolean> {
+  const res = await fetch(`${BASE}/export`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ ...params, format: "csv" }),
+  });
+  if (!res.ok) return false;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `视频导出_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return true;
+}

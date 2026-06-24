@@ -591,6 +591,81 @@ body {
   margin-top: 16px;
 }
 
+/* ---- 导出按钮 ---- */
+.btn-export {
+  background: #059669;
+  color: #fff;
+  border-color: #059669;
+}
+.btn-export:hover {
+  background: #10b981;
+  color: #fff;
+}
+
+/* ---- 进度区增强 ---- */
+.progress-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.progress-section .progress-bar {
+  flex: 1;
+  margin-top: 0;
+}
+.progress-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary);
+  min-width: 40px;
+}
+.task-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.task-id {
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.task-type-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+/* ---- 已选提示 ---- */
+.selected-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #ecfdf5;
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--primary-dark);
+  margin-top: 8px;
+}
+.btn-text {
+  background: none;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: underline;
+  padding: 0;
+}
+
+/* ---- 视频区操作栏 ---- */
+.video-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* ---- 响应式 ---- */
 @media (max-width: 640px) {
   .wb-header {
