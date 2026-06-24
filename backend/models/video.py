@@ -18,5 +18,6 @@ class Video(Base):
     status = Column(String(16), nullable=False, default="ready")
     download_url = Column(String(512), nullable=True)
     share_url = Column(String(512), nullable=True)
+    volcano_task_id = Column(String(64), nullable=True)     # 火山任务id（B1：用于过期后刷新URL）
     meta = Column(Text, nullable=True)                      # JSON：脚本/分镜/改动等
     created_at = Column(DateTime, server_default=func.now())

@@ -24,6 +24,7 @@ from schemas.dto import AGenerateIn, BGenerateIn, ExportIn, IntentIn, LoginIn, R
 from services import export_service, orchestrator, store_service
 from tasks import video_task
 from tasks.runner import execute_task, retry_task
+from utils import url_refresh
 
 api_router = APIRouter()
 
@@ -207,6 +208,20 @@ def list_videos(
         for v in rows
     ]
     return Resp(data={"items": items, "total": total})
+
+
+@api_router.get("/videos/{video_id}/url")
+def get_video_url(
+    video_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """B1：取可用播放/下载 URL；火山签名过期则自动刷新后返回。"""
+    v = db.query(Video).filter(Video.id == video_id, Video.tenant_id == tenant_id).first()
+    if v is None:
+        return Resp(code=3001, message="视频不存在")
+    url = url_refresh.refresh_video_url(db, v)
+    return Resp(data={"video_id": v.id, "download_url": url, "share_url": v.share_url})
 
 
 # ---------------- 导出（筛选→清单，不分发）----------------

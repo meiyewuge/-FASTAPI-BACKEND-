@@ -24,6 +24,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         title=payload.get("title") or data["title"],
         download_url=data["url"],
         share_url=data["url"],
+        volcano_task_id=data["meta"].get("provider_task_id"),
         meta=json.dumps(data["meta"], ensure_ascii=False),
     )
     db.add(video)

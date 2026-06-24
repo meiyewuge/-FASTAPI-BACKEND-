@@ -47,14 +47,14 @@ class VideoProvider(ABC):
 class MockVideoProvider(VideoProvider):
     name = "mock"
 
-    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str]) -> dict[str, Any]:
+    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p") -> dict[str, Any]:
         slug = abs(hash((tenant_id, prompt))) % 10_000_000
         return {
             "url": f"https://mock.cdn/{tenant_id}/mother/{slug}.mp4",
             "cover": f"https://mock.cdn/{tenant_id}/mother/{slug}.jpg",
-            "duration": 15 + len(storyboard),
+            "duration": duration,
             "units": 1,
-            "meta": {"provider": self.name, "storyboard": storyboard},
+            "meta": {"provider": self.name, "storyboard": storyboard, "resolution": resolution},
         }
 
     def remix(self, tenant_id: str, source_url: str, index: int, changes: dict) -> dict[str, Any]:
@@ -90,8 +90,8 @@ class HTTPVideoProvider(VideoProvider):
     def _poll(self, job_id: str) -> tuple[str, str | None]:
         """查询任务，返回 (status, mp4_url|None)。status ∈ {pending,running,done,failed}。"""
 
-    def _run_job(self, prompt: str, params: dict) -> tuple[str, float | None]:
-        """提交并轮询直至 done，返回 (video_url, duration)。"""
+    def _run_job(self, prompt: str, params: dict) -> tuple[str, float | None, str]:
+        """提交并轮询直至 done，返回 (video_url, duration, job_id)。"""
         job_id = self._submit(prompt, params)
         deadline = time.time() + self.timeout
         while time.time() < deadline:
@@ -99,30 +99,30 @@ class HTTPVideoProvider(VideoProvider):
             status, url = res[0], res[1]
             duration = res[2] if len(res) > 2 else None
             if status == "done" and url:
-                return url, duration
+                return url, duration, job_id
             if status == "failed":
                 raise ProviderError(f"{self.name} job {job_id} failed")
             time.sleep(self.poll_interval)
         raise ProviderError(f"{self.name} job {job_id} timeout")
 
     def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p") -> dict[str, Any]:
-        url, dur = self._run_job(prompt, {"type": "mother", "storyboard": storyboard, "duration": duration, "resolution": resolution})
+        url, dur, job_id = self._run_job(prompt, {"type": "mother", "storyboard": storyboard, "duration": duration, "resolution": resolution})
         return {
             "url": url,
             "duration": dur,
             "units": 1,
-            "meta": {"provider": self.name, "duration": duration, "resolution": resolution},
+            "meta": {"provider": self.name, "duration": duration, "resolution": resolution, "provider_task_id": job_id},
         }
 
     def remix(self, tenant_id: str, source_url: str, index: int, changes: dict) -> dict[str, Any]:
-        url, dur = self._run_job(
+        url, dur, job_id = self._run_job(
             changes.get("subtitle", ""), {"type": "viral", "source": source_url, "changes": changes, "duration": changes.get("duration", 15), "resolution": changes.get("resolution", "720p")}
         )
         return {
             "url": url,
             "duration": dur,
             "units": 1,
-            "meta": {"provider": self.name, "index": index, "changes": changes},
+            "meta": {"provider": self.name, "index": index, "changes": changes, "provider_task_id": job_id},
         }
 
 

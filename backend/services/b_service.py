@@ -45,6 +45,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
             source_video_id=source.id,
             download_url=o["url"],
             share_url=o["url"],
+            volcano_task_id=o["meta"].get("provider_task_id"),
             meta=json.dumps(o["meta"], ensure_ascii=False),
         )
         db.add(v)
