@@ -88,10 +88,12 @@ curl localhost:8000/api/cost/summary         # 成本统计
 
 ## 当前状态
 
-🟢 **后端地基可运行** —— A台/B台/任务系统/成本系统/API 全部跑通（默认 Mock 视频 provider）：
+🟢 **后端地基可运行** —— Intent层/A台/B台/任务系统/成本系统/API 全部跑通（默认 Mock 视频 provider）：
+- **Intent 层**（业务理解层，无 LLM）：一句话 →（数量/城市/行业/主题）→ 多门店拆单 → 自动建并分派任务
 - A台：一句话 → 脚本 → 分镜 → provider → 母视频
 - B台：母视频 → 切片/重组/改字幕开头结尾 → 10~50 条裂变视频
 - 调度层 orchestrator：成本预检（熔断）+ 任务投递 + 按类型分派
+- **三层模型**：tenant（客户/计费）→ store（门店/target）→ task（A/B 执行）。门店是租户内 target，**不拆 tenant**
 - 多租户：所有表带 `tenant_id`，查询强制隔离
 - 成本系统：按租户记录 + 配额熔断（超额返回 `code 4029`）
 

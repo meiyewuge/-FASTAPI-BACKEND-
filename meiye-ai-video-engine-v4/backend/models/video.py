@@ -10,6 +10,7 @@ class Video(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_id = Column(String(64), nullable=False, default="default", index=True)
+    store_id = Column(Integer, nullable=True, index=True)   # 归因到门店（可空）
     type = Column(String(16), nullable=False)               # mother | viral
     title = Column(String(255), nullable=True)
     source_video_id = Column(Integer, nullable=True)        # 裂变视频指向母视频

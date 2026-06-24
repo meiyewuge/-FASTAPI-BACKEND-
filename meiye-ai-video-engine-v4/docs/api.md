@@ -16,6 +16,32 @@
 → { "code":0, "data": { "token":"tk_default", "tenant_id":"default" } }
 ```
 
+## Intent Layer · 业务理解层（一句话入口）
+轻量规则解析（无 LLM）。门店是 tenant 内 target，**不拆 tenant**。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/intent/plan` | 仅解析：一句话 → 结构化 Intent（不落库） |
+| POST | `/api/generate` | 统一入口：解析 → 多门店拆单 → 自动建并分派任务 |
+| GET  | `/api/stores` | 当前租户门店列表 |
+
+```jsonc
+// POST /api/intent/plan
+{ "text": "帮我做10个广州美容院抗衰视频" }
+→ { "code":0, "data": {
+     "action":"generate_video_batch", "count":10, "city":"广州",
+     "industry":"美容院", "theme":"抗衰",
+     "target_type":"store", "tenant_scope":"current_tenant" } }
+
+// POST /api/generate （仍属 1 个 tenant；10 门店 = 10 个 target）
+{ "text": "帮我做10个广州美容院抗衰视频" }
+→ { "code":0, "data": {
+     "intent": { ... },
+     "plan": { "count":10, "target_type":"store",
+               "store_ids":[1..10], "task_ids":["...", ...] } } }
+// 批量成本超配额：{ "code":4029, "msg":"...成本熔断..." }
+```
+
 ## A台 · 母视频
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

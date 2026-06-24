@@ -12,11 +12,22 @@ ORM：SQLAlchemy 2.0，模型见 `backend/models/`。
 | quota | float | 成本配额（货币单位），熔断依据，默认 100 |
 | created_at | datetime | |
 
+## stores —— 门店（tenant 内 target，**不是租户**）
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | int, PK | store_id |
+| tenant_id | str, index | 所属租户（客户） |
+| name | str | 门店名 |
+| city | str | 城市 |
+| industry | str | 行业（美容院/皮肤管理/医美/养生…） |
+| created_at | datetime | |
+
 ## videos —— 母视频 / 裂变视频
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | id | int, PK | |
 | tenant_id | str, index | 租户隔离 |
+| store_id | int, index, null | 归因到门店 |
 | type | str | `mother` \| `viral` |
 | title | str | |
 | source_video_id | int, null | 裂变视频指向其母视频 |
@@ -31,6 +42,7 @@ ORM：SQLAlchemy 2.0，模型见 `backend/models/`。
 | --- | --- | --- |
 | id | str(uuid), PK | task_id |
 | tenant_id | str, index | |
+| store_id | int, index, null | 单店任务指向门店；批量子任务也带 store_id |
 | type | str | `a` \| `b` |
 | status | str | `pending`\|`running`\|`done`\|`failed` |
 | progress | float | 0~1 |
@@ -51,8 +63,14 @@ ORM：SQLAlchemy 2.0，模型见 `backend/models/`。
 | amount | float | 金额 |
 | created_at | datetime | |
 
+## 三层结构（系统核心模型）
+- **tenant 层（商业层）**：客户 / 计费 / 配额。`tenant = 客户，不是场景`。
+- **store 层（业务层）**：门店 / 内容目标。`store = 任务对象，不是租户`。
+- **task 层（执行层）**：A台 / B台 视频生成执行单元。
+- 关系：`Tenant 1→N Store`，`Tenant 1→N Task`，`Store 1→N Task`。
+
 ## 关系与隔离
-- 一个 `tenant` → 多个 `videos` / `tasks` / `cost_records`。
+- 一个 `tenant` → 多个 `stores` / `videos` / `tasks` / `cost_records`。
 - `videos.source_video_id` → `videos.id`（裂变 → 母视频）。
 - 成本熔断：`sum(cost_records.amount where tenant_id) + 预估 > tenants.quota` 即拒绝。
 - 所有查询强制带 `tenant_id`，杜绝跨租户（见 `api/deps.get_tenant_id`）。

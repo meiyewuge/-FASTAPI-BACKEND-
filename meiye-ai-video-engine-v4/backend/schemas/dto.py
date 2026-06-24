@@ -18,6 +18,12 @@ class LoginIn(BaseModel):
     token: Optional[str] = None
 
 
+class IntentIn(BaseModel):
+    """一句话需求（Intent Layer 入口）。"""
+
+    text: str = Field(..., min_length=1, description="自然语言需求，如：帮我做10个广州美容院抗衰视频")
+
+
 class AGenerateIn(BaseModel):
     """A台：一句话需求。"""
 

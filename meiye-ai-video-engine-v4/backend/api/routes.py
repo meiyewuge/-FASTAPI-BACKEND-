@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 
 from api.deps import get_db, get_tenant_id
 from config import settings
-from models import Video
-from schemas.dto import AGenerateIn, BGenerateIn, LoginIn, Resp
-from services import cost_service, orchestrator
+from intent import parse_intent
+from models import Store, Video
+from schemas.dto import AGenerateIn, BGenerateIn, IntentIn, LoginIn, Resp
+from services import cost_service, orchestrator, store_service
 from services.cost_service import QuotaExceeded
 from tasks import video_task
 from tasks.runner import execute_task, retry_task
@@ -40,6 +41,42 @@ def _task_brief(t) -> dict:
 def login(body: LoginIn, tenant_id: str = Depends(get_tenant_id)) -> Resp:
     """手机号 / token 登录，绑定 tenant_id（占位鉴权）。"""
     return Resp(data={"token": f"tk_{tenant_id}", "tenant_id": tenant_id})
+
+
+# ---------------- Intent Layer（业务理解层）----------------
+@api_router.post("/intent/plan")
+def intent_plan(body: IntentIn) -> Resp:
+    """仅解析：一句话 → 结构化 Intent（不落库、不执行）。"""
+    return Resp(data=parse_intent(body.text).to_dict())
+
+
+@api_router.post("/generate")
+def generate(
+    body: IntentIn,
+    bg: BackgroundTasks,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """统一入口：一句话 → 解析 → 多门店拆单 → 自动创建并分派任务（仍属 1 个 tenant）。"""
+    try:
+        result = orchestrator.plan_from_intent(db, tenant_id, body.text)
+    except QuotaExceeded as e:
+        return Resp(code=4029, msg=str(e))
+    for t in result.pop("_tasks"):
+        bg.add_task(execute_task, t.id)
+    return Resp(data=result)
+
+
+@api_router.get("/stores")
+def list_stores(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    rows = store_service.list_stores(db, tenant_id)
+    items = [
+        {"store_id": s.id, "name": s.name, "city": s.city, "industry": s.industry}
+        for s in rows
+    ]
+    return Resp(data={"items": items, "total": len(items)})
 
 
 # ---------------- A台 ----------------

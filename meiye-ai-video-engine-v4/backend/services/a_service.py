@@ -17,6 +17,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
 
     video = Video(
         tenant_id=tenant_id,
+        store_id=payload.get("store_id"),
         type="mother",
         title=payload.get("title") or data["title"],
         download_url=data["url"],
