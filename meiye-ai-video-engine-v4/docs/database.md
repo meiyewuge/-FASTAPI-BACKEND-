@@ -63,6 +63,7 @@ ORM：SQLAlchemy 2.0，模型见 `backend/models/`。
 | task_id | str, index, null | 关联任务 |
 | units | float | 调用量 |
 | amount | float | 金额 |
+| duration | float, null | 视频时长（秒） |
 | created_at | datetime | |
 
 ## 三层结构（系统核心模型）

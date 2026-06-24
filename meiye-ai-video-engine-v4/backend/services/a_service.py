@@ -38,6 +38,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         task_id,
         provider=provider,
         store_id=payload.get("store_id"),
+        duration=data.get("duration"),
     )
     db.commit()
 

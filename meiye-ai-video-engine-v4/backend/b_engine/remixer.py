@@ -56,6 +56,7 @@ def remix_videos(
                 "strategy": skey,
                 "store_id": store["id"] if store else None,
                 "url": r["url"],
+                "duration": r.get("duration"),
                 "cost": r["cost"],
                 "meta": {"changes": changes, **r.get("meta", {})},
             }

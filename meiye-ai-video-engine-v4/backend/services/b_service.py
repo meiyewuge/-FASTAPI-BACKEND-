@@ -58,6 +58,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
             task_id,
             provider=provider,
             store_id=o.get("store_id"),
+            duration=o.get("duration"),
         )
         videos.append(
             {

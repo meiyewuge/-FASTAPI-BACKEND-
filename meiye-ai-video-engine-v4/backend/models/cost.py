@@ -16,4 +16,5 @@ class CostRecord(Base):
     task_id = Column(String(40), nullable=True, index=True)
     units = Column(Float, nullable=False, default=0.0)      # 调用量（条/秒/token）
     amount = Column(Float, nullable=False, default=0.0)     # 金额
+    duration = Column(Float, nullable=True)                 # 视频时长（秒）
     created_at = Column(DateTime, server_default=func.now())

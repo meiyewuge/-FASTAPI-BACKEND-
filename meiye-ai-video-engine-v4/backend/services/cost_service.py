@@ -50,6 +50,7 @@ def record(
     task_id: str | None = None,
     provider: str = "",
     store_id: int | None = None,
+    duration: float | None = None,
 ) -> CostRecord:
     rec = CostRecord(
         tenant_id=tenant_id,
@@ -59,6 +60,7 @@ def record(
         units=units,
         amount=amount,
         task_id=task_id,
+        duration=duration,
     )
     db.add(rec)
     db.flush()

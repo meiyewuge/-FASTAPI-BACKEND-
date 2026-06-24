@@ -22,16 +22,21 @@ class Settings(BaseSettings):
     video_provider: str = "mock"
     # 真实 provider 失败时是否兜底回退（最终回退到 mock，保证不中断）
     video_fallback: bool = True
-    provider_retries: int = 1           # 真实 provider 失败后重试次数（再回退 mock）
+    provider_retries: int = 3           # 真实 provider 失败后重试次数（再回退 mock）
 
-    # 真实 HTTP provider 接入参数（按厂商文档填）
+    # 真实 HTTP provider 接入参数
     video_api_base: str = ""
-    video_api_key: str = ""
+    video_api_key: str = ""             # Bearer 模式用的 ARK API Key
     provider_timeout: float = 120.0     # 单次任务最长等待（秒）
     poll_interval: float = 3.0          # 轮询间隔（秒）
 
     # 火山 Doubao Seedance
-    volcano_model: str = "doubao-seedance-2.0-260128"
+    volc_auth_mode: str = "bearer"     # bearer | aksk
+    volc_ak: str = ""                  # AK/SK 模式：AccessKey
+    volc_sk: str = ""                  # AK/SK 模式：SecretKey
+    volc_region: str = "cn-beijing"
+    volc_service: str = "ark"
+    volc_model: str = "doubao-seedance-2.0-260128"
 
     # mock 成本参数（用于 cost 系统演示）
     cost_per_mother: float = 1.0   # 每条母视频成本

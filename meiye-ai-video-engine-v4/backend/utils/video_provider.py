@@ -55,6 +55,7 @@ class MockVideoProvider(VideoProvider):
         slug = abs(hash((source_url, index))) % 10_000_000
         return {
             "url": f"https://mock.cdn/{tenant_id}/viral/{slug}.mp4",
+            "duration": 12,
             "cost": {"units": 1, "amount": settings.cost_per_clip},
             "meta": {"provider": self.name, "index": index, "changes": changes},
         }
@@ -83,30 +84,37 @@ class HTTPVideoProvider(VideoProvider):
     def _poll(self, job_id: str) -> tuple[str, str | None]:
         """查询任务，返回 (status, mp4_url|None)。status ∈ {pending,running,done,failed}。"""
 
-    def _run_job(self, prompt: str, params: dict) -> str:
+    def _run_job(self, prompt: str, params: dict) -> tuple[str, float | None]:
+        """提交并轮询直至 done，返回 (video_url, duration)。"""
         job_id = self._submit(prompt, params)
         deadline = time.time() + self.timeout
         while time.time() < deadline:
-            status, url = self._poll(job_id)
+            res = self._poll(job_id)  # (status, url) 或 (status, url, duration)
+            status, url = res[0], res[1]
+            duration = res[2] if len(res) > 2 else None
             if status == "done" and url:
-                return url
+                return url, duration
             if status == "failed":
                 raise ProviderError(f"{self.name} job {job_id} failed")
             time.sleep(self.poll_interval)
         raise ProviderError(f"{self.name} job {job_id} timeout")
 
     def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str]) -> dict[str, Any]:
-        url = self._run_job(prompt, {"type": "mother", "storyboard": storyboard})
+        url, duration = self._run_job(prompt, {"type": "mother", "storyboard": storyboard})
         return {
             "url": url,
+            "duration": duration,
             "cost": {"units": 1, "amount": settings.cost_per_mother},
             "meta": {"provider": self.name},
         }
 
     def remix(self, tenant_id: str, source_url: str, index: int, changes: dict) -> dict[str, Any]:
-        url = self._run_job(changes.get("subtitle", ""), {"type": "viral", "source": source_url, "changes": changes})
+        url, duration = self._run_job(
+            changes.get("subtitle", ""), {"type": "viral", "source": source_url, "changes": changes}
+        )
         return {
             "url": url,
+            "duration": duration,
             "cost": {"units": 1, "amount": settings.cost_per_clip},
             "meta": {"provider": self.name, "index": index, "changes": changes},
         }
@@ -151,11 +159,11 @@ _PROVIDERS: dict[str, type[VideoProvider]] = {
 
 
 def _build(name: str) -> VideoProvider:
-    if name in ("volcano", "volcano_seedance"):
+    if name in ("volcano", "volcano_seedance", "volcano_doubao"):
         # 延迟导入，避免与本模块循环依赖
-        from utils.volcano_seedance_provider import VolcanoSeedanceProvider
+        from utils.video_provider_volcano import build_volcano
 
-        return VolcanoSeedanceProvider()
+        return build_volcano()
     return _PROVIDERS.get(name, MockVideoProvider)()
 
 
