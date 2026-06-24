@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 import cost_engine
 from intent import Intent, parse_intent
 from models import Store, Task
-from services import a_service, b_service, store_service
+from services import a_service, b_service, compose_service, store_service
 from tasks import video_task
 
 
@@ -88,10 +88,27 @@ def plan_from_intent(db: Session, tenant_id: str, text: str) -> dict:
     }
 
 
+def submit_compose(
+    db: Session, tenant_id: str, prompt: str, total_seconds: int = 30,
+    resolution: str = "720p", title: str | None = None,
+) -> Task:
+    """B6：投递长视频「一次成型」任务（多段拼接）。"""
+    from a_engine.video_composer import plan_segments
+
+    n = len(plan_segments(total_seconds))
+    cost_engine.ensure_budget(db, tenant_id, "video.generate.a", n)
+    return video_task.create_task(
+        db, tenant_id, "compose",
+        {"prompt": prompt, "total_seconds": total_seconds, "resolution": resolution, "title": title},
+    )
+
+
 def run(db: Session, task: Task, payload: dict) -> dict:
     """执行期分派。由 tasks.runner 在后台调用。"""
     if task.type == "a":
         return a_service.run(db, task.tenant_id, task.id, payload)
     if task.type == "b":
         return b_service.run(db, task.tenant_id, task.id, payload)
+    if task.type == "compose":
+        return compose_service.run(db, task.tenant_id, task.id, payload)
     raise ValueError(f"未知任务类型：{task.type}")

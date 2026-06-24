@@ -20,7 +20,7 @@ from b_engine.strategies import STRATEGIES
 from cost_engine import QuotaExceeded
 from intent import parse_intent
 from models import Store, Video
-from schemas.dto import AGenerateIn, BGenerateIn, ExportIn, IntentIn, LoginIn, Resp
+from schemas.dto import AGenerateIn, BGenerateIn, ComposeIn, ExportIn, IntentIn, LoginIn, Resp
 from services import export_service, orchestrator, store_service
 from tasks import video_task
 from tasks.runner import execute_task, retry_task
@@ -70,6 +70,24 @@ def generate(
     for t in result.pop("_tasks"):
         bg.add_task(execute_task, t.id)
     return Resp(data=result)
+
+
+@api_router.post("/compose")
+def compose(
+    body: ComposeIn,
+    bg: BackgroundTasks,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """B6：长视频一次成型——切多段→生成→FFmpeg拼接→输出完整成片（异步，返回 task_id）。"""
+    try:
+        task = orchestrator.submit_compose(
+            db, tenant_id, body.prompt, body.total_seconds, body.resolution, body.title
+        )
+    except QuotaExceeded as e:
+        return Resp(code=4029, message=str(e))
+    bg.add_task(execute_task, task.id)
+    return Resp(data={"task_id": task.id})
 
 
 @api_router.get("/stores")

@@ -56,3 +56,14 @@ def download_and_store(video_id: int, cdn_url: str, subdir: str = "", timeout: f
 def resolve_download_url(cdn_url: str | None, lurl: str | None) -> str | None:
     """下载地址：本地优先，CDN 兜底。"""
     return lurl or cdn_url
+
+
+def download_to(url: str, dest_path: str, timeout: float = 120.0) -> str:
+    """把 url 下载到指定路径（用于 B6 片段落盘）。失败抛异常。"""
+    os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+    with httpx.stream("GET", url, timeout=timeout, follow_redirects=True) as r:
+        r.raise_for_status()
+        with open(dest_path, "wb") as f:
+            for chunk in r.iter_bytes(chunk_size=1 << 16):
+                f.write(chunk)
+    return dest_path

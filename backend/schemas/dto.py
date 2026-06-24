@@ -35,6 +35,15 @@ class IntentIn(BaseModel):
     text: str = Field(..., min_length=1, description="自然语言需求，如：帮我做10个广州美容院抗衰视频")
 
 
+class ComposeIn(BaseModel):
+    """B6：长视频一次成型（多段拼接）。"""
+
+    prompt: str = Field(..., min_length=1)
+    total_seconds: int = Field(30, ge=5, le=180, description="总时长(秒)，内部切≤15s 多段拼接")
+    resolution: str = Field("720p", description="480p/720p/1080p")
+    title: Optional[str] = None
+
+
 class AGenerateIn(BaseModel):
     """A台：一句话需求。"""
 
