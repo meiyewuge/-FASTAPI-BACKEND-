@@ -103,6 +103,15 @@
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/cost/summary` | 当前租户：配额/已花/剩余/分项 |
+| GET | `/api/cost/by-store` | 门店级成本报表（每门店：视频数/时长/成本）|
+| GET | `/api/cost/by-provider` | 按 provider 聚合成本 |
+
+```jsonc
+// GET /api/cost/by-store
+→ { "code":0, "data": { "items": [
+     { "store_id":1, "store_name":"广州医美1", "records":3, "videos":3,
+       "duration_sec":41.0, "cost":1.2 }, ... ] } }
+```
 
 ```jsonc
 → { "code":0, "data": {

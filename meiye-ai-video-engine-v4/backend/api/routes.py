@@ -204,6 +204,21 @@ def cost_summary(
     return Resp(data=cost_engine.summary(db, tenant_id))
 
 
+@api_router.get("/cost/by-store")
+def cost_by_store(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    """门店级成本报表（真实台账：每门店产了多少视频、花了多少）。"""
+    return Resp(data={"items": cost_engine.by_store(db, tenant_id)})
+
+
+@api_router.get("/cost/by-provider")
+def cost_by_provider(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    return Resp(data={"items": cost_engine.by_provider(db, tenant_id)})
+
+
 # ---------------- 健康/信息 ----------------
 @api_router.get("/info")
 def info() -> Resp:

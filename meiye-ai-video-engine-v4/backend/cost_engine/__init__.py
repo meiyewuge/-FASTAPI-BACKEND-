@@ -14,7 +14,7 @@
 from .policy import QuotaExceeded, ensure_budget, get_or_create_tenant
 from .pricing_model import price, unit_price
 from .billing import record
-from .ledger import get_spend, summary
+from .ledger import by_provider, by_store, get_spend, summary
 
 __all__ = [
     "QuotaExceeded",
@@ -25,4 +25,6 @@ __all__ = [
     "record",
     "get_spend",
     "summary",
+    "by_store",
+    "by_provider",
 ]
