@@ -49,9 +49,13 @@ class _VolcanoBase(HTTPVideoProvider):
 
     def _submit(self, prompt: str, params: dict) -> str:
         url = f"{self.base}/api/v3/contents/generations/tasks"
-        body = json.dumps(
-            {"model": self.model, "content": [{"type": "text", "text": prompt}]}
-        ).encode("utf-8")
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        # B台视频输入（video-to-video）：母视频 mp4 作为输入参考，含视频输入计费更省。
+        # ⚠️ 字段名按火山「含视频输入」API 文档确认（image_url/video_url），ECS 联调时校准。
+        source_url = params.get("source")
+        if source_url:
+            content.append({"type": "image_url", "image_url": {"url": source_url}})
+        body = json.dumps({"model": self.model, "content": content}).encode("utf-8")
         resp = httpx.post(url, headers=self._auth_headers("POST", url, body), content=body, timeout=30.0)
         resp.raise_for_status()
         data = resp.json()

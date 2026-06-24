@@ -42,5 +42,13 @@ class Settings(BaseSettings):
     cost_per_mother: float = 1.0   # 每条母视频成本
     cost_per_clip: float = 0.1     # 每条裂变片段成本
 
+    # 本地视频存储（P0：本地+CDN 双存，download_url 优先本地）
+    storage_enabled: bool = False   # ECS 生产置 true；mock/dev 保持 false（不发起下载）
+    storage_dir: str = "./storage/videos"
+    # 静态访问基址（nginx serve 本地文件），如 https://video.beautypeaceai.com/static/videos
+    storage_base_url: str = ""
+    # 长视频编排：单片段时长（秒），总时长按此切片
+    segment_seconds: int = 5
+
 
 settings = Settings()

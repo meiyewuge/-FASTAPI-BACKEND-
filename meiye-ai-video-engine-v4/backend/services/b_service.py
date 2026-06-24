@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 
 import cost_engine
 from b_engine.remixer import remix_videos
+from config import settings
 from models import Video
 from services import store_service
+from utils import video_storage
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
@@ -32,7 +34,9 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         for s in store_service.list_stores(db, tenant_id)
     ]
 
-    outputs = remix_videos(tenant_id, source.download_url, count, prompt, strategy, stores)
+    # B台视频输入（video-to-video，非纯文本）：把母视频 mp4 的可取地址传给引擎/provider
+    source_url = source.cdn_url or source.download_url
+    outputs = remix_videos(tenant_id, source_url, count, prompt, strategy, stores)
 
     videos = []
     for o in outputs:
@@ -43,12 +47,17 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
             title=o["title"],
             strategy=o.get("strategy"),
             source_video_id=source.id,
+            cdn_url=o["url"],
             download_url=o["url"],
             share_url=o["url"],
             meta=json.dumps(o["meta"], ensure_ascii=False),
         )
         db.add(v)
         db.flush()
+        if settings.storage_enabled:
+            st = video_storage.download_and_store(v.id, o["url"])
+            v.local_url = st["local_url"]
+            v.download_url = video_storage.resolve_download_url(o["url"], st["local_url"])
         provider = o["meta"].get("served_by") or o["meta"].get("provider") or ""
         cost_engine.record(
             db,
