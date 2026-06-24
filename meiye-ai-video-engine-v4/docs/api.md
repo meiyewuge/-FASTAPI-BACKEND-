@@ -119,6 +119,21 @@
       "by_api": { "video.generate.a":1.0, "video.remix.b":0.5 } } }
 ```
 
+## 业务指标（成本侧推导，无收入/ROI 假设）
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/metrics/overview` | 内容效率：产出/成本/每元产出视频数/裂变倍率 |
+| GET | `/api/metrics/by-store` | 门店产能与成本效率 |
+| GET | `/api/metrics/by-strategy` | 各内容策略产出条数与成本占比 |
+
+```jsonc
+// GET /api/metrics/overview
+→ { "code":0, "data": {
+     "total_videos":13, "mother_videos":3, "viral_videos":10, "total_cost":4.0,
+     "avg_cost_per_video":0.3077, "videos_per_cost_unit":3.25, "remix_multiplier":3.33 } }
+```
+> 仅成本侧客观指标；收入/ROI/分润/定价需业务口径，不在此层。
+
 ## 其它
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

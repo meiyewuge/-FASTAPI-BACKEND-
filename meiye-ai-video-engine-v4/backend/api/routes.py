@@ -11,6 +11,7 @@ import json
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
+import analytics
 import cost_engine
 from api.deps import get_db, get_tenant_id
 from config import settings
@@ -217,6 +218,31 @@ def cost_by_provider(
     db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
 ) -> Resp:
     return Resp(data={"items": cost_engine.by_provider(db, tenant_id)})
+
+
+# ---------------- 业务指标层（成本侧推导，无收入/ROI 假设）----------------
+@api_router.get("/metrics/overview")
+def metrics_overview(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    """内容效率总览：产出/成本/每元产出/裂变倍率。"""
+    return Resp(data=analytics.overview(db, tenant_id))
+
+
+@api_router.get("/metrics/by-store")
+def metrics_by_store(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    """门店产能与成本效率。"""
+    return Resp(data={"items": analytics.by_store(db, tenant_id)})
+
+
+@api_router.get("/metrics/by-strategy")
+def metrics_by_strategy(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    """各内容策略产出条数与成本占比。"""
+    return Resp(data={"items": analytics.by_strategy(db, tenant_id)})
 
 
 # ---------------- 健康/信息 ----------------
