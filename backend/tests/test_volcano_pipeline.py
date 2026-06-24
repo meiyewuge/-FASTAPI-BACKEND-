@@ -6,7 +6,9 @@
   或   cd backend && python tests/test_volcano_pipeline.py
 """
 import os
+import subprocess
 import sys
+import tempfile
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND not in sys.path:
@@ -17,6 +19,8 @@ import httpx
 
 import config
 import db as _db
+
+_TMP_STORAGE = os.path.join(tempfile.mkdtemp(), "videos")
 
 
 def _fresh_app():
@@ -30,6 +34,8 @@ def _fresh_app():
     config.settings.video_fallback = True
     config.settings.provider_retries = 3
     config.settings.video_provider = "volcano_seedance"
+    config.settings.storage_dir = _TMP_STORAGE
+    config.settings.storage_base_url = "https://test.local/static/videos"
     from fastapi.testclient import TestClient
     from main import app
     _db.init_db()
@@ -81,13 +87,23 @@ def test_a_pipeline_and_cost():
 
 
 def test_b_remix_pipeline():
+    # B9：B台 = 纯本地 ffmpeg 裂变，需母视频本地文件
     c = _fresh_app()
     _stub_ok()
     c.post("/api/generate", json={"text": "做1个杭州养生视频"})
     mid = c.get("/api/videos", params={"type": "mother"}).json()["data"]["items"][0]["video_id"]
+    mother_dir = os.path.join(_TMP_STORAGE, "mother")
+    os.makedirs(mother_dir, exist_ok=True)
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=teal:s=640x360:d=4",
+                    "-pix_fmt", "yuv420p", os.path.join(mother_dir, f"{mid}.mp4")],
+                   check=True, capture_output=True)
     tb = c.post("/api/b/generate", json={"source_video_id": mid, "count": 5}).json()["data"]["task_id"]
     res = c.get(f"/api/tasks/{tb}").json()["data"]
     assert res["status"] == "done" and len(res["result"]["videos"]) == 5
+    # B台本地裂变 0 成本
+    from cost_engine import ledger
+    rows = ledger.by_provider(_db.SessionLocal(), "default")
+    assert any(r["provider"] == "local_ffmpeg" and r["cost"] == 0.0 for r in rows)
 
 
 def test_mock_fallback_on_failure():

@@ -18,14 +18,17 @@ def record(
     store_id: int | None = None,
     duration: float | None = None,
     resolution: str = "720p",
+    amount: float | None = None,
 ) -> CostRecord:
+    # amount 显式传入则用之（如 B台本地裂变 = 0元），否则按计价模型换算
+    final_amount = amount if amount is not None else price(api_name, units, duration, resolution)
     rec = CostRecord(
         tenant_id=tenant_id,
         store_id=store_id,
         api_name=api_name,
         provider=provider,
         units=units,
-        amount=price(api_name, units, duration, resolution),
+        amount=final_amount,
         task_id=task_id,
         duration=duration,
     )
