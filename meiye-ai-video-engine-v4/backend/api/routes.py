@@ -11,14 +11,15 @@ import json
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
+import cost_engine
 from api.deps import get_db, get_tenant_id
 from config import settings
 from b_engine.strategies import STRATEGIES
+from cost_engine import QuotaExceeded
 from intent import parse_intent
 from models import Store, Video
 from schemas.dto import AGenerateIn, BGenerateIn, IntentIn, LoginIn, Resp
-from services import cost_service, orchestrator, store_service
-from services.cost_service import QuotaExceeded
+from services import orchestrator, store_service
 from tasks import video_task
 from tasks.runner import execute_task, retry_task
 
@@ -200,7 +201,7 @@ def list_videos(
 def cost_summary(
     db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
 ) -> Resp:
-    return Resp(data=cost_service.summary(db, tenant_id))
+    return Resp(data=cost_engine.summary(db, tenant_id))
 
 
 # ---------------- 健康/信息 ----------------

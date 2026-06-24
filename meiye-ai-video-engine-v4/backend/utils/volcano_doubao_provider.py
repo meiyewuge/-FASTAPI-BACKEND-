@@ -7,7 +7,7 @@
 通过 VIDEO_PROVIDER 切换：volcano_seedance | volcano_legacy。默认 volcano_seedance。
 
 只扩展 provider 层；密钥仅从 env 读，绝不硬编码/不打印/不入响应。
-provider 只返回执行结果（url/duration/units），不决定金额（计价在 cost_service）。
+provider 只返回执行结果（url/duration/units），不决定金额（计价在 cost_engine）。
 """
 
 from __future__ import annotations

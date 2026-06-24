@@ -6,9 +6,10 @@ import json
 
 from sqlalchemy.orm import Session
 
+import cost_engine
 from b_engine.remixer import remix_videos
 from models import Video
-from services import cost_service, store_service
+from services import store_service
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
@@ -48,7 +49,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         db.add(v)
         db.flush()
         provider = o["meta"].get("served_by") or o["meta"].get("provider") or ""
-        cost_service.record(
+        cost_engine.record(
             db,
             tenant_id,
             "video.remix.b",

@@ -6,9 +6,9 @@ import json
 
 from sqlalchemy.orm import Session
 
+import cost_engine
 from a_engine.generator import generate_mother_video
 from models import Video
-from services import cost_service
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
@@ -28,7 +28,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     db.flush()
 
     provider = data["meta"].get("served_by") or data["meta"].get("provider") or ""
-    cost_service.record(
+    cost_engine.record(
         db,
         tenant_id,
         "video.generate.a",

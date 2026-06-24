@@ -28,7 +28,7 @@ class ProviderError(Exception):
 class VideoProvider(ABC):
     """纯执行层：只管生成视频，返回 {url, duration, units, meta}。
 
-    ❗provider 不决定「钱」。金额由成本系统（cost_service）统一计价，
+    ❗provider 不决定「钱」。金额由成本系统（cost_engine）统一计价，
     换厂商不影响计费逻辑。units = 计费用量（条/秒），由计价层换算成金额。
     """
 

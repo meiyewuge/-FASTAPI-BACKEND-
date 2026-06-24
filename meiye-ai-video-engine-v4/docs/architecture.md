@@ -79,9 +79,12 @@
 ```
 [业务层] intent → orchestrator → store / a_engine / b_engine
 [执行层] provider（纯执行：只产视频，返回 url/duration/units，不决定金额）
-[观测层] cost_service（独立计价 + 记录 + 配额熔断）
+[经济层] cost_engine（独立：计价 + 记账 + 台账 + 熔断）
 ```
 
 - **provider 纯执行**：返回 `units`（用量），不返回金额。换厂商（火山/可灵/Runway）不影响计费。
-- **计价收敛在 cost_service**：金额 = 计价层换算（`price(api_name, units, duration)`）。改单价/改计费规则只动这一层。
+- **orchestrator 不算价格**：只上报用量 `ensure_budget(tenant, api_name, units)`，价格与放行判断都在 cost_engine。
+- **cost_engine 独立经济层**（`backend/cost_engine/`）：
+  - `pricing_model.py` 单价策略 · `billing.py` 记账 · `ledger.py` 台账查询 · `policy.py` 配额熔断
+  - 改单价/换计费规则/接分润，只动本包，不动 provider / engine / orchestrator。
 - **一个模型 = 一套鉴权**：`volcano_seedance`(Bearer) 与 `volcano_legacy`(AK/SK) 是两个 provider，不在单个 provider 里混两代 API。

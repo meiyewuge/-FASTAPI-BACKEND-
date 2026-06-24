@@ -11,15 +11,15 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from config import settings
+import cost_engine
 from intent import Intent, parse_intent
 from models import Store, Task
-from services import a_service, b_service, cost_service, store_service
+from services import a_service, b_service, store_service
 from tasks import video_task
 
 
 def submit_a(db: Session, tenant_id: str, prompt: str, title: str | None = None) -> Task:
-    cost_service.ensure_budget(db, tenant_id, settings.cost_per_mother)
+    cost_engine.ensure_budget(db, tenant_id, "video.generate.a", 1)
     return video_task.create_task(
         db, tenant_id, "a", {"prompt": prompt, "title": title}
     )
@@ -33,8 +33,7 @@ def submit_b(
     prompt: str | None = None,
     strategy: str | None = "mix",
 ) -> Task:
-    estimated = count * settings.cost_per_clip
-    cost_service.ensure_budget(db, tenant_id, estimated)
+    cost_engine.ensure_budget(db, tenant_id, "video.remix.b", count)
     return video_task.create_task(
         db,
         tenant_id,
@@ -61,8 +60,8 @@ def plan_from_intent(db: Session, tenant_id: str, text: str) -> dict:
     intent = parse_intent(text)
     count = max(1, intent.count)
 
-    # 批量成本预检（熔断）：count 条母视频
-    cost_service.ensure_budget(db, tenant_id, count * settings.cost_per_mother)
+    # 批量成本预检（熔断）：count 条母视频（价格计算在 cost_engine，orchestrator 只报用量）
+    cost_engine.ensure_budget(db, tenant_id, "video.generate.a", count)
 
     stores = store_service.ensure_stores(db, tenant_id, count, intent.city, intent.industry)
 
