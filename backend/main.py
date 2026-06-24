@@ -16,6 +16,10 @@ from db import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # B3：启动时后台恢复未完成任务（防 systemd 重启丢任务），不阻塞启动
+    from tasks.recovery import recover_in_background
+
+    recover_in_background()
     yield
 
 
