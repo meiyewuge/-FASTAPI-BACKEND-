@@ -10,7 +10,7 @@ import cost_engine
 from a_engine.generator import generate_mother_video
 from config import settings
 from models import Video
-from utils import video_storage
+from utils import video_cover, video_storage
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
@@ -39,6 +39,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         st = video_storage.download_and_store(video.id, cdn_url, subdir="mother")
         video.local_url = st["local_url"]
         video.download_url = video_storage.resolve_download_url(cdn_url, st["local_url"])
+        video.cover_url = video_cover.extract_cover(video.id, st["local_path"] or cdn_url, subdir="mother")
 
     provider = data["meta"].get("served_by") or data["meta"].get("provider") or ""
     cost_engine.record(

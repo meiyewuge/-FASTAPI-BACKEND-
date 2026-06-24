@@ -11,7 +11,7 @@ from b_engine.remixer import remix_videos
 from config import settings
 from models import Video
 from services import store_service
-from utils import video_storage
+from utils import video_cover, video_storage
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
@@ -59,6 +59,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
             st = video_storage.download_and_store(v.id, o["url"], subdir="viral")
             v.local_url = st["local_url"]
             v.download_url = video_storage.resolve_download_url(o["url"], st["local_url"])
+            v.cover_url = video_cover.extract_cover(v.id, st["local_path"] or o["url"], subdir="viral")
         provider = o["meta"].get("served_by") or o["meta"].get("provider") or ""
         cost_engine.record(
             db,

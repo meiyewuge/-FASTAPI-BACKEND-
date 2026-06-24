@@ -19,6 +19,7 @@ class Video(Base):
     download_url = Column(String(512), nullable=True)       # 本地优先，CDN 兜底
     cdn_url = Column(String(1024), nullable=True)           # 火山 CDN 原始签名 URL（24h）
     local_url = Column(String(512), nullable=True)          # ECS 本地静态 URL（永不过期）
+    cover_url = Column(String(512), nullable=True)          # 封面图（B8：视频首帧）
     share_url = Column(String(512), nullable=True)
     volcano_task_id = Column(String(64), nullable=True)     # 火山任务id（B1：用于过期后刷新URL）
     meta = Column(Text, nullable=True)                      # JSON：脚本/分镜/改动等

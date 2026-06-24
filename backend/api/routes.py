@@ -204,6 +204,7 @@ def list_videos(
             "source_video_id": v.source_video_id,
             "download_url": v.download_url,
             "share_url": v.share_url,
+            "cover_url": v.cover_url,
         }
         for v in rows
     ]
