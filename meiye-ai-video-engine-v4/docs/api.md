@@ -1,6 +1,6 @@
 # API 列表 · api.md
 
-统一前缀 `/api`。统一响应包 `{ "code": 0, "msg": "ok", "data": ... }`，`code != 0` 为错误。
+统一前缀 `/api`。统一响应包 `{ "code": 0, "message": "ok", "data": ... }`，`code != 0` 为错误。
 租户：请求头 `X-Tenant-Id`（缺省 = `default`）。视频生成异步：提交返回 `task_id`，轮询任务状态。
 
 > 实现状态：✅ 全部可运行（默认 Mock 视频 provider）。接真实视频 provider 见 `backend/utils/video_provider.py`。
@@ -39,7 +39,7 @@
      "intent": { ... },
      "plan": { "count":10, "target_type":"store",
                "store_ids":[1..10], "task_ids":["...", ...] } } }
-// 批量成本超配额：{ "code":4029, "msg":"...成本熔断..." }
+// 批量成本超配额：{ "code":4029, "message":"...成本熔断..." }
 ```
 
 ## A台 · 母视频
@@ -51,7 +51,7 @@
 // POST /api/a/generate
 { "prompt": "给轻医美门店做一条招商视频", "title": "可选" }
 → { "code":0, "data": { "task_id": "..." } }
-// 成本超配额时：{ "code":4029, "msg":"...成本熔断..." }
+// 成本超配额时：{ "code":4029, "message":"...成本熔断..." }
 ```
 
 ## B台 · 混剪裂变（商业内容生成器）

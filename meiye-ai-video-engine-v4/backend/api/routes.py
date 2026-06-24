@@ -65,7 +65,7 @@ def generate(
     try:
         result = orchestrator.plan_from_intent(db, tenant_id, body.text)
     except QuotaExceeded as e:
-        return Resp(code=4029, msg=str(e))
+        return Resp(code=4029, message=str(e))
     for t in result.pop("_tasks"):
         bg.add_task(execute_task, t.id)
     return Resp(data=result)
@@ -95,7 +95,7 @@ def a_generate(
     try:
         task = orchestrator.submit_a(db, tenant_id, body.prompt, body.title)
     except QuotaExceeded as e:
-        return Resp(code=4029, msg=str(e))
+        return Resp(code=4029, message=str(e))
     bg.add_task(execute_task, task.id)
     return Resp(data={"task_id": task.id})
 
@@ -114,7 +114,7 @@ def b_generate(
             db, tenant_id, body.source_video_id, body.count, body.prompt, body.strategy
         )
     except QuotaExceeded as e:
-        return Resp(code=4029, msg=str(e))
+        return Resp(code=4029, message=str(e))
     bg.add_task(execute_task, task.id)
     return Resp(data={"task_id": task.id})
 
@@ -138,7 +138,7 @@ def get_task(
 ) -> Resp:
     t = video_task.get_task(db, tenant_id, task_id)
     if t is None:
-        return Resp(code=3001, msg="任务不存在")
+        return Resp(code=3001, message="任务不存在")
     return Resp(data=_task_brief(t))
 
 
@@ -159,9 +159,9 @@ def retry(
 ) -> Resp:
     t = video_task.get_task(db, tenant_id, task_id)
     if t is None:
-        return Resp(code=3001, msg="任务不存在")
+        return Resp(code=3001, message="任务不存在")
     if t.status != "failed":
-        return Resp(code=2001, msg="仅失败任务可重试")
+        return Resp(code=2001, message="仅失败任务可重试")
     bg.add_task(retry_task, task_id)
     return Resp(data={"task_id": task_id, "status": "pending"})
 

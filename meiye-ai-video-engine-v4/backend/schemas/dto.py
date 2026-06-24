@@ -9,7 +9,7 @@ class Resp(BaseModel):
     """统一响应包：code=0 成功。"""
 
     code: int = 0
-    msg: str = "ok"
+    message: str = "ok"
     data: Any = None
 
 

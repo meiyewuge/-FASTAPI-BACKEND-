@@ -10,8 +10,8 @@ export function setTenant(t: string) {
 }
 
 interface Resp<T = any> {
-  code: number;
-  msg: string;
+  code: number; // 0 = 成功
+  message: string;
   data: T;
 }
 
