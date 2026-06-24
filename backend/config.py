@@ -48,5 +48,11 @@ class Settings(BaseSettings):
     # nginx serve 该目录的静态访问基址，如 https://video.beautypeaceai.com/static/videos
     storage_base_url: str = ""
 
+    # B5：分镜脚本生成 script_provider: rule(默认,无依赖) | llm(OpenAI兼容,如DeepSeek/通义)
+    script_provider: str = "rule"
+    llm_api_base: str = ""              # 如 https://api.deepseek.com/v1
+    llm_api_key: str = ""
+    llm_model: str = "deepseek-chat"
+
 
 settings = Settings()

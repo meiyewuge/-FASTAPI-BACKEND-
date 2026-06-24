@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from utils.script_writer import build_script as _build_script
 from utils.video_provider import get_provider
 
 
 def build_script(prompt: str) -> str:
-    """把一句话需求扩写为脚本（占位：真实可接 LLM）。"""
-    return f"【脚本】围绕「{prompt}」：开场抓眼球 → 核心卖点 → 行动号召。"
+    """把一句话需求扩写为分镜脚本（B5：可插拔 rule/llm，见 utils.script_writer）。"""
+    return _build_script(prompt)
 
 
 def build_storyboard(script: str) -> list[str]:
