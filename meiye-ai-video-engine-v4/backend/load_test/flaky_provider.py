@@ -6,14 +6,14 @@
 
 from __future__ import annotations
 
+import os
 import random
+import time
 from typing import Any
 
-from config import settings
 from utils.video_provider import _PROVIDERS, ProviderError, VideoProvider
 
-# 失败率由 env LOADTEST_FAIL_RATE 控制（0~1）
-import os
+# env: LOADTEST_FAIL_RATE(0~1) 注入失败；LOADTEST_SIM_LATENCY_MS 仿真火山 IO 延迟
 
 
 class FlakyProvider(VideoProvider):
@@ -26,7 +26,16 @@ class FlakyProvider(VideoProvider):
         except ValueError:
             return 0.0
 
+    @property
+    def _sim_latency(self) -> float:
+        try:
+            return float(os.environ.get("LOADTEST_SIM_LATENCY_MS", "0")) / 1000.0
+        except ValueError:
+            return 0.0
+
     def _maybe_fail(self) -> None:
+        if self._sim_latency:
+            time.sleep(self._sim_latency)
         if random.random() < self._fail_rate:
             raise ProviderError("loadtest injected failure")
 

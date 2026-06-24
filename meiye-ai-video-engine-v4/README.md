@@ -97,6 +97,17 @@ python -m load_test.load_test_runner --fail-rate 0.5  # 注入失败率，验证
 产出：成功率 / 延迟(p50/p95/p99) / 吞吐 / 单视频·单门店·单租户成本 / fallback触发率 / 产能估算。
 最近一轮（50% 注入失败）：2600 视频 / 14.8s，成功率 100%，fallback 6.7%。
 
+**真实 IO 压测（Phase 7，并发 + 排队延迟 + mock/real 对比）**：
+```bash
+# 真实（需 .env 配 VIDEO_API_KEY + 出网到火山）：
+VIDEO_PROVIDER=volcano_seedance python -m load_test.real_io_runner --a 50 --b 200 --concurrency 8
+# 干跑验证管线（仿真 1.5s IO）：
+python -m load_test.real_io_runner --provider loadtest_flaky --sim-latency-ms 1500 --fail-rate 0.2
+# 报告：load_test/reports/real_io/{real_io_report.json, latency_distribution.csv,
+#       cost_real_vs_mock_compare.md, provider_stability_report.md}
+```
+⚠️ 真实数字需火山 key；无 key 时标记 `mode=DRY-RUN`（仿真，非真实 IO）。
+
 ## 当前状态
 
 🟢 **后端地基可运行** —— Intent层/A台/B台/任务系统/成本系统/API 全部跑通（默认 Mock 视频 provider）：
