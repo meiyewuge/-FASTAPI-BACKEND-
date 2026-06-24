@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 import analytics
@@ -19,8 +20,8 @@ from b_engine.strategies import STRATEGIES
 from cost_engine import QuotaExceeded
 from intent import parse_intent
 from models import Store, Video
-from schemas.dto import AGenerateIn, BGenerateIn, IntentIn, LoginIn, Resp
-from services import orchestrator, store_service
+from schemas.dto import AGenerateIn, BGenerateIn, ExportIn, IntentIn, LoginIn, Resp
+from services import export_service, orchestrator, store_service
 from tasks import video_task
 from tasks.runner import execute_task, retry_task
 
@@ -165,17 +166,26 @@ def retry(
     return Resp(data={"task_id": task_id, "status": "pending"})
 
 
-# ---------------- 历史视频 ----------------
+# ---------------- 历史视频（筛选）----------------
 @api_router.get("/videos")
 def list_videos(
     type: str = "mother",
     page: int = 1,
     page_size: int = 20,
+    strategy: str | None = None,
+    store_id: int | None = None,
+    source_video_id: int | None = None,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(get_tenant_id),
 ) -> Resp:
     vtype = "viral" if type in ("viral", "裂变") else "mother"
     q = db.query(Video).filter(Video.tenant_id == tenant_id, Video.type == vtype)
+    if strategy:
+        q = q.filter(Video.strategy == strategy)
+    if store_id is not None:
+        q = q.filter(Video.store_id == store_id)
+    if source_video_id is not None:
+        q = q.filter(Video.source_video_id == source_video_id)
     total = q.count()
     rows = (
         q.order_by(Video.created_at.desc())
@@ -188,6 +198,8 @@ def list_videos(
             "video_id": v.id,
             "type": v.type,
             "title": v.title,
+            "strategy": v.strategy,
+            "store_id": v.store_id,
             "source_video_id": v.source_video_id,
             "download_url": v.download_url,
             "share_url": v.share_url,
@@ -195,6 +207,28 @@ def list_videos(
         for v in rows
     ]
     return Resp(data={"items": items, "total": total})
+
+
+# ---------------- 导出（筛选→清单，不分发）----------------
+@api_router.post("/export")
+def export(
+    body: ExportIn,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """按 ids 或筛选条件导出视频清单（json/csv）。仅产清单，不对接外部平台。"""
+    videos = export_service.select_videos(
+        db, tenant_id, body.video_ids, body.type, body.strategy,
+        body.store_id, body.source_video_id,
+    )
+    items = export_service.build_manifest(db, tenant_id, videos)
+    if body.format == "csv":
+        return PlainTextResponse(
+            export_service.manifest_to_csv(items),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=videos_export.csv"},
+        )
+    return Resp(data={"count": len(items), "items": items})
 
 
 # ---------------- 成本 ----------------

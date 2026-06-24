@@ -18,6 +18,17 @@ class LoginIn(BaseModel):
     token: Optional[str] = None
 
 
+class ExportIn(BaseModel):
+    """导出：按 ids 或筛选条件，产出视频清单（manifest）。"""
+
+    video_ids: Optional[list[int]] = None
+    type: Optional[str] = None
+    strategy: Optional[str] = None
+    store_id: Optional[int] = None
+    source_video_id: Optional[int] = None
+    format: str = Field("json", description="json | csv")
+
+
 class IntentIn(BaseModel):
     """一句话需求（Intent Layer 入口）。"""
 

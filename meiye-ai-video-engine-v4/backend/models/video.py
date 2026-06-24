@@ -13,6 +13,7 @@ class Video(Base):
     store_id = Column(Integer, nullable=True, index=True)   # 归因到门店（可空）
     type = Column(String(16), nullable=False)               # mother | viral
     title = Column(String(255), nullable=True)
+    strategy = Column(String(32), nullable=True, index=True)  # 裂变策略（viral），用于筛选/导出
     source_video_id = Column(Integer, nullable=True)        # 裂变视频指向母视频
     status = Column(String(16), nullable=False, default="ready")
     download_url = Column(String(512), nullable=True)

@@ -41,6 +41,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
             store_id=o.get("store_id"),
             type="viral",
             title=o["title"],
+            strategy=o.get("strategy"),
             source_video_id=source.id,
             download_url=o["url"],
             share_url=o["url"],

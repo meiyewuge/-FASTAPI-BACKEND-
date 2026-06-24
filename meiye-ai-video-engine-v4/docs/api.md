@@ -94,10 +94,29 @@
       "error": null } }
 ```
 
-## 历史视频
+## 历史视频（筛选）
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/videos?type=mother\|viral&page=1&page_size=20` | 视频列表，按租户隔离 |
+
+筛选参数（可叠加）：`strategy=成交型`、`store_id=1`、`source_video_id=1`。
+返回项含 `strategy` / `store_id`，便于前端筛选与勾选。
+
+## 导出（筛选 → 清单，不分发）
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/export` | 按 ids 或筛选条件导出视频清单（json/csv）|
+
+```jsonc
+// POST /api/export
+{ "video_ids":[3,4], "format":"json" }              // 或按筛选：{ "type":"viral","strategy":"成交型" }
+→ { "code":0, "data": { "count":2, "items":[
+     { "video_id":3, "type":"viral", "title":"...", "strategy":"成交型",
+       "store_id":1, "store_name":"广州医美1",
+       "download_url":"...", "share_url":"..." } ] } }
+// format=csv → 返回 text/csv 附件（videos_export.csv）
+```
+> 导出仅产清单/文件，**不对接外部平台、不做分发/发布**（系统边界：输入→生成→筛选→导出）。
 
 ## 成本
 | 方法 | 路径 | 说明 |

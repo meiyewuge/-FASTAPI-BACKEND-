@@ -30,6 +30,7 @@ ORM：SQLAlchemy 2.0，模型见 `backend/models/`。
 | store_id | int, index, null | 归因到门店 |
 | type | str | `mother` \| `viral` |
 | title | str | |
+| strategy | str, index, null | 裂变策略（viral），用于筛选/导出/指标 |
 | source_video_id | int, null | 裂变视频指向其母视频 |
 | status | str | 默认 `ready` |
 | download_url | str | 下载链接 |

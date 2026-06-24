@@ -10,8 +10,6 @@
 
 from __future__ import annotations
 
-import json
-
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -46,21 +44,14 @@ def by_store(db: Session, tenant_id: str) -> list[dict]:
 
 
 def by_strategy(db: Session, tenant_id: str) -> list[dict]:
-    """各内容策略产出条数与成本占比（策略来自裂变视频 meta）。"""
+    """各内容策略产出条数与成本占比（策略来自裂变视频 strategy 字段）。"""
     rows = (
-        db.query(Video.meta)
+        db.query(Video.strategy, func.count())
         .filter(Video.tenant_id == tenant_id, Video.type == "viral")
+        .group_by(Video.strategy)
         .all()
     )
-    counts: dict[str, int] = {}
-    for (meta,) in rows:
-        strat = "未知"
-        if meta:
-            try:
-                strat = json.loads(meta).get("changes", {}).get("strategy", "未知")
-            except (ValueError, TypeError):
-                pass
-        counts[strat] = counts.get(strat, 0) + 1
+    counts: dict[str, int] = {(s or "未知"): int(n) for s, n in rows}
 
     clip_price = unit_price("video.remix.b")
     total = sum(counts.values()) or 1
