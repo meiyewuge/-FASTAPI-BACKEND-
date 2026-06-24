@@ -42,5 +42,11 @@ class Settings(BaseSettings):
     cost_per_mother: float = 1.0   # 每条母视频成本
     cost_per_clip: float = 0.1     # 每条裂变片段成本
 
+    # B2：本地视频存储（本地+CDN 双存，download_url 优先本地，根治 24h 过期）
+    storage_enabled: bool = False  # ECS 生产置 true（.env），dev/mock 默认 false 不发起下载
+    storage_dir: str = "/opt/v4-video-engine/storage/videos"
+    # nginx serve 该目录的静态访问基址，如 https://video.beautypeaceai.com/static/videos
+    storage_base_url: str = ""
+
 
 settings = Settings()

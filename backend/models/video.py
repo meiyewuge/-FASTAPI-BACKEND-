@@ -16,7 +16,9 @@ class Video(Base):
     strategy = Column(String(32), nullable=True, index=True)  # 裂变策略（viral），用于筛选/导出
     source_video_id = Column(Integer, nullable=True)        # 裂变视频指向母视频
     status = Column(String(16), nullable=False, default="ready")
-    download_url = Column(String(512), nullable=True)
+    download_url = Column(String(512), nullable=True)       # 本地优先，CDN 兜底
+    cdn_url = Column(String(1024), nullable=True)           # 火山 CDN 原始签名 URL（24h）
+    local_url = Column(String(512), nullable=True)          # ECS 本地静态 URL（永不过期）
     share_url = Column(String(512), nullable=True)
     volcano_task_id = Column(String(64), nullable=True)     # 火山任务id（B1：用于过期后刷新URL）
     meta = Column(Text, nullable=True)                      # JSON：脚本/分镜/改动等

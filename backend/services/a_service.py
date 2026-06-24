@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 import cost_engine
 from a_engine.generator import generate_mother_video
+from config import settings
 from models import Video
+from utils import video_storage
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
@@ -16,19 +18,27 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     duration = payload.get("duration", 15)
     resolution = payload.get("resolution", "720p")
     data = generate_mother_video(tenant_id, prompt, duration=duration, resolution=resolution)
+    cdn_url = data["url"]
 
     video = Video(
         tenant_id=tenant_id,
         store_id=payload.get("store_id"),
         type="mother",
         title=payload.get("title") or data["title"],
-        download_url=data["url"],
-        share_url=data["url"],
+        cdn_url=cdn_url,
+        download_url=cdn_url,
+        share_url=cdn_url,
         volcano_task_id=data["meta"].get("provider_task_id"),
         meta=json.dumps(data["meta"], ensure_ascii=False),
     )
     db.add(video)
     db.flush()
+
+    # B2：生成成功后落本地（本地优先，CDN 兜底）。dev/mock 默认关闭，ECS 置 STORAGE_ENABLED=true。
+    if settings.storage_enabled:
+        st = video_storage.download_and_store(video.id, cdn_url, subdir="mother")
+        video.local_url = st["local_url"]
+        video.download_url = video_storage.resolve_download_url(cdn_url, st["local_url"])
 
     provider = data["meta"].get("served_by") or data["meta"].get("provider") or ""
     cost_engine.record(
