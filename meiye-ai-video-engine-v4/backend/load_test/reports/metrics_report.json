@@ -1,0 +1,72 @@
+{
+  "config": {
+    "provider": "loadtest_flaky",
+    "fail_rate": 0.5,
+    "retries": 3,
+    "a_tasks_target": 100,
+    "b_tasks_target": 500,
+    "tenants": 10,
+    "stores": 50,
+    "clips_per_b": 5
+  },
+  "totals": {
+    "a_tasks": 100,
+    "b_tasks": 500,
+    "mother_videos": 100,
+    "viral_videos": 2500,
+    "total_videos": 2600,
+    "wall_seconds": 14.84
+  },
+  "stability": {
+    "a_success_rate": 1.0,
+    "b_success_rate": 1.0,
+    "fallback_rate": 0.0665
+  },
+  "latency": {
+    "a_台ms": {
+      "count": 100,
+      "avg_ms": 12.99,
+      "p50_ms": 12.439,
+      "p95_ms": 15.954,
+      "p99_ms": 16.587,
+      "max_ms": 22.184
+    },
+    "b_台ms": {
+      "count": 500,
+      "avg_ms": 19.652,
+      "p50_ms": 19.112,
+      "p95_ms": 23.971,
+      "p99_ms": 31.486,
+      "max_ms": 66.839
+    }
+  },
+  "throughput": {
+    "a_tasks_per_sec": 6.74,
+    "b_tasks_per_sec": 33.69,
+    "pipeline_videos_per_sec": 175.17,
+    "est_videos_per_day_pipeline": 15134687,
+    "provider_bound_estimate": {
+      "assume_seconds_per_video": 60.0,
+      "assume_concurrency": 20,
+      "est_videos_per_day": 28800,
+      "note": "mock 下延迟≈管线开销；真实产能受 provider 出片时延约束，按假设并发估算"
+    }
+  },
+  "cost": {
+    "total_cost": 350.0,
+    "total_duration_sec": 21701.0,
+    "per_video_avg": 0.1346,
+    "per_store_avg": 7.0,
+    "per_tenant_avg": 35.0,
+    "by_provider": {
+      "loadtest_flaky": {
+        "count": 2427,
+        "cost": 330.0
+      },
+      "mock": {
+        "count": 173,
+        "cost": 20.0
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+/**
+ * 登录页 — 系统唯一入口。
+ * 手机号/token 登录 → 自动绑定 tenant_id → 跳转工作台。
+ */
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { login, getToken } from "../api/client";
+
+export default function Login() {
+  const [phone, setPhone] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const navigate = useNavigate();
+
+  // 已登录直接跳转
+  if (getToken()) {
+    navigate("/workbench", { replace: true });
+    return null;
+  }
+
+  const handleLogin = async () => {
+    if (!phone.trim()) {
+      setError("请输入手机号或 token");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const r = await login(phone.trim());
+      if (r.code === 0) {
+        navigate("/workbench", { replace: true });
+      } else {
+        setError(r.msg || "登录失败");
+      }
+    } catch {
+      setError("网络异常，请检查后端是否启动");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-header">
+          <h1>美业AI视频系统</h1>
+          <p className="login-subtitle">V4.0 SaaS 工作台</p>
+        </div>
+        <div className="login-form">
+          <label>手机号 / Token</label>
+          <input
+            type="text"
+            placeholder="请输入手机号或 token"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            disabled={loading}
+          />
+          {error && <p className="login-error">{error}</p>}
+          <button
+            className="login-btn"
+            onClick={handleLogin}
+            disabled={loading}
+          >
+            {loading ? "登录中..." : "进入系统"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

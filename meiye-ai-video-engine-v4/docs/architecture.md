@@ -1,0 +1,90 @@
+# 架构设计 · architecture.md
+
+## 1. 系统本质
+
+美业AI视频系统 V4.0 是一台 **一键视频工厂**。它把「AI 视频工业系统」压缩成一个按钮：
+用户登录后，只需输入一句话、点一个按钮，即可产出母视频（A台）或裂变视频（B台），并拿到下载 + 分发链接。
+
+- ❌ 不是后台系统
+- ❌ 不是管理平台
+- ❌ 不是运营工具
+- ✅ 是一个「视频生产机器」
+
+## 2. 分层架构
+
+```
+┌─────────────────────────────────────────────┐
+│  frontend/  (极简 SaaS：Login + Workbench)     │
+│  仅通过 /api/* 与后端通信                       │
+└───────────────────────┬─────────────────────┘
+                        │ HTTP (/api/*)
+┌───────────────────────▼─────────────────────┐
+│  backend/api/         API 统一出口            │
+├───────────────────────────────────────────── │
+│  backend/services/    业务逻辑层               │
+├──────────────┬───────────────┬─────────────── │
+│  a_engine/   │   b_engine/   │   tasks/       │
+│  母视频生成   │   混剪裂变     │   队列/异步任务  │
+├──────────────┴───────────────┴─────────────── │
+│  models/  数据模型     utils/  工具类           │
+└─────────────────────────────────────────────┘
+```
+
+## 3. 分层原则（写死，不可违反）
+
+### 原则 1：前后端必须物理隔离
+- `backend/` ≠ `frontend/`
+- 禁止混写，禁止跨目录直接调用。
+- 前端只能通过 HTTP 请求 `/api/*` 访问后端。
+
+### 原则 2：A/B 引擎必须模块隔离
+- `a_engine/` 与 `b_engine/` **不能共享逻辑代码**。
+- 引擎之间不允许互相 import；如需协作，只能经由 `services/` 编排或通过 API。
+- 共享能力（如视频生成 SDK、存储客户端）下沉到 `utils/` 或 `services/`，由各引擎各自调用，而非引擎互调。
+
+### 原则 3：API 必须统一出口
+- 所有请求必须通过 `/api/*`。
+- 禁止：前端直连数据库；禁止：引擎之间互调。
+
+### 原则 4：任务系统独立
+- 异步/长耗时任务（视频生成）必须放在独立模块 `backend/tasks/video_task.py`。
+- API 层只负责「投递任务 + 查询状态」，不在请求线程里跑视频生成。
+
+## 4. 模块职责
+
+| 目录 | 职责 | 不允许 |
+| --- | --- | --- |
+| `frontend/` | 登录 + 工作台 UI，调用 `/api/*` | 直连 DB、写业务规则 |
+| `backend/api/` | 路由、鉴权、参数校验、统一响应 | 写视频生成逻辑 |
+| `backend/services/` | 业务编排：脚本生成→投递任务→组装结果 | 直接调外部视频 API（应经 engine） |
+| `backend/a_engine/` | 母视频生成全流程 | import b_engine |
+| `backend/b_engine/` | 切片/重组/改字幕开头结尾 | import a_engine |
+| `backend/tasks/` | 队列、异步执行、任务状态 | 持有 HTTP 请求上下文 |
+| `backend/models/` | ORM/数据结构、tenant 维度 | 业务逻辑 |
+| `backend/utils/` | 通用工具（存储、签名、日志） | 业务规则 |
+
+## 5. 隐藏在后端的复杂能力（不出现在 UI）
+
+`tenant_id` 多租户、成本统计、API 调用日志、队列系统、模型选择、BGM 库、字幕模板库 —— 全部后端处理。
+前端永远只看到「输入框 + 两个按钮 + 状态 + 历史列表」。
+
+## 6. 多租户（SaaS）约定
+
+- 每个请求携带 token，后端解析出 `tenant_id` 并贯穿 service / task / 存储路径。
+- 数据模型从第一天就带 `tenant_id` 维度，便于后续按租户拆分与计费。
+- 成本统计、调用日志按 `tenant_id` 聚合。
+
+## 7. 三层解耦：业务 / 执行 / 观测
+
+```
+[业务层] intent → orchestrator → store / a_engine / b_engine
+[执行层] provider（纯执行：只产视频，返回 url/duration/units，不决定金额）
+[经济层] cost_engine（独立：计价 + 记账 + 台账 + 熔断）
+```
+
+- **provider 纯执行**：返回 `units`（用量），不返回金额。换厂商（火山/可灵/Runway）不影响计费。
+- **orchestrator 不算价格**：只上报用量 `ensure_budget(tenant, api_name, units)`，价格与放行判断都在 cost_engine。
+- **cost_engine 独立经济层**（`backend/cost_engine/`）：
+  - `pricing_model.py` 单价策略 · `billing.py` 记账 · `ledger.py` 台账查询 · `policy.py` 配额熔断
+  - 改单价/换计费规则/接分润，只动本包，不动 provider / engine / orchestrator。
+- **一个模型 = 一套鉴权**：`volcano_seedance`(Bearer) 与 `volcano_legacy`(AK/SK) 是两个 provider，不在单个 provider 里混两代 API。
