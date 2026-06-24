@@ -31,6 +31,8 @@ _CN_DIGIT = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 
 class Intent:
     action: str = "generate_video_batch"
     count: int = 1
+    duration: Optional[int] = None       # 时长(秒)，B4：区分「15秒」时长 vs「15个」数量
+    resolution: Optional[str] = None     # 480p/720p/1080p
     city: Optional[str] = None
     industry: Optional[str] = None
     theme: Optional[str] = None
@@ -57,19 +59,46 @@ def _cn_to_int(s: str) -> Optional[int]:
 
 
 def _parse_count(text: str) -> int:
-    # 阿拉伯数字优先：10个 / 5条 / 共20
-    m = re.search(r"(\d+)\s*(?:个|条|集|版|份)?", text)
+    # B4：必须带「数量单位」(个/条/集/版/份) 才算数量，避免「15秒」被误判为 count=15
+    m = re.search(r"(\d+)\s*(?:个|条|集|版|份)", text)
     if m:
         n = int(m.group(1))
         if n > 0:
             return n
-    # 中文数字：十个 / 三条 / 二十
     m = re.search(r"([零一二两三四五六七八九十]+)\s*(?:个|条|集|版|份)", text)
     if m:
         n = _cn_to_int(m.group(1))
         if n:
             return n
     return 1
+
+
+def _parse_duration(text: str) -> Optional[int]:
+    """时长(秒)：15秒 / 2分钟 / 1分 / 十五秒。Seedance 单段 4~15s。"""
+    m = re.search(r"(\d+)\s*分钟?", text)
+    if m:
+        return int(m.group(1)) * 60
+    m = re.search(r"(\d+)\s*秒", text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"([零一二两三四五六七八九十]+)\s*秒", text)
+    if m:
+        return _cn_to_int(m.group(1))
+    return None
+
+
+def _parse_resolution(text: str) -> Optional[str]:
+    t = text.lower()
+    for r in ("1080p", "720p", "480p"):
+        if r in t:
+            return r
+    if "超清" in text or "4k" in t:
+        return "1080p"
+    if "高清" in text:
+        return "720p"
+    if "标清" in text or "草稿" in text or "预览" in text:
+        return "480p"
+    return None
 
 
 def _first_keyword(text: str, vocab: list[str]) -> Optional[str]:
@@ -86,6 +115,8 @@ def parse_intent(text: str) -> Intent:
     return Intent(
         action="generate_video_batch" if count > 1 else "generate_video",
         count=count,
+        duration=_parse_duration(text),
+        resolution=_parse_resolution(text),
         city=_first_keyword(text, CITIES),
         industry=_first_keyword(text, INDUSTRIES),
         theme=_first_keyword(text, THEMES),

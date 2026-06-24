@@ -71,6 +71,8 @@ def plan_from_intent(db: Session, tenant_id: str, text: str) -> dict:
             "prompt": _build_prompt(intent, store),
             "store_id": store.id,
             "title": f"{store.name}·{intent.theme or '宣传'}",
+            "duration": intent.duration or 15,        # B4：透传时长（"15秒"→duration 而非 count）
+            "resolution": intent.resolution or "720p",
         }
         tasks.append(video_task.create_task(db, tenant_id, "a", payload, store_id=store.id))
 

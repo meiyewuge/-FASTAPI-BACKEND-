@@ -32,7 +32,8 @@ def generate_mother_video(tenant_id: str, prompt: str, duration: int = 15, resol
     """
     script = build_script(prompt)
     storyboard = build_storyboard(script)
-    result = get_provider().generate_mother(tenant_id, prompt, storyboard)
+    # B4：把 duration/resolution 透传到 provider（火山按真实时长/分辨率生成与计费）
+    result = get_provider().generate_mother(tenant_id, prompt, storyboard, duration=duration, resolution=resolution)
     return {
         "title": prompt[:50],
         "url": result["url"],
