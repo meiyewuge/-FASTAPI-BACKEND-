@@ -1,0 +1,68 @@
+{
+  "mode": "DRY-RUN",
+  "config": {
+    "provider": "loadtest_flaky",
+    "concurrency": 6,
+    "fail_rate": 0.3,
+    "sim_latency_ms": 300.0,
+    "a": 12,
+    "b": 24,
+    "tenants": 5,
+    "stores": 12,
+    "clips": 3
+  },
+  "totals": {
+    "a_tasks": 12,
+    "b_tasks": 15,
+    "videos": 57,
+    "wall_seconds": 4.82
+  },
+  "stability": {
+    "a_success_rate": 1.0,
+    "b_success_rate": 1.0,
+    "fallback_rate": 0.0175,
+    "retry_rate": 0.0,
+    "failed_tasks": 0
+  },
+  "latency_ms": {
+    "a": {
+      "count": 12,
+      "avg_ms": 539.725,
+      "p50_ms": 364.304,
+      "p95_ms": 1084.634,
+      "p99_ms": 1241.965,
+      "max_ms": 1281.298
+    },
+    "b": {
+      "count": 15,
+      "avg_ms": 1116.064,
+      "p50_ms": 966.067,
+      "p95_ms": 1619.908,
+      "p99_ms": 1799.468,
+      "max_ms": 1844.358
+    }
+  },
+  "queue_delay_ms": {
+    "a": {
+      "count": 12,
+      "avg_ms": 257.944,
+      "p50_ms": 178.826,
+      "p95_ms": 676.653,
+      "p99_ms": 682.014,
+      "max_ms": 683.355
+    },
+    "b": {
+      "count": 15,
+      "avg_ms": 860.763,
+      "p50_ms": 954.228,
+      "p95_ms": 1974.72,
+      "p99_ms": 2134.263,
+      "max_ms": 2174.149
+    }
+  },
+  "cost": {
+    "total_cost": 16.5,
+    "total_duration_sec": 487.0,
+    "real_cost_per_video": 0.2895
+  }
+}
