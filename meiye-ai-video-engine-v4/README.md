@@ -86,6 +86,17 @@ curl localhost:8000/api/tasks/<task_id>      # status=done 后含 video
 curl localhost:8000/api/cost/summary         # 成本统计
 ```
 
+## 压测 / 产能验证（Phase 6）
+
+```bash
+cd backend
+python -m load_test.load_test_runner               # 默认 100 A台 + 500 B台 / 10租户 / 50门店
+python -m load_test.load_test_runner --fail-rate 0.5  # 注入失败率，验证 fallback
+# 报告：load_test/reports/{metrics_report.json, load_test_summary.md, cost_analysis.csv}
+```
+产出：成功率 / 延迟(p50/p95/p99) / 吞吐 / 单视频·单门店·单租户成本 / fallback触发率 / 产能估算。
+最近一轮（50% 注入失败）：2600 视频 / 14.8s，成功率 100%，fallback 6.7%。
+
 ## 当前状态
 
 🟢 **后端地基可运行** —— Intent层/A台/B台/任务系统/成本系统/API 全部跑通（默认 Mock 视频 provider）：
