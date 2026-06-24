@@ -57,7 +57,9 @@ ORM：SQLAlchemy 2.0，模型见 `backend/models/`。
 | --- | --- | --- |
 | id | int, PK | |
 | tenant_id | str, index | |
+| store_id | int, index, null | 门店归因 |
 | api_name | str | 如 `video.generate.a` / `video.remix.b` |
+| provider | str | 实际 provider，如 `volcano_seedance` / `mock` |
 | task_id | str, index, null | 关联任务 |
 | units | float | 调用量 |
 | amount | float | 金额 |

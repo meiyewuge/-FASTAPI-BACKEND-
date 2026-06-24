@@ -18,16 +18,20 @@ class Settings(BaseSettings):
     # 鉴权（占位）
     jwt_secret: str = "change_me"
 
-    # 视频生成 provider：mock | (future) keling / jimeng / runway / volcano ...
+    # 视频生成 provider：mock | volcano_seedance | (future) keling / jimeng / runway ...
     video_provider: str = "mock"
     # 真实 provider 失败时是否兜底回退（最终回退到 mock，保证不中断）
     video_fallback: bool = True
+    provider_retries: int = 1           # 真实 provider 失败后重试次数（再回退 mock）
 
     # 真实 HTTP provider 接入参数（按厂商文档填）
     video_api_base: str = ""
     video_api_key: str = ""
     provider_timeout: float = 120.0     # 单次任务最长等待（秒）
     poll_interval: float = 3.0          # 轮询间隔（秒）
+
+    # 火山 Doubao Seedance
+    volcano_model: str = "doubao-seedance-2.0-260128"
 
     # mock 成本参数（用于 cost 系统演示）
     cost_per_mother: float = 1.0   # 每条母视频成本

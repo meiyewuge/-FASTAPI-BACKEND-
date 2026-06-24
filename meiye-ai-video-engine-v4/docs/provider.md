@@ -39,10 +39,25 @@ A台 generate_mother / B台 remix
 provider 返回 `cost: {units, amount}`，由 `cost_service` 按 tenant 记账并参与配额熔断。
 真实厂商可在子类里按 API 响应或计费规则填真实 `amount`。
 
-## 我需要你提供的（接真实厂商所需）
-- 厂商名称（可灵/即梦/Runway/火山/其它）
-- API Base URL + 鉴权方式 + Key
-- 「提交生成」「查询任务」两个端点的请求/响应示例（或官方文档链接）
-- 计费规则（每条/每秒多少钱）—— 用于真实成本记账
+## 已接入：火山 Doubao Seedance 2.0 ✅
+`backend/utils/volcano_seedance_provider.py`
 
-给齐后我就能把 `ExampleVendorProvider` 落成你厂商的真实适配器并联调。
+- 提交：`POST {base}/api/v3/contents/generations/tasks`，body `{model, content:[{type:text,text:prompt}]}`
+- 查询：`GET {base}/api/v3/contents/generations/tasks/{task_id}`，状态映射 succeeded→done / failed→failed
+- 鉴权：`Authorization: Bearer <API_KEY>`，模型 `doubao-seedance-2.0-260128`
+- 兜底链：`volcano → retry(PROVIDER_RETRIES) → mock`
+
+启用：`.env` 设
+```
+VIDEO_PROVIDER=volcano_seedance
+VIDEO_API_BASE=https://ark.cn-beijing.volces.com
+VIDEO_API_KEY=<火山方舟 API Key>     # 勿提交到仓库
+VOLCANO_MODEL=doubao-seedance-2.0-260128
+```
+填好 Key 重启即产真实视频；A台/B台无需改动。
+
+> 验证：HTTP 用 mock 桩跑通 A台/B台 e2e + fallback + 成本归因（见测试）。
+> 真实联调还需：你的火山 API Key + 计费单价（用于真实成本记账，现用占位单价）。
+
+## 接其它厂商（可灵/即梦/Runway…）
+照 `utils/provider_template.py` 写子类，在 `video_provider._build` 或 `_PROVIDERS` 注册即可。

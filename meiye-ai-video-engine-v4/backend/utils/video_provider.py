@@ -151,12 +151,21 @@ _PROVIDERS: dict[str, type[VideoProvider]] = {
 
 
 def _build(name: str) -> VideoProvider:
+    if name in ("volcano", "volcano_seedance"):
+        # 延迟导入，避免与本模块循环依赖
+        from utils.volcano_seedance_provider import VolcanoSeedanceProvider
+
+        return VolcanoSeedanceProvider()
     return _PROVIDERS.get(name, MockVideoProvider)()
 
 
 def get_provider() -> VideoProvider:
-    """构建 provider；真实 provider 默认包一层 fallback→mock，保证不中断。"""
-    primary = _build(settings.video_provider)
-    if settings.video_fallback and not isinstance(primary, MockVideoProvider):
-        return FallbackProvider([primary, MockVideoProvider()])
-    return primary
+    """构建 provider。真实 provider 链：主 →（retry N 次）→ mock 兜底，保证不中断。"""
+    name = settings.video_provider
+    primary = _build(name)
+    if isinstance(primary, MockVideoProvider):
+        return primary
+    chain: list[VideoProvider] = [_build(name) for _ in range(1 + max(0, settings.provider_retries))]
+    if settings.video_fallback:
+        chain.append(MockVideoProvider())
+    return FallbackProvider(chain)

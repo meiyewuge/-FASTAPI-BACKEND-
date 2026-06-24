@@ -48,8 +48,16 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         db.add(v)
         db.flush()
         cost = o["cost"]
+        provider = o["meta"].get("served_by") or o["meta"].get("provider") or ""
         cost_service.record(
-            db, tenant_id, "video.remix.b", cost["units"], cost["amount"], task_id
+            db,
+            tenant_id,
+            "video.remix.b",
+            cost["units"],
+            cost["amount"],
+            task_id,
+            provider=provider,
+            store_id=o.get("store_id"),
         )
         videos.append(
             {

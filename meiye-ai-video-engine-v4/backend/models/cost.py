@@ -10,7 +10,9 @@ class CostRecord(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_id = Column(String(64), nullable=False, default="default", index=True)
+    store_id = Column(Integer, nullable=True, index=True)   # 门店归因
     api_name = Column(String(64), nullable=False)           # 如 video.generate.a / video.remix.b
+    provider = Column(String(64), nullable=False, default="")  # 实际 provider，如 volcano_seedance / mock
     task_id = Column(String(40), nullable=True, index=True)
     units = Column(Float, nullable=False, default=0.0)      # 调用量（条/秒/token）
     amount = Column(Float, nullable=False, default=0.0)     # 金额
