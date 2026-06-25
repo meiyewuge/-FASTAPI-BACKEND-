@@ -10,8 +10,9 @@
 | Patch2 | `36cf4e8` | 上传接口 `POST /api/upload`（image/text/video） |
 | Patch3 | `dd1264b` | 导出修复（方案B）：保留 CSV 元数据，新增视频 URL 导出 |
 | Patch4 | `107185e` | 访问卡控第一阶段：邀约码 + JWT 鉴权 |
-| Patch4.1 | （本次新增） | 邀约码可重复登录修正（专属登录码绑定手机号） |
+| Patch4.1 | （已提交） | 邀约码可重复登录修正（专属登录码绑定手机号） |
 | Patch5 | `0017995` | 订阅/试用字段（暂不接支付） |
+| Patch6 | （本次新增） | 管理员身份与发码权限体系（super_admin / invite_admin / user） |
 
 合计：20 files changed, 826 insertions(+), 24 deletions(-)。
 
@@ -177,11 +178,63 @@
 
 ---
 
+## Patch6 — 管理员身份与发码权限体系
+
+**背景**：原发码端点仅靠前端传 `X-Admin-Key`（后端密钥驱动），不是「账号拥有管理员权限」的产品逻辑。Patch6 升级为：**吴哥本人账号 = 初始超级管理员，登录后凭身份拥有发码权限**，并可授权员工成为发码员。详见 `PATCH6_ADMIN_PERMISSION_REPORT.md`。
+
+**角色模型**（新表 `admin_users`，主键 phone）
+
+| role | 权限 |
+|----|----|
+| `super_admin` | 吴哥本人，全部权限：发码 + 授权/取消授权管理员 |
+| `invite_admin` | 员工发码员：仅生成/查看/作废邀请码，**不能授权他人** |
+| `user` | 普通用户（不入表，缺省即 user）：仅使用系统 |
+
+**关键流程**：`ADMIN_KEY bootstrap 吴哥手机号 → 吴哥登录(JWT 带 role=super_admin) → 凭身份发码 → 授权员工 invite_admin`。
+
+**新增/变更 API**
+
+| 方法 | 路径 | 守卫 | 说明 |
+|----|----|----|----|
+| POST | `/api/admin/bootstrap` | X-Admin-Key | 一次性初始化超级管理员（无 super_admin 时）。`{phone, note}`，手机号由请求提供不写死。已存在 → 4090 |
+| GET | `/api/me` | JWT | 返回 `{phone, tenant_id, role, is_admin, permissions}` |
+| POST | `/api/admin/invite/generate` | **JWT 角色** | 改为 super_admin/invite_admin 放行（X-Admin-Key 仍可应急兜底）；user → 403 |
+| GET | `/api/admin/invite/list` | **JWT 角色** | 同上 |
+| POST | `/api/admin/invite/revoke` | **JWT 角色** | 同上 |
+| POST | `/api/admin/users/grant` | **仅 super_admin** | 授权员工：`{phone, role:"invite_admin", note}` |
+| POST | `/api/admin/users/revoke` | **仅 super_admin** | 取消授权（降级 user）；不能撤销唯一 super_admin → 4091 |
+| GET | `/api/admin/users/list` | **仅 super_admin** | 管理员列表 |
+
+**登录 JWT 变更**：payload 增加 `role`（登录时按 `admin_users` 判定）。`/api/me`、发码、授权端点均**以 DB 角色为准重新核验**——管理员被降权后，旧 JWT 立即失效（无需等 token 过期）。
+
+**改动文件**
+- `models/admin_user.py`（新增）+ `models/__init__.py`（注册 AdminUser）。
+- `services/admin_service.py`（新增）：`bootstrap_super_admin / get_role / can_invite / grant / revoke / list_admins / permissions_of`。
+- `api/deps.py`：新增 `get_current_user`（JWT→{tenant_id,phone,role}）、`require_invite_permission`（JWT 角色或 ADMIN_KEY 兜底）、`require_super_admin`；`get_tenant_id` 改为基于 `get_current_user`。
+- `api/routes.py`：登录注入 role；新增 `/me`、`/admin/bootstrap`、`/admin/users/*`；发码端点改 JWT 角色守卫。
+- `schemas/dto.py`：`BootstrapIn` / `GrantIn` / `UserRevokeIn`。
+
+**新增错误码**：`4090`=已存在超级管理员（禁止重复 bootstrap）；`4091`=不能撤销唯一超级管理员；发码/授权无权 → `403`（统一 `{code:1001}`）。
+
+**ADMIN_KEY 定位变更**：仅作**初始化（bootstrap）+ 应急兜底**密钥，前端日常不再用 ADMIN_KEY 发码。
+
+**已验证**（`tests/verify_patch6_admin_roles.py`，12 项全过）：见下「已验证清单」。
+
+**前端如何对接**（替代「输入 ADMIN_KEY 发码」）
+- 吴哥正常登录 → 调 `GET /api/me`。
+- `role=super_admin` → 显示「管理员后台」（发码 + 员工授权）。
+- `role=invite_admin` → 只显示「发码管理」。
+- `role=user` → 不显示任何管理员入口。
+- 发码/授权请求带 `Authorization: Bearer <JWT>`，**不再传 ADMIN_KEY**。
+
+---
+
 ## 新增数据库迁移（DB migrations）
 
 当前用 `Base.metadata.create_all`（启动建表），**新增表会自动建**：
 - `invite_codes`（Patch4，新表 → 自动建）。
 - `uploads`（Patch2，新表 → 自动建）。
+- `admin_users`（Patch6，新表 → 自动建）。
 
 **需手工迁移的存量表新增列**（`create_all` 不会给已存在的表加列）：
 - `tenants` 新增 `subscription_status VARCHAR(16) NOT NULL DEFAULT 'trial'`、`trial_remaining INTEGER NOT NULL DEFAULT 3`（Patch5）。
@@ -221,6 +274,7 @@
 - ✅ `tests/verify_patch4.py`：邀约码 + JWT 全场景。
 - ✅ `tests/verify_patch4_1.py`：邀约码可重复登录（绑定手机号 / 同号重复登录不增 used_count / 异号 4010 / 作废后拒绝 / JWT 仍可用）。
 - ✅ `tests/verify_patch5.py`：试用扣减（A台扣/B台不扣/不为负）。
+- ✅ `tests/verify_patch6_admin_roles.py`：bootstrap 超管 / 重复 bootstrap 拒绝 / 登录 JWT 带 role / `/api/me` is_admin / super_admin 发码 / user 发码 403 / 授权 invite_admin / invite_admin 发码 / invite_admin 授权他人 403 / revoke 后即时失权（12 项）。
 - 验证环境：本地 sandbox + 真实 ffmpeg + httpx 桩（**无真实火山 key**）。
 
 ---
@@ -228,7 +282,9 @@
 ## 未解决风险 / 注意事项
 
 1. **生产 `tenants` 加列需手工 ALTER**（见迁移段）。`create_all` 不改存量表结构。
-2. **JWT_SECRET / ADMIN_KEY 必须在生产 .env 配置**：`change_me` 默认值不可上线；`ADMIN_KEY` 不配则管理端点全禁用（403）。
+2. **JWT_SECRET / ADMIN_KEY 必须在生产 .env 配置**：`change_me` 默认值不可上线；`ADMIN_KEY` 不配则 bootstrap/应急通道禁用（403）。Patch6 后 ADMIN_KEY 仅用于初始化 + 应急，日常发码靠 JWT 角色。
+10. **Patch6 上线顺序**：先部署后端 → `POST /api/admin/bootstrap`（带 ADMIN_KEY，传吴哥手机号）设初始超管 → 给吴哥发一个邀请码（应急通道或后续他自助）→ 吴哥登录即拥有发码权。**bootstrap 仅在无 super_admin 时可执行一次**。
+11. **角色以 DB 为准即时核验**：管理员降权后旧 JWT 立即失效（发码/授权端点每次查库）；但被降权用户的**业务 JWT（tenant 访问）**在 `exp` 前仍有效（与风险 3 同）。
 3. **JWT 无刷新/吊销机制**：当前 token 在 `exp` 前一直有效，无黑名单。如需「踢下线」需后续加 token 版本号或服务端会话表。
 4. **邀约码 `used_count` 并发**：高并发下 SQLite 行级竞争可能超发；生产 PostgreSQL + 行锁可规避，当前阶段未加锁。
 5. **试用不做硬熔断**：`trial_remaining=0` 仍放行（无支付系统），仅成本配额 `cost_engine` 兜底。硬卡控待支付阶段决策。

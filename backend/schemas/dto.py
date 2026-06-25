@@ -33,6 +33,27 @@ class InviteRevokeIn(BaseModel):
     code: str = Field(..., min_length=1)
 
 
+class BootstrapIn(BaseModel):
+    """初始化超级管理员（Patch6，一次性，X-Admin-Key 保护）。"""
+
+    phone: str = Field(..., min_length=4, description="超级管理员手机号（不写死，由请求提供）")
+    note: Optional[str] = "initial super admin"
+
+
+class GrantIn(BaseModel):
+    """授权员工为管理员（仅 super_admin）。"""
+
+    phone: str = Field(..., min_length=4)
+    role: str = Field("invite_admin", description="invite_admin（发码员）")
+    note: Optional[str] = None
+
+
+class UserRevokeIn(BaseModel):
+    """取消管理员授权（仅 super_admin）。"""
+
+    phone: str = Field(..., min_length=4)
+
+
 class ExportIn(BaseModel):
     """导出：按 ids 或筛选条件，产出视频清单（manifest）。"""
 

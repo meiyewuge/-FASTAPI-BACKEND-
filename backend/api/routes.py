@@ -14,18 +14,21 @@ from sqlalchemy.orm import Session
 
 import analytics
 import cost_engine
-from api.deps import get_db, get_tenant_id, require_admin
+from api.deps import (
+    get_current_user, get_db, get_tenant_id, require_admin,
+    require_invite_permission, require_super_admin,
+)
 from config import settings
 from b_engine.strategies import STRATEGIES
 from cost_engine import QuotaExceeded, get_or_create_tenant
 from intent import parse_intent
 from models import Store, Video
 from schemas.dto import (
-    AGenerateIn, BGenerateIn, ComposeIn, ExportIn, IntentIn,
-    InviteGenIn, InviteRevokeIn, LoginIn, Resp,
+    AGenerateIn, BGenerateIn, BootstrapIn, ComposeIn, ExportIn, GrantIn, IntentIn,
+    InviteGenIn, InviteRevokeIn, LoginIn, Resp, UserRevokeIn,
 )
 from services import (
-    export_service, invite_service, orchestrator, store_service,
+    admin_service, export_service, invite_service, orchestrator, store_service,
     subscription_service, upload_service,
 )
 from tasks import video_task
@@ -48,30 +51,59 @@ def _task_brief(t) -> dict:
     }
 
 
-# ---------------- 鉴权（Patch4：邀约码 + JWT）----------------
+# ---------------- 鉴权（Patch4：邀约码 + JWT；Patch6：JWT 带角色）----------------
 @api_router.post("/auth/login")
 def login(body: LoginIn, db: Session = Depends(get_db)) -> Resp:
-    """手机号 + 邀约码登录。无邀约码 / 邀约码无效 → 拒绝；成功签发 JWT。"""
+    """手机号 + 邀约码登录。成功签发 JWT（含角色，管理员据 admin_users 判定）。"""
     result = invite_service.validate_and_consume(db, body.invite_code, body.phone)
     if not result["ok"]:
         return Resp(code=result["code"], message=result["message"])
     tenant_id = result["tenant_id"]
     get_or_create_tenant(db, tenant_id)
     db.commit()
+    role = admin_service.get_role(db, body.phone)
     token = jwt_util.encode(
-        {"tenant_id": tenant_id, "phone": body.phone},
+        {"tenant_id": tenant_id, "phone": body.phone, "role": role},
         settings.jwt_secret,
         ttl_seconds=settings.jwt_ttl_seconds,
     )
-    return Resp(data={"token": token, "tenant_id": tenant_id})
+    return Resp(data={"token": token, "tenant_id": tenant_id, "role": role})
 
 
-# ---------------- 管理员：邀约码（最小版，X-Admin-Key 守卫）----------------
+@api_router.get("/me")
+def me(db: Session = Depends(get_db), user: dict = Depends(get_current_user)) -> Resp:
+    """当前登录用户信息（前端据 role/permissions 渲染管理员入口）。"""
+    # 以库为准刷新角色（JWT 签发后可能被授权/降权）
+    role = admin_service.get_role(db, user.get("phone"))
+    return Resp(data={
+        "phone": user.get("phone"),
+        "tenant_id": user["tenant_id"],
+        "role": role,
+        "is_admin": role in (admin_service.ROLE_SUPER, admin_service.ROLE_INVITE),
+        "permissions": admin_service.permissions_of(role),
+    })
+
+
+# ---------------- 管理员：初始化超级管理员（一次性，X-Admin-Key 保护）----------------
+@api_router.post("/admin/bootstrap")
+def admin_bootstrap(
+    body: BootstrapIn,
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_admin),
+) -> Resp:
+    """仅当系统无任何超级管理员时可执行；手机号由请求提供，不写死。"""
+    result = admin_service.bootstrap_super_admin(db, body.phone, body.note)
+    if not result["ok"]:
+        return Resp(code=result["code"], message=result["message"])
+    return Resp(data={"ok": True, "phone": result["phone"], "role": result["role"]})
+
+
+# ---------------- 管理员：邀约码（JWT 角色权限：super_admin / invite_admin）----------------
 @api_router.post("/admin/invite/generate")
 def admin_invite_generate(
     body: InviteGenIn,
     db: Session = Depends(get_db),
-    _: bool = Depends(require_admin),
+    _op: dict = Depends(require_invite_permission),
 ) -> Resp:
     items = invite_service.generate(
         db, body.count, body.tenant_id, body.max_uses, body.note
@@ -82,7 +114,7 @@ def admin_invite_generate(
 @api_router.get("/admin/invite/list")
 def admin_invite_list(
     db: Session = Depends(get_db),
-    _: bool = Depends(require_admin),
+    _op: dict = Depends(require_invite_permission),
 ) -> Resp:
     items = invite_service.list_codes(db)
     return Resp(data={"items": items, "total": len(items)})
@@ -92,12 +124,46 @@ def admin_invite_list(
 def admin_invite_revoke(
     body: InviteRevokeIn,
     db: Session = Depends(get_db),
-    _: bool = Depends(require_admin),
+    _op: dict = Depends(require_invite_permission),
 ) -> Resp:
     ok = invite_service.revoke(db, body.code)
     if not ok:
         return Resp(code=3001, message="邀约码不存在")
     return Resp(data={"code": body.code, "active": False})
+
+
+# ---------------- 管理员：授权/取消授权员工（仅 super_admin）----------------
+@api_router.post("/admin/users/grant")
+def admin_users_grant(
+    body: GrantIn,
+    db: Session = Depends(get_db),
+    op: dict = Depends(require_super_admin),
+) -> Resp:
+    result = admin_service.grant(db, op["phone"], body.phone, body.role, body.note)
+    if not result["ok"]:
+        return Resp(code=result["code"], message=result["message"])
+    return Resp(data={"phone": result["phone"], "role": result["role"]})
+
+
+@api_router.post("/admin/users/revoke")
+def admin_users_revoke(
+    body: UserRevokeIn,
+    db: Session = Depends(get_db),
+    op: dict = Depends(require_super_admin),
+) -> Resp:
+    result = admin_service.revoke(db, body.phone)
+    if not result["ok"]:
+        return Resp(code=result["code"], message=result["message"])
+    return Resp(data={"phone": result["phone"], "role": result["role"]})
+
+
+@api_router.get("/admin/users/list")
+def admin_users_list(
+    db: Session = Depends(get_db),
+    _op: dict = Depends(require_super_admin),
+) -> Resp:
+    items = admin_service.list_admins(db)
+    return Resp(data={"items": items, "total": len(items)})
 
 
 # ---------------- Intent Layer（业务理解层）----------------
