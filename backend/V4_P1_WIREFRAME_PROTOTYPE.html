@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V4 页面重构 P1 · 可点击原型 (L2)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f4f5f7; color: #1f2329; }
+  .topbar { background: #fff; border-bottom: 1px solid #e5e6eb; padding: 10px 24px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 50; }
+  .topbar .brand { font-weight: 700; font-size: 16px; color: #165dff; }
+  .storage { margin-left: auto; font-size: 13px; color: #4e5969; display: flex; gap: 14px; align-items: center; }
+  .storage .api { color: #86909c; font-size: 11px; }
+  .pill { background: #f2f3f5; border-radius: 12px; padding: 2px 10px; }
+  .role-sw { margin-left: 12px; }
+  select, button, textarea { font-family: inherit; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px; }
+  .hero { text-align: center; margin: 18px 0 12px; }
+  .hero h1 { font-size: 24px; font-weight: 700; }
+  .hero p { color: #86909c; margin-top: 6px; font-size: 13px; }
+  .card { background: #fff; border: 1px solid #e5e6eb; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+  textarea.need { width: 100%; min-height: 96px; border: 1px solid #e5e6eb; border-radius: 8px; padding: 12px; font-size: 15px; resize: vertical; }
+  .uploads { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  .up-btn { border: 1px dashed #c9cdd4; background: #fafbfc; border-radius: 8px; padding: 10px 16px; cursor: pointer; font-size: 14px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .up-btn:hover { border-color: #165dff; color: #165dff; }
+  .up-btn .api { font-size: 10px; color: #86909c; }
+  .matbar { margin-top: 14px; display: flex; align-items: center; gap: 12px; font-size: 13px; color: #4e5969; flex-wrap: wrap; }
+  .thumbs { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .thumb { width: 84px; height: 84px; border-radius: 8px; background: #e8f3ff center/cover; position: relative; display: flex; align-items: center; justify-content: center; font-size: 24px; border: 1px solid #e5e6eb; }
+  .thumb .x { position: absolute; top: -8px; right: -8px; background: #f53f3f; color: #fff; width: 20px; height: 20px; border-radius: 50%; font-size: 12px; line-height: 20px; text-align: center; cursor: pointer; }
+  .actions { display: flex; gap: 14px; margin-top: 18px; }
+  .btn { border: none; border-radius: 10px; padding: 14px 22px; font-size: 15px; font-weight: 600; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .btn small { font-weight: 400; font-size: 11px; opacity: .9; }
+  .btn .api { font-size: 10px; opacity: .8; font-weight: 400; }
+  .btn-a { background: #ff7d00; color: #fff; }
+  .btn-b { background: #00b42a; color: #fff; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .panels { display: grid; grid-template-columns: 1fr; gap: 18px; }
+  .panel h2 { font-size: 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .panel h2 .api { font-size: 10px; color: #86909c; font-weight: 400; }
+  .vlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 12px; }
+  .vcard { border: 1px solid #e5e6eb; border-radius: 10px; overflow: hidden; }
+  .vcard .cover { height: 120px; background: linear-gradient(135deg,#cfe3ff,#e8f3ff); display: flex; align-items: center; justify-content: center; font-size: 30px; color: #4080ff; }
+  .vcard .cover.viral { background: linear-gradient(135deg,#d6ffe0,#eafff0); color: #00a32a; }
+  .vcard .meta { padding: 10px; font-size: 13px; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 8px; background: #e8f3ff; color: #165dff; }
+  .tag.viral { background: #e8ffea; color: #00a32a; }
+  .tag.up { background: #fff3e8; color: #ff7d00; }
+  .vcard .ops { display: flex; gap: 8px; padding: 0 10px 10px; flex-wrap: wrap; }
+  .op { font-size: 12px; color: #4e5969; cursor: pointer; border: 1px solid #e5e6eb; border-radius: 6px; padding: 3px 8px; }
+  .op:hover { border-color: #165dff; color: #165dff; }
+  .op .api { font-size: 9px; color: #b0b3bb; display: block; }
+  .empty { color: #86909c; font-size: 13px; padding: 24px; text-align: center; border: 1px dashed #e5e6eb; border-radius: 8px; }
+  .superonly { border: 1px solid #ffd8bf; background: #fff8f3; }
+  .badge-super { font-size: 11px; background: #ff7d00; color: #fff; border-radius: 8px; padding: 1px 8px; }
+  /* modal */
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; align-items: center; justify-content: center; z-index: 100; }
+  .mask.show { display: flex; }
+  .modal { background: #fff; border-radius: 14px; padding: 24px; width: 420px; max-width: 92vw; }
+  .modal h3 { font-size: 17px; margin-bottom: 10px; }
+  .modal p { color: #4e5969; font-size: 14px; line-height: 1.7; }
+  .modal .row { display: flex; gap: 12px; margin-top: 18px; justify-content: flex-end; }
+  .modal .api { font-size: 10px; color: #b0b3bb; margin-top: 12px; }
+  .m-primary { background: #165dff; color: #fff; border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer; }
+  .m-ghost { background: #f2f3f5; color: #1f2329; border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer; }
+  .progress { height: 8px; background: #f2f3f5; border-radius: 4px; overflow: hidden; margin: 14px 0; }
+  .progress i { display: block; height: 100%; width: 40%; background: #165dff; animation: load 1.4s infinite; }
+  @keyframes load { 0%{width:10%} 50%{width:70%} 100%{width:95%} }
+  .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: #1f2329; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; display: none; z-index: 200; }
+  .note { background: #f7f8fa; border-left: 3px solid #165dff; padding: 8px 12px; font-size: 12px; color: #4e5969; margin-bottom: 14px; border-radius: 0 6px 6px 0; }
+  .scope-tag { font-size: 11px; color: #86909c; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">美业AI · V4 工作台</span>
+  <span class="storage" id="storageBar"></span>
+  <span class="role-sw">
+    身份：
+    <select id="roleSel" onchange="applyRole()">
+      <option value="user">user（普通客户）</option>
+      <option value="invite_admin">invite_admin（发码员）</option>
+      <option value="super_admin">super_admin（吴哥/老板）</option>
+    </select>
+  </span>
+</div>
+
+<div class="wrap">
+  <div class="note">L2 可点击原型：切换右上角「身份」可演示 <b>storage scope</b> 与 <b>候选池</b> 的角色差异。每个按钮旁灰字为对应 API。本原型纯前端演示交互流转，不调真实后端。</div>
+
+  <!-- 单框工作流 -->
+  <div class="hero">
+    <h1>我能为你做什么？</h1>
+    <p>描述你的需求，上传素材，开始创作</p>
+  </div>
+
+  <div class="card">
+    <textarea class="need" id="needBox" placeholder="例如：帮我做一条广州医美抗衰主题的母视频，风格高级、节奏明快…"></textarea>
+
+    <!-- 仅 图片 / 文件 / 视频 三入口；无文本入口、无蓝色上传素材按钮 -->
+    <div class="uploads">
+      <label class="up-btn" onclick="addMat('image')">📷 图片<span class="api">POST /api/uploads/batch</span></label>
+      <label class="up-btn" onclick="addMat('file')">📎 文件<span class="api">POST /api/uploads/batch</span></label>
+      <label class="up-btn" onclick="addMat('video')">🎬 视频<span class="api">POST /api/uploads/batch</span></label>
+    </div>
+
+    <div class="matbar">
+      <span>已上传：📽️ 视频×<b id="cV">0</b> / 🖼️ 图片×<b id="cI">0</b> / 📎 文件×<b id="cF">0</b></span>
+      <span class="op" onclick="clearMat()">清除全部</span>
+      <span class="scope-tag">（上传 video 成功后自动进入下方「母视频/源视频」陈列面）</span>
+    </div>
+    <div class="thumbs" id="thumbs"></div>
+
+    <!-- 底部仅两个按钮 -->
+    <div class="actions">
+      <button class="btn btn-a" onclick="clickA()">🟠 A台 · 母视频<small>⚠️ 会产生费用（火山API）</small><span class="api">POST /api/a/generate · require_auth</span></button>
+      <button class="btn btn-b" id="btnB" onclick="clickB()">🟢 B台 · 裂变<small>0 元/条（本地 ffmpeg）</small><span class="api">POST /api/b/batch-generate · require_auth</span></button>
+    </div>
+  </div>
+
+  <!-- 陈列面 -->
+  <div class="panels">
+    <div class="card panel">
+      <h2>母视频 / 源视频 (<span id="mCount">0</span>) <span class="api">GET /api/videos?type=mother</span></h2>
+      <div id="motherList"></div>
+    </div>
+
+    <div class="card panel">
+      <h2>裂变视频 (<span id="vCount">0</span>) <span class="api">GET /api/videos?type=viral</span>
+        <span class="op" style="margin-left:auto" onclick="toast('批量导出：POST /api/export/videos → 返回 mp4 URL 列表')">⬇️ 批量导出<span class="api">POST /api/export/videos</span></span>
+      </h2>
+      <div id="viralList"></div>
+    </div>
+
+    <!-- 候选池：仅 super_admin -->
+    <div class="card panel superonly" id="candPanel" style="display:none">
+      <h2>回流候选池 (<span id="kCount">2</span> 条待审) <span class="badge-super">仅 super_admin</span> <span class="api">GET /api/admin/knowledge-candidates</span></h2>
+      <div id="candList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- A台费用确认弹窗 -->
+<div class="mask" id="mA">
+  <div class="modal">
+    <h3>生成母视频</h3>
+    <p>A台使用火山 API 生成高质量母视频，每条约消耗 <b>¥1.50</b>。当前余额：<b>¥98.50</b>。<br>确认继续？</p>
+    <div class="row">
+      <button class="m-ghost" onclick="hide('mA')">取消</button>
+      <button class="m-primary" onclick="hide('mA');startA()">确认生成</button>
+    </div>
+    <div class="api">确认 → POST /api/a/generate（异步，轮询 GET /api/tasks/{id}）· 会扣费</div>
+  </div>
+</div>
+
+<!-- A台生成中 -->
+<div class="mask" id="mArun">
+  <div class="modal">
+    <h3>正在生成母视频</h3>
+    <p id="aRunText">正在生成第 1 段 / 共 3 段…</p>
+    <div class="progress"><i></i></div>
+    <p style="font-size:12px;color:#86909c">文字+图片 → 多段 15 秒 → 后端自动拼接 → 成型母视频</p>
+    <div class="row"><button class="m-ghost" onclick="hide('mArun')">后台运行</button></div>
+    <div class="api">轮询 GET /api/tasks/{task_id} 直到 status=done</div>
+  </div>
+</div>
+
+<!-- 裂变门槛弹窗 -->
+<div class="mask" id="mBgate">
+  <div class="modal">
+    <h3>暂无法裂变</h3>
+    <p id="bGateText">请至少上传 3 个时长 30 秒以上的视频。当前：0 个视频，最长 0 秒</p>
+    <div class="row"><button class="m-primary" onclick="hide('mBgate')">知道了</button></div>
+    <div class="api">前端门槛校验（源视频≥3 且时长≥30s）；后端兜底 400</div>
+  </div>
+</div>
+
+<!-- 裂变进行中弹窗 -->
+<div class="mask" id="mBrun">
+  <div class="modal">
+    <h3>正在裂变</h3>
+    <p id="bRunText">已生成 0 / 共 30 条</p>
+    <div class="progress"><i></i></div>
+    <div class="row"><button class="m-ghost" onclick="hide('mBrun')">后台运行</button></div>
+    <div class="api">POST /api/b/batch-generate → 轮询 GET /api/b/batch/{batch_id}（0 元）</div>
+  </div>
+</div>
+
+<!-- 反馈弹窗 -->
+<div class="mask" id="mFb">
+  <div class="modal">
+    <h3>视频反馈</h3>
+    <p>评价：<button class="m-ghost" onclick="toast('rating=good')">👍 好</button> <button class="m-ghost" onclick="toast('rating=bad')">👎 差</button></p>
+    <p style="margin-top:10px">标签：<span class="tag">适合获客</span> <span class="tag">钩子好</span></p>
+    <textarea class="need" style="min-height:60px;margin-top:10px" placeholder="心得，例如：这个视频适合发小红书"></textarea>
+    <div class="row"><button class="m-ghost" onclick="hide('mFb')">取消</button><button class="m-primary" onclick="hide('mFb');toast('已提交，生成候选池 pending（不直接进大库）')">提交</button></div>
+    <div class="api">POST /api/videos/{id}/feedback → 生成 knowledge_candidate(status=pending)</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ---- 演示状态 ----
+const state = { role: 'user', mats: { image: 0, file: 0, video: 0 }, mothers: [], virals: [], thumbs: [] };
+let vid = 100;
+
+function show(id){ document.getElementById(id).classList.add('show'); }
+function hide(id){ document.getElementById(id).classList.remove('show'); }
+function toast(t){ const e=document.getElementById('toast'); e.textContent=t; e.style.display='block'; clearTimeout(e._t); e._t=setTimeout(()=>e.style.display='none',2200); }
+
+function applyRole(){
+  state.role = document.getElementById('roleSel').value;
+  document.getElementById('candPanel').style.display = state.role==='super_admin' ? 'block' : 'none';
+  renderStorage();
+  if(state.role==='super_admin') renderCands();
+}
+
+function renderStorage(){
+  const m=state.mothers.length, v=state.virals.length, u=state.mats.image+state.mats.file+state.mats.video;
+  const bar=document.getElementById('storageBar');
+  if(state.role==='super_admin'){
+    bar.innerHTML = `<span class="pill">scope=global</span> 磁盘 12.0/40 GB (30%) · 母 ${m} · 裂变 ${v} · 上传 ${u} <span class="api">GET /api/storage/status</span>`;
+  }else{
+    bar.innerHTML = `<span class="pill">scope=tenant</span> 母 ${m} · 裂变 ${v} · 上传 ${u} · 占用 ~${(u*8).toFixed(0)}MB <span class="api">GET /api/storage/status</span>`;
+  }
+}
+
+function addMat(type){
+  state.mats[type]++;
+  const icon = type==='image'?'🖼️':type==='file'?'📎':'🎬';
+  state.thumbs.push({type, icon, id: ++vid});
+  // 上传视频 → 自动进入母视频/源视频陈列面
+  if(type==='video'){ state.mothers.push({id: vid, title:`上传视频_${state.mats.video}.mp4`, dur: 36, src:'up'}); }
+  renderAll();
+  toast(`上传 ${type} → POST /api/uploads/batch（${type==='video'?'已进入母视频/源视频陈列面':'已加入素材'}）`);
+}
+function clearMat(){ state.mats={image:0,file:0,video:0}; state.thumbs=[]; renderAll(); }
+
+function renderThumbs(){
+  document.getElementById('cV').textContent=state.mats.video;
+  document.getElementById('cI').textContent=state.mats.image;
+  document.getElementById('cF').textContent=state.mats.file;
+  document.getElementById('thumbs').innerHTML = state.thumbs.map((t,i)=>
+    `<div class="thumb">${t.icon}<span class="x" onclick="rmThumb(${i})">✕</span></div>`).join('');
+}
+function rmThumb(i){ const t=state.thumbs[i]; state.mats[t.type]--; if(t.type==='video'){ state.mothers=state.mothers.filter(m=>m.id!==t.id);} state.thumbs.splice(i,1); renderAll(); }
+
+function renderMothers(){
+  document.getElementById('mCount').textContent=state.mothers.length;
+  const el=document.getElementById('motherList');
+  if(!state.mothers.length){ el.innerHTML=`<div class="empty">还没有母视频，上传视频或使用 A台 生成</div>`; return; }
+  el.innerHTML = `<div class="vlist">`+state.mothers.map(m=>`
+    <div class="vcard"><div class="cover">🎬</div>
+      <div class="meta"><div>${m.title}</div>
+        <div style="margin-top:6px">⏱ ${m.dur}s <span class="tag ${m.src==='up'?'up':''}">${m.src==='up'?'本地上传':'A台生成'}</span></div>
+      </div>
+      <div class="ops">
+        <span class="op" onclick="track('play',${m.id})">▶ 播放<span class="api">events/track</span></span>
+        <span class="op" onclick="toast('GET /static/videos/mother/${m.id}.mp4')">⬇ 下载</span>
+        <span class="op" onclick="delV('m',${m.id})">🗑 删除<span class="api">DELETE /api/videos/${m.id}</span></span>
+      </div>
+    </div>`).join('')+`</div>`;
+}
+
+function renderVirals(){
+  document.getElementById('vCount').textContent=state.virals.length;
+  const el=document.getElementById('viralList');
+  if(!state.virals.length){ el.innerHTML=`<div class="empty">还没有裂变视频，上传 3 个以上源视频后使用 B台 裂变</div>`; return; }
+  el.innerHTML = `<div class="vlist">`+state.virals.map(v=>`
+    <div class="vcard"><div class="cover viral">✨</div>
+      <div class="meta"><div>裂变_${v.id}.mp4</div>
+        <div style="margin-top:6px">⏱ ${v.dur}s <span class="tag viral">B台裂变 · 0元</span></div>
+      </div>
+      <div class="ops">
+        <span class="op" onclick="track('play',${v.id})">▶ 播放</span>
+        <span class="op" onclick="toast('GET /static/videos/viral/${v.id}.mp4')">⬇ 下载</span>
+        <span class="op" onclick="show('mFb')">💬 反馈<span class="api">feedback</span></span>
+        <span class="op" onclick="delV('v',${v.id})">🗑 删除</span>
+      </div>
+    </div>`).join('')+`</div>`;
+}
+
+function renderCands(){
+  document.getElementById('candList').innerHTML = `
+    <div class="vcard" style="padding:10px"><b>video_v4 · user_feedback</b> — “适合发小红书” <span class="tag">适合获客</span>
+      <div class="ops"><span class="op" onclick="toast('approved（仅置状态，不推送阿里云大库）')">✅ 审核通过<span class="api">/approve</span></span>
+      <span class="op" onclick="toast('rejected')">✕ 驳回<span class="api">/reject</span></span></div></div>
+    <div class="vcard" style="padding:10px;margin-top:10px"><b>video_v4 · user_feedback</b> — “节奏太慢” <span class="tag">需优化</span>
+      <div class="ops"><span class="op" onclick="toast('approved')">✅ 审核通过</span><span class="op" onclick="toast('rejected')">✕ 驳回</span></div></div>`;
+}
+
+function renderAll(){ renderThumbs(); renderMothers(); renderVirals(); renderStorage(); updateBtnB(); }
+
+// A台
+function clickA(){ if(!document.getElementById('needBox').value.trim()){ toast('请先描述需求'); return;} show('mA'); }
+function startA(){
+  show('mArun'); let seg=1; const t=setInterval(()=>{ seg++; document.getElementById('aRunText').textContent=`正在生成第 ${seg} 段 / 共 3 段…`;
+    if(seg>=3){ clearInterval(t); document.getElementById('aRunText').textContent='正在拼接…'; setTimeout(()=>{ hide('mArun'); state.mothers.push({id:++vid,title:'A台母视频_'+vid+'.mp4',dur:45,src:'gen'}); renderAll(); toast('母视频已生成（A台·已扣费）'); },1200);} },900);
+}
+
+// B台 门槛
+function eligibleSources(){ return state.mothers.filter(m=>m.dur>=30); }
+function updateBtnB(){
+  const ok = eligibleSources().length>=3;
+  document.getElementById('btnB').disabled = !ok;
+  document.getElementById('btnB').title = ok ? '' : '至少上传3个时长30秒以上的视频';
+}
+function clickB(){
+  const elig=eligibleSources();
+  if(elig.length<3){
+    const longest = state.mothers.reduce((a,b)=>Math.max(a,b.dur),0);
+    document.getElementById('bGateText').textContent=`请至少上传 3 个时长 30 秒以上的视频。当前：${state.mothers.length} 个视频，最长 ${longest} 秒`;
+    show('mBgate'); return;
+  }
+  const total = Math.min(elig.length*10, 50);
+  show('mBrun'); let n=0; document.getElementById('bRunText').textContent=`已生成 0 / 共 ${total} 条`;
+  const t=setInterval(()=>{ n+=Math.ceil(total/8); if(n>=total)n=total; document.getElementById('bRunText').textContent=`已生成 ${n} / 共 ${total} 条`;
+    state.virals.push({id:++vid,dur:100}); renderAll();
+    if(n>=total){ clearInterval(t); setTimeout(()=>{ hide('mBrun'); toast(`裂变完成 ${total} 条（0 元）`); },800);} },700);
+}
+
+function delV(kind,id){ if(kind==='m') state.mothers=state.mothers.filter(x=>x.id!==id); else state.virals=state.virals.filter(x=>x.id!==id); renderAll(); toast('DELETE /api/videos/'+id+' → soft delete（storage_status=deleted）'); }
+function track(action,id){ toast(`POST /api/events/track {action:${action}} — 失败不阻断播放`); }
+
+renderAll();
+</script>
+</body>
+</html>
