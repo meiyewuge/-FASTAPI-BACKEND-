@@ -115,7 +115,7 @@ export default function Workbench() {
     }
   };
 
-  // ---- 轮询任务 ----
+  // ---- 轮询任务（F3 — 2秒间隔）----
   const startPoll = async (taskId: string) => {
     pollRef.current = true;
     const r = await pollTask(
@@ -123,12 +123,21 @@ export default function Workbench() {
       (d) => {
         if (pollRef.current) setActiveTask({ ...d });
       },
-      1500,
+      2000,
     );
     pollRef.current = false;
     if (r.code === 0 && r.data) {
       setActiveTask(r.data);
-      showToast(r.data.status === "done" ? "视频生成完成!" : "任务失败");
+      if (r.data.status === "done") {
+        const count = r.data.result?.videos?.length || 0;
+        showToast(`视频生成完成! 共 ${count} 条`);
+      } else {
+        showToast("任务失败: " + (r.data.error || "未知原因"));
+      }
+    } else if (r.code === 4029) {
+      showToast("配额不足，请充值后重试");
+    } else if (r.code === -1) {
+      showToast("网络连接中断，请检查网络后重试");
     }
     loadDashboard();
   };
@@ -137,6 +146,10 @@ export default function Workbench() {
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       showToast("请输入视频需求");
+      return;
+    }
+    if (overBudget) {
+      showToast("预估费用超出剩余额度，请调整数量或充值");
       return;
     }
     setGenerating(true);
@@ -149,11 +162,13 @@ export default function Workbench() {
         if (taskIds.length > 0) startPoll(taskIds[0]);
       } else if (r.code === 4029) {
         showToast("配额不足: " + r.msg);
+      } else if (r.code === 2001) {
+        showToast("参数错误: " + r.msg);
       } else {
         showToast(r.msg || "生成失败");
       }
-    } catch {
-      showToast("网络异常");
+    } catch (e) {
+      showToast(!navigator.onLine ? "网络连接已断开" : "网络异常，请稍后重试");
     } finally {
       setGenerating(false);
     }
@@ -165,6 +180,10 @@ export default function Workbench() {
       showToast("请输入视频需求");
       return;
     }
+    if (overBudgetSingle) {
+      showToast("预估费用超出剩余额度，请充值后重试");
+      return;
+    }
     setGenerating(true);
     setActiveTask(null);
     try {
@@ -172,11 +191,13 @@ export default function Workbench() {
       if (r.code === 0 && r.data?.task_id) {
         showToast("A台任务已提交");
         startPoll(r.data.task_id);
+      } else if (r.code === 4029) {
+        showToast("配额不足: " + r.msg);
       } else {
         showToast(r.msg || "A台生成失败");
       }
     } catch {
-      showToast("网络异常");
+      showToast(!navigator.onLine ? "网络连接已断开" : "网络异常，请稍后重试");
     } finally {
       setGenerating(false);
     }
@@ -186,6 +207,10 @@ export default function Workbench() {
   const handleBGenerate = async () => {
     if (!selectedVideo) {
       showToast("请先在视频列表中选择一条母视频");
+      return;
+    }
+    if (overBudget) {
+      showToast("预估费用超出剩余额度，请充值后重试");
       return;
     }
     setGenerating(true);
@@ -202,11 +227,13 @@ export default function Workbench() {
         startPoll(r.data.task_id);
       } else if (r.code === 4029) {
         showToast("配额不足: " + r.msg);
+      } else if (r.code === 2001) {
+        showToast("参数错误: " + r.msg);
       } else {
         showToast(r.msg || "B台生成失败");
       }
     } catch {
-      showToast("网络异常");
+      showToast(!navigator.onLine ? "网络连接已断开" : "网络异常，请稍后重试");
     } finally {
       setGenerating(false);
     }
@@ -256,30 +283,106 @@ export default function Workbench() {
     return m ? parseInt(m[1], 10) : 1;
   };
 
-  const batchCount = parseCount(prompt);
-  const estimateBatch = costPerVideo ? costPerVideo * batchCount : null;
-  const estimateA = costPerVideo; // 单条
-  const estimateB = costPerVideo ? costPerVideo * 5 : null; // B台默认5条
+  // F2: 时长解析（如"5秒" → 5，"30s" → 30），未识别返回 null
+  const parseDuration = (text: string): number | null => {
+    const m = text.match(/(\d+)\s*[秒sS]/);
+    return m ? parseInt(m[1], 10) : null;
+  };
 
-  // ---- 批量下载（F8 关键）----
-  const handleBatchDownload = (videoList: VideoItem[]) => {
+  const batchCount = parseCount(prompt);
+  const duration = parseDuration(prompt);
+  // 时长影响成本：基础成本 × (时长/15)  — 假设默认15秒为基准
+  const durationFactor = duration ? Math.max(0.5, duration / 15) : 1;
+  const estimateA = costPerVideo ? costPerVideo * durationFactor : null;
+  const estimateBatch = estimateA ? estimateA * batchCount : null;
+  const estimateB = estimateA ? estimateA * 5 : null;
+
+  // F2: 超预算检测 — 预估费用超过剩余额度时禁止生成
+  const overBudget =
+    cost !== null && estimateBatch !== null && cost.remaining !== undefined
+      ? estimateBatch > cost.remaining
+      : false;
+  const overBudgetSingle =
+    cost !== null && estimateA !== null && cost.remaining !== undefined
+      ? estimateA > cost.remaining
+      : false;
+
+  // F8: 下载状态追踪
+  type DownloadStatus = "downloading" | "done" | "error";
+  const [downloadStates, setDownloadStates] = useState<Record<number, DownloadStatus>>({});
+
+  // ---- 批量下载（F8 关键 — 带状态追踪）----
+  const handleBatchDownload = async (videoList: VideoItem[]) => {
     const downloadable = videoList.filter((v) => v.download_url);
     if (downloadable.length === 0) {
       showToast("没有可下载的视频");
       return;
     }
-    downloadable.forEach((v, i) => {
-      setTimeout(() => {
+    showToast(`开始下载 ${downloadable.length} 个视频...`);
+    for (let i = 0; i < downloadable.length; i++) {
+      const v = downloadable[i];
+      setDownloadStates((prev) => ({ ...prev, [v.video_id]: "downloading" }));
+      try {
+        // 使用 fetch 下载确保 mp4 真实可用
+        const resp = await fetch(v.download_url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = v.download_url;
-        a.download = v.title || `视频_${v.video_id}`;
+        a.href = url;
+        a.download = `${v.title || `视频_${v.video_id}`}.mp4`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-      }, i * 300); // 间隔 300ms 避免浏览器拦截
-    });
-    showToast(`正在下载 ${downloadable.length} 个视频`);
+        URL.revokeObjectURL(url);
+        setDownloadStates((prev) => ({ ...prev, [v.video_id]: "done" }));
+      } catch {
+        setDownloadStates((prev) => ({ ...prev, [v.video_id]: "error" }));
+      }
+      // 间隔 300ms 避免浏览器拦截
+      if (i < downloadable.length - 1) await new Promise((r) => setTimeout(r, 300));
+    }
+    const okCount = downloadable.filter((v) => downloadStates[v.video_id] !== "error").length;
+    showToast(`下载完成：${okCount}/${downloadable.length} 成功`);
+    // 3秒后清除下载状态
+    setTimeout(() => setDownloadStates({}), 3000);
   };
+
+  // ---- 单条下载（F8 — 带状态）----
+  const handleSingleDownload = async (v: VideoItem) => {
+    if (!v.download_url) return;
+    setDownloadStates((prev) => ({ ...prev, [v.video_id]: "downloading" }));
+    try {
+      const resp = await fetch(v.download_url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${v.title || `视频_${v.video_id}`}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setDownloadStates((prev) => ({ ...prev, [v.video_id]: "done" }));
+    } catch {
+      setDownloadStates((prev) => ({ ...prev, [v.video_id]: "error" }));
+      showToast("下载失败，请重试");
+    }
+  };
+
+  // 网络状态
+  const [online, setOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const onOff = () => setOnline(false);
+    const onOn = () => setOnline(true);
+    window.addEventListener("offline", onOff);
+    window.addEventListener("online", onOn);
+    return () => {
+      window.removeEventListener("offline", onOff);
+      window.removeEventListener("online", onOn);
+    };
+  }, []);
 
   const resultVideos = activeTask?.result?.videos || [];
   const progressPct = Math.round((activeTask?.progress || 0) * 100);
@@ -287,6 +390,10 @@ export default function Workbench() {
   return (
     <div className="workbench">
       {toast && <div className="toast">{toast}</div>}
+      {/* 网络离线提示 */}
+      {!online && (
+        <div className="offline-bar">网络连接已断开，请检查网络后重试</div>
+      )}
 
       {/* ===== 1. 顶部栏 ===== */}
       <header className="wb-header">
@@ -322,41 +429,54 @@ export default function Workbench() {
           <button
             className="btn btn-primary"
             onClick={handleGenerate}
-            disabled={generating}
+            disabled={generating || overBudget || !online}
+            title={overBudget ? "预估费用超出剩余额度" : ""}
           >
-            {generating ? "提交中..." : "⚡ 一句话批量生成"}
+            {generating ? "提交中..." : overBudget ? "⚠️ 超出预算" : "⚡ 一句话批量生成"}
           </button>
           <button
             className="btn btn-a"
             onClick={handleAGenerate}
-            disabled={generating}
+            disabled={generating || overBudgetSingle || !online}
+            title={overBudgetSingle ? "预估费用超出剩余额度" : ""}
           >
-            🎬 A台·母视频
+            {overBudgetSingle ? "⚠️ 超出预算" : "🎬 A台·母视频"}
           </button>
           <button
             className="btn btn-b"
             onClick={handleBGenerate}
-            disabled={generating || !selectedVideo}
-            title={selectedVideo ? "" : "请先在下方视频列表选中一条母视频"}
+            disabled={generating || !selectedVideo || overBudget || !online}
+            title={
+              !selectedVideo
+                ? "请先在下方视频列表选中一条母视频"
+                : overBudget
+                  ? "预估费用超出剩余额度"
+                  : ""
+            }
           >
-            🔁 B台·裂变
+            {overBudget ? "⚠️ 超出预算" : "🔁 B台·裂变"}
           </button>
         </div>
-        {/* F2: 费用预估 */}
+        {/* F2: 费用预估（实时刷新） */}
         {costPerVideo && prompt.trim() && (
-          <div className="cost-estimate">
+          <div className={`cost-estimate ${overBudget ? "cost-over-budget" : ""}`}>
             <span className="cost-estimate-label">预估费用：</span>
-            {batchCount > 1 && (
+            {duration && <span>时长 {duration}秒</span>}
+            {duration && <span className="cost-estimate-sep">|</span>}
+            {batchCount > 1 ? (
               <span>批量 {batchCount} 条 ≈ <strong>¥{estimateBatch!.toFixed(2)}</strong></span>
+            ) : (
+              <span>A台单条 ≈ <strong>¥{estimateA!.toFixed(2)}</strong></span>
             )}
-            <span className="cost-estimate-sep">|</span>
-            <span>A台单条 ≈ ¥{estimateA!.toFixed(2)}</span>
             <span className="cost-estimate-sep">|</span>
             <span>B台5条 ≈ ¥{estimateB!.toFixed(2)}</span>
             <span className="cost-estimate-sep">|</span>
             <span className="cost-estimate-remaining">
               剩余额度 ¥{cost?.remaining?.toFixed(2) ?? "--"}
             </span>
+            {overBudget && (
+              <span className="cost-over-warn">⚠️ 预估费用超出剩余额度</span>
+            )}
           </div>
         )}
       </section>
@@ -419,28 +539,44 @@ export default function Workbench() {
               )}
             </div>
             <div className="video-grid">
-              {resultVideos.map((v, i) => (
-                <div key={v.video_id || i} className="video-card">
-                  <div className="video-preview">
-                    {v.download_url ? (
-                      <video src={v.download_url} controls preload="metadata" />
-                    ) : (
-                      <div className="video-placeholder">视频加载中</div>
-                    )}
-                  </div>
-                  <div className="video-info">
-                    <span className="video-type-badge">
-                      {v.type === "mother" ? "母视频" : "裂变"}
-                    </span>
-                    {v.strategy && <span className="video-strategy">{v.strategy}</span>}
-                    <div className="video-actions">
-                      {v.download_url && (
-                        <a href={v.download_url} download className="btn btn-sm">下载</a>
+              {resultVideos.map((v, i) => {
+                const dlState = downloadStates[v.video_id];
+                return (
+                  <div key={v.video_id || i} className="video-card">
+                    <div className="video-preview">
+                      {v.download_url ? (
+                        <video src={v.download_url} controls preload="metadata" />
+                      ) : (
+                        <div className="video-placeholder">视频加载中</div>
                       )}
                     </div>
+                    <div className="video-info">
+                      <span className="video-type-badge">
+                        {v.type === "mother" ? "母视频" : "裂变"}
+                      </span>
+                      {v.strategy && <span className="video-strategy">{v.strategy}</span>}
+                      <span className="video-id">#{v.video_id || `tmp-${i}`}</span>
+                      <div className="video-actions">
+                        {v.download_url && (
+                          <button
+                            className={`btn btn-sm ${dlState === "done" ? "btn-done" : dlState === "error" ? "btn-error" : ""}`}
+                            onClick={() => handleSingleDownload(v)}
+                            disabled={dlState === "downloading"}
+                          >
+                            {dlState === "downloading"
+                              ? "下载中..."
+                              : dlState === "done"
+                                ? "已完成"
+                                : dlState === "error"
+                                  ? "重试"
+                                  : "下载"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -549,38 +685,49 @@ export default function Workbench() {
         ) : (
           <>
             <div className="video-grid">
-              {videos.map((v) => (
-                <div
-                  key={v.video_id}
-                  className={`video-card ${selectedVideo?.video_id === v.video_id ? "selected" : ""}`}
-                  onClick={() =>
-                    setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v)
-                  }
-                >
-                  <div className="video-preview">
-                    {v.download_url ? (
-                      <video src={v.download_url} controls preload="metadata" />
-                    ) : (
-                      <div className="video-placeholder">{v.title || "视频"}</div>
-                    )}
-                  </div>
-                  <div className="video-info">
-                    <span className="video-title">{v.title || `视频 #${v.video_id}`}</span>
-                    <div className="video-actions">
-                      {v.download_url && (
-                        <a
-                          href={v.download_url}
-                          download
-                          className="btn btn-sm"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          下载
-                        </a>
+              {videos.map((v) => {
+                const dlState = downloadStates[v.video_id];
+                return (
+                  <div
+                    key={v.video_id}
+                    className={`video-card ${selectedVideo?.video_id === v.video_id ? "selected" : ""}`}
+                    onClick={() =>
+                      setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v)
+                    }
+                  >
+                    <div className="video-preview">
+                      {v.download_url ? (
+                        <video src={v.download_url} controls preload="metadata" />
+                      ) : (
+                        <div className="video-placeholder">{v.title || "视频"}</div>
                       )}
                     </div>
+                    <div className="video-info">
+                      <span className="video-title">{v.title || `视频 #${v.video_id}`}</span>
+                      <div className="video-actions">
+                        {v.download_url && (
+                          <button
+                            className={`btn btn-sm ${dlState === "done" ? "btn-done" : dlState === "error" ? "btn-error" : ""}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSingleDownload(v);
+                            }}
+                            disabled={dlState === "downloading"}
+                          >
+                            {dlState === "downloading"
+                              ? "下载中..."
+                              : dlState === "done"
+                                ? "已完成"
+                                : dlState === "error"
+                                  ? "重试"
+                                  : "下载"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             {videoTotal > 20 && (
               <div className="pagination">

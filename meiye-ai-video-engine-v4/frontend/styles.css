@@ -694,6 +694,50 @@ body {
   color: var(--primary);
   font-weight: 500;
 }
+.cost-over-warn {
+  color: #dc2626;
+  font-weight: 700;
+  margin-left: 4px;
+}
+.cost-estimate.cost-over-budget {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+/* ---- 网络离线提示 ---- */
+.offline-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1100;
+  background: #dc2626;
+  color: #fff;
+  text-align: center;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---- F8 下载状态按钮 ---- */
+.btn-done {
+  background: #16a34a !important;
+  color: #fff !important;
+  border-color: #16a34a !important;
+  cursor: default;
+}
+.btn-error {
+  background: #dc2626 !important;
+  color: #fff !important;
+  border-color: #dc2626 !important;
+}
+
+/* ---- video_id 标签 ---- */
+.video-id {
+  font-size: 11px;
+  color: #9ca3af;
+  font-family: monospace;
+}
 
 /* ---- F8: 全部下载 ---- */
 .result-header {
