@@ -52,25 +52,43 @@ def revoke(db: Session, code: str) -> bool:
     return True
 
 
-def validate_and_consume(db: Session, code: str, phone: str) -> str | None:
-    """校验邀约码并消费一次，返回 tenant_id；无效返回 None。"""
+def validate_and_consume(db: Session, code: str, phone: str) -> dict:
+    """校验邀约码并按规则放行（Patch4.1：专属登录码可重复登录）。
+
+    返回 {"ok": True, "tenant_id": ...} 或 {"ok": False, "code": int, "message": str}。
+
+    规则：
+    1) 首次使用（phone 未绑定且 active 且 used_count<max_uses）：绑定 phone、used_count+1、放行。
+    2) 同手机号重复登录（phone 已绑定且等于本次 phone）：不增 used_count、不受 max_uses 限制、放行。
+    3) 不同手机号用已绑定码：拒绝 4010「该邀请码已绑定其他手机号」。
+    4) revoked/失效（active=False）：拒绝（含管理员作废后，同手机号也不能登录）。
+    """
     rec = db.get(InviteCode, code)
     if rec is None or not rec.active:
-        return None
+        return {"ok": False, "code": 1002, "message": "邀约码无效或已用尽"}
+
+    # 已绑定手机号：只认绑定的那台手机
+    if rec.phone:
+        if rec.phone != phone:
+            return {"ok": False, "code": 4010, "message": "该邀请码已绑定其他手机号"}
+        # 规则2：同手机号重复登录，不再消费
+        return {"ok": True, "tenant_id": rec.tenant_id or f"t_{phone}"}
+
+    # 规则1：首次使用
     if rec.used_count >= rec.max_uses:
-        return None
+        return {"ok": False, "code": 1002, "message": "邀约码无效或已用尽"}
+    rec.phone = phone
     rec.used_count += 1
-    if rec.used_count >= rec.max_uses:
-        rec.active = False
     tenant_id = rec.tenant_id or f"t_{phone}"
     db.commit()
-    return tenant_id
+    return {"ok": True, "tenant_id": tenant_id}
 
 
 def _brief(r: InviteCode) -> dict:
     return {
         "code": r.code,
         "tenant_id": r.tenant_id,
+        "phone": r.phone,
         "active": r.active,
         "max_uses": r.max_uses,
         "used_count": r.used_count,

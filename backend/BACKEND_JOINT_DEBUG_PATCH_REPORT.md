@@ -10,6 +10,7 @@
 | Patch2 | `36cf4e8` | 上传接口 `POST /api/upload`（image/text/video） |
 | Patch3 | `dd1264b` | 导出修复（方案B）：保留 CSV 元数据，新增视频 URL 导出 |
 | Patch4 | `107185e` | 访问卡控第一阶段：邀约码 + JWT 鉴权 |
+| Patch4.1 | （本次新增） | 邀约码可重复登录修正（专属登录码绑定手机号） |
 | Patch5 | `0017995` | 订阅/试用字段（暂不接支付） |
 
 合计：20 files changed, 826 insertions(+), 24 deletions(-)。
@@ -114,6 +115,41 @@
 
 ---
 
+## Patch4.1 — 邀约码可重复登录修正
+
+**问题**：原逻辑 `max_uses=1` 时，首次登录 `used_count+1` 并把 `active` 置 False，导致同一用户退出 / JWT 过期 / 换浏览器后，用**同一手机号 + 同一邀请码**再次登录被判「已用完」——专属登录码无法重复登录。
+
+**修正口径**：邀请码首次使用时**绑定手机号**；之后「认手机号，不认次数」。
+
+| 场景 | 行为 |
+|----|----|
+| 首次使用（`phone` 未绑定、`active`、`used_count<max_uses`） | 绑定手机号、`used_count+1`、签发 JWT |
+| 同手机号重复登录（`invite_codes.phone == 本次 phone`） | **不增 `used_count`、不受 `max_uses` 限制**、直接签发新 JWT |
+| 不同手机号用已绑定码 | 拒绝 **4010**「该邀请码已绑定其他手机号」 |
+| revoked / 失效（`active=False`，含管理员作废后） | 拒绝（同手机号也不能登录） |
+
+> 关键变更：**取消了「used_count 达到 max_uses 自动置 active=False」**——专属登录码靠「手机号绑定」实现单人独占，而非靠次数耗尽，从而支持本人重复登录。管理员作废仍显式置 `active=False` 拒绝。
+
+**改动文件**
+- `models/invite.py`：`invite_codes` 新增 `phone VARCHAR(32) NULL`（首次登录绑定）。
+- `services/invite_service.py`：`validate_and_consume` 改为返回 `{"ok", "tenant_id"}` 或 `{"ok":False, "code", "message"}`（区分 1002 无效/用尽 与 4010 已绑定他人）；`_brief` 增加 `phone`。
+- `api/routes.py`：登录端点适配新返回（透传 4010）。
+
+**新增错误码**：`4010` = 邀请码已绑定其他手机号。
+
+**已验证**（`tests/verify_patch4_1.py`，6 项全过）：
+- ✅ 首次手机号+邀请码登录成功（绑定，`used_count=1`）
+- ✅ 同手机号二次登录成功（签发新 JWT）
+- ✅ 同手机号二次登录 `used_count` 不增加（仍=1）
+- ✅ 不同手机号登录同一码 → 4010
+- ✅ revoked 后同手机号登录失败（1002）
+- ✅ 已签发 JWT 仍可正常访问业务 API
+- 回归：`verify_patch4` 中「换手机号」用例已更新为 4010；其余补丁回归全过。
+
+**前端如何调用**：登录方式不变（`POST /api/auth/login {phone, invite_code}`）；新增需处理 `code:4010`（提示「该邀请码已绑定其他手机号」）。同一用户重复登录无需特殊处理——拿到新 token 即可。
+
+---
+
 ## Patch5 — 订阅/试用字段（暂不接支付）
 
 **新增字段**（`tenants` 表）
@@ -149,11 +185,14 @@
 
 **需手工迁移的存量表新增列**（`create_all` 不会给已存在的表加列）：
 - `tenants` 新增 `subscription_status VARCHAR(16) NOT NULL DEFAULT 'trial'`、`trial_remaining INTEGER NOT NULL DEFAULT 3`（Patch5）。
+- `invite_codes` 新增 `phone VARCHAR(32) NULL`（Patch4.1）。`invite_codes` 为 Patch4 新表，若生产尚未建表则随 `create_all` 自动含该列，无需手工；**仅当生产已存在旧版 `invite_codes` 表时**才需补列。
 
-> ⚠️ 生产 ECS 若 `tenants` 表已存在，需执行（联调/部署阶段，由运维执行，**本补丁不碰部署**）：
+> ⚠️ 生产 ECS 若相关表已存在，需执行（联调/部署阶段，由运维执行，**本补丁不碰部署**）：
 > ```sql
 > ALTER TABLE tenants ADD COLUMN subscription_status VARCHAR(16) NOT NULL DEFAULT 'trial';
 > ALTER TABLE tenants ADD COLUMN trial_remaining INTEGER NOT NULL DEFAULT 3;
+> -- 仅当已存在旧版 invite_codes 表时：
+> ALTER TABLE invite_codes ADD COLUMN phone VARCHAR(32);
 > ```
 > 全新库或测试库无需手动操作（建表即含新列）。
 
@@ -180,6 +219,7 @@
 - ✅ `tests/test_b9_local_remix.py`：B台本地裂变 / 0 成本 / 不调火山。
 - ✅ `tests/test_volcano_pipeline.py`：A台/B台/任务/mock 回退/成本/AK-SK 签名（已适配 JWT 默认头）全过。
 - ✅ `tests/verify_patch4.py`：邀约码 + JWT 全场景。
+- ✅ `tests/verify_patch4_1.py`：邀约码可重复登录（绑定手机号 / 同号重复登录不增 used_count / 异号 4010 / 作废后拒绝 / JWT 仍可用）。
 - ✅ `tests/verify_patch5.py`：试用扣减（A台扣/B台不扣/不为负）。
 - 验证环境：本地 sandbox + 真实 ffmpeg + httpx 桩（**无真实火山 key**）。
 

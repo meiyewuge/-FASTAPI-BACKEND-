@@ -77,10 +77,10 @@ def main():
     assert r.status_code == 200 and r.json()["code"] == 0
     print("  ✔ 带 JWT 业务 API 放行")
 
-    # 7) 邀约码 max_uses=1 已用尽 → 二次登录失败
+    # 7) 该码已绑定 13800000000；换手机号登录 → 4010（Patch4.1）
     r = c.post("/api/auth/login", json={"phone": "13900000000", "invite_code": codes[0]})
-    assert r.json()["code"] == 1002, r.json()
-    print("  ✔ 邀约码用尽 → 二次登录失败")
+    assert r.json()["code"] == 4010, r.json()
+    print("  ✔ 已绑定码换手机号 → 4010")
 
     # 8) 作废邀约码 → 登录失败
     assert c.post("/api/admin/invite/revoke", json={"code": codes[1]}, headers=admin_h).json()["code"] == 0

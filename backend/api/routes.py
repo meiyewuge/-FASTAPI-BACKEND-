@@ -52,9 +52,10 @@ def _task_brief(t) -> dict:
 @api_router.post("/auth/login")
 def login(body: LoginIn, db: Session = Depends(get_db)) -> Resp:
     """手机号 + 邀约码登录。无邀约码 / 邀约码无效 → 拒绝；成功签发 JWT。"""
-    tenant_id = invite_service.validate_and_consume(db, body.invite_code, body.phone)
-    if tenant_id is None:
-        return Resp(code=1002, message="邀约码无效或已用尽")
+    result = invite_service.validate_and_consume(db, body.invite_code, body.phone)
+    if not result["ok"]:
+        return Resp(code=result["code"], message=result["message"])
+    tenant_id = result["tenant_id"]
     get_or_create_tenant(db, tenant_id)
     db.commit()
     token = jwt_util.encode(
