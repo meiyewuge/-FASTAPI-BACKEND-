@@ -11,6 +11,7 @@ import {
   retryTask, exportVideosCSV, exportVideosMp4,
   uploadFile, stableDownload,
   getTenant, clearAuth,
+  ENABLE_ADMIN_KEY_FALLBACK,
   type TaskData, type VideoItem, type CostSummary,
   type StrategyItem, type MetricsOverview,
 } from "../api/client";
@@ -286,7 +287,9 @@ export default function Workbench() {
               <span className="cost-sub">已用 ¥{cost.spend?.toFixed(2) ?? "0"} / 配额 ¥{cost.quota?.toFixed(2) ?? "0"}</span>
             </div>
           )}
-          <button className="btn btn-admin" onClick={() => navigate("/admin")} title="管理员邀约码管理">管理员</button>
+          {ENABLE_ADMIN_KEY_FALLBACK && (
+            <button className="btn btn-admin" onClick={() => navigate("/admin")} title="管理员邀约码管理（staging 临时模式）">管理员</button>
+          )}
           <button className="btn-logout" onClick={() => { clearAuth(); navigate("/login", { replace: true }); }}>退出</button>
         </div>
       </header>

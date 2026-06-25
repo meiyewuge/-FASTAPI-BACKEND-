@@ -367,27 +367,81 @@ export async function stableDownload(
   return { ok: false, error: "下载失败" };
 }
 
-// ---- 管理员（ADMIN_KEY 仅存 sessionStorage，刷新后需重新输入）----
+// ===========================================================================
+// 管理员权限 — 双模式架构
+// A. 临时模式（staging）：X-Admin-Key header，ADMIN_KEY 仅 sessionStorage
+// B. 正式模式（Patch6）：JWT role，从 GET /api/me 获取角色
+//
+// 开关：stable 版本发布前改为 false
+// ===========================================================================
+export const ENABLE_ADMIN_KEY_FALLBACK = true; // ← staging only，stable 改 false
+
 const SS_ADMIN_KEY = "v4_admin_key";
 
 export function getAdminKey(): string {
   return sessionStorage.getItem(SS_ADMIN_KEY) || "";
 }
-
 export function setAdminKey(key: string) {
   sessionStorage.setItem(SS_ADMIN_KEY, key);
 }
-
 export function clearAdminKey() {
   sessionStorage.removeItem(SS_ADMIN_KEY);
 }
 
+// ---- 角色类型（对齐后端 Patch6 /api/me）----
+export type UserRole = "super_admin" | "invite_admin" | "user";
+
+export interface UserProfile {
+  phone: string;
+  tenant_id: string;
+  role: UserRole;
+  is_admin: boolean;
+  permissions: string[];
+}
+
+let _userProfile: UserProfile | null = null;
+
+export function setUserProfile(p: UserProfile | null) { _userProfile = p; }
+export function getUserProfile(): UserProfile | null { return _userProfile; }
+
+/** 当前用户角色（优先 /api/me，fallback 到 ADMIN_KEY） */
+export function getCurrentUserRole(): UserRole {
+  if (_userProfile) return _userProfile.role;
+  // 临时 fallback：有 ADMIN_KEY 视为 super_admin
+  if (ENABLE_ADMIN_KEY_FALLBACK && getAdminKey()) return "super_admin";
+  return "user";
+}
+
+/** 是否有管理员权限 */
+export function isAdmin(): boolean {
+  const role = getCurrentUserRole();
+  return role === "super_admin" || role === "invite_admin";
+}
+
+/** 是否为超级管理员 */
+export function isSuperAdmin(): boolean {
+  return getCurrentUserRole() === "super_admin";
+}
+
+// ---- /api/me（Patch6 上线后使用）----
+export async function fetchMe(): Promise<Resp<UserProfile>> {
+  const r = await get<UserProfile>("/me");
+  if (r.code === 0 && r.data) {
+    _userProfile = r.data;
+  }
+  return r;
+}
+
+// ---- 管理员请求头（双模式）----
 function adminHeaders(): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    "X-Admin-Key": getAdminKey(),
-    ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // 始终带 JWT（正式模式依赖此）
+  if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
+  // 临时模式额外带 X-Admin-Key
+  if (ENABLE_ADMIN_KEY_FALLBACK && getAdminKey()) {
+    headers["X-Admin-Key"] = getAdminKey();
+  }
+  return headers;
 }
 
 async function adminPost<T = unknown>(path: string, body: unknown): Promise<Resp<T>> {
@@ -399,7 +453,7 @@ async function adminPost<T = unknown>(path: string, body: unknown): Promise<Resp
     });
     if (res.status === 401 || res.status === 403) {
       clearAdminKey();
-      return { code: -1, message: "管理员密钥无效或已过期", data: null as unknown as T };
+      return { code: -1, message: "管理员权限不足或密钥已过期", data: null as unknown as T };
     }
     if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as unknown as T };
     return res.json();
@@ -413,7 +467,7 @@ async function adminGet<T = unknown>(path: string): Promise<Resp<T>> {
     const res = await fetch(`${BASE}${path}`, { headers: adminHeaders() });
     if (res.status === 401 || res.status === 403) {
       clearAdminKey();
-      return { code: -1, message: "管理员密钥无效或已过期", data: null as unknown as T };
+      return { code: -1, message: "管理员权限不足或密钥已过期", data: null as unknown as T };
     }
     if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as unknown as T };
     return res.json();

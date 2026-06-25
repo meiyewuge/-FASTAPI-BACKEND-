@@ -1,12 +1,13 @@
 /**
  * 管理员邀约码管理页 — P0 发码后台
- * ADMIN_KEY 仅存 sessionStorage，页面刷新后需重新输入。
+ * 双模式架构：A. 临时 ADMIN_KEY（staging）B. JWT role（Patch6）
  */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   getAdminKey, setAdminKey, clearAdminKey,
   adminInviteGenerate, adminInviteList, adminInviteRevoke,
+  ENABLE_ADMIN_KEY_FALLBACK,
   type InviteItem, getToken,
 } from "../api/client";
 
@@ -121,6 +122,9 @@ export default function AdminPanel() {
       <div className="admin-page">
         <div className="admin-key-card">
           <h1>管理员入口</h1>
+          {ENABLE_ADMIN_KEY_FALLBACK && (
+            <p className="staging-badge">⚠️ 临时管理密钥模式，仅限 staging</p>
+          )}
           <p className="admin-hint">请输入管理员密钥（ADMIN_KEY）</p>
           <input
             type="password"
@@ -145,7 +149,9 @@ export default function AdminPanel() {
       {toast && <div className="toast">{toast}</div>}
 
       <header className="admin-header">
-        <h1>邀约码管理</h1>
+        <h1>邀约码管理
+          {ENABLE_ADMIN_KEY_FALLBACK && <span className="staging-badge-inline">staging 临时模式</span>}
+        </h1>
         <div className="admin-header-actions">
           <button className="btn" onClick={() => { loadList(); }}>刷新列表</button>
           <button className="btn btn-logout" onClick={handleExit}>退出管理</button>

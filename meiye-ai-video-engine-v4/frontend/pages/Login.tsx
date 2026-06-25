@@ -1,6 +1,8 @@
 /**
  * 登录页 — 手机号 + 邀约码 + 管理员发码入口
- * 管理员面板不需要 JWT，仅需 ADMIN_KEY（sessionStorage）。
+ * 管理员面板支持双模式：
+ *   A. 临时模式（staging）：ADMIN_KEY sessionStorage
+ *   B. 正式模式（Patch6）：JWT role from /api/me
  */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -8,6 +10,7 @@ import {
   login, getToken,
   getAdminKey, setAdminKey, clearAdminKey,
   adminInviteGenerate, adminInviteList, adminInviteRevoke,
+  ENABLE_ADMIN_KEY_FALLBACK,
   type InviteItem,
 } from "../api/client";
 
@@ -138,7 +141,10 @@ export default function Login() {
         <div className="login-page">
           {toast && <div className="toast">{toast}</div>}
           <div className="login-card admin-key-card">
-            <h1>管理员发码</h1>
+            <h1>管理员入口</h1>
+            {ENABLE_ADMIN_KEY_FALLBACK && (
+              <p className="staging-badge">⚠️ 临时管理密钥模式，仅限 staging</p>
+            )}
             <p className="admin-hint">请输入管理员密钥（ADMIN_KEY）</p>
             <input type="password" placeholder="管理员密钥"
               value={keyInput} onChange={(e) => setKeyInput(e.target.value)}
@@ -159,7 +165,9 @@ export default function Login() {
         {toast && <div className="toast">{toast}</div>}
         <div className="admin-panel-embedded">
           <header className="admin-header">
-            <h1>邀约码管理</h1>
+            <h1>邀约码管理
+              {ENABLE_ADMIN_KEY_FALLBACK && <span className="staging-badge-inline">staging 临时模式</span>}
+            </h1>
             <div className="admin-header-actions">
               <button className="btn" onClick={async () => {
                 setListLoading(true);
@@ -287,9 +295,11 @@ export default function Login() {
           </button>
         </div>
         <div className="login-admin-entry">
-          <button className="btn-admin-link" onClick={() => setShowAdmin(true)}>
-            管理员发码
-          </button>
+          {ENABLE_ADMIN_KEY_FALLBACK && (
+            <button className="btn-admin-link" onClick={() => setShowAdmin(true)}>
+              管理员发码
+            </button>
+          )}
         </div>
       </div>
     </div>
