@@ -797,6 +797,64 @@ body {
 }
 .btn-export-mp4:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ---- 登录页管理员入口 ---- */
+.login-admin-entry {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+.btn-b-split {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+}
+.btn-b-split:hover { background: var(--primary-dark); }
+.btn-selected {
+  background: var(--success);
+  color: #fff;
+  border: none;
+}
+.bcount-control {
+  margin-left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.bcount-input {
+  width: 50px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+}
+.bcount-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.btn-admin-link {
+  background: none;
+  border: none;
+  color: var(--info);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  opacity: 0.7;
+}
+.btn-admin-link:hover { opacity: 1; }
+
+/* 登录页内嵌管理面板 */
+.admin-embedded {
+  padding: 20px;
+}
+.admin-panel-embedded {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
 /* ---- 管理员按钮 ---- */
 .btn-admin {
   background: transparent;

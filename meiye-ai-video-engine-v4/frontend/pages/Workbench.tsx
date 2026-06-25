@@ -41,6 +41,7 @@ export default function Workbench() {
   const [strats, setStrats] = useState<StrategyItem[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState("mix");
   const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
+  const [bCount, setBCount] = useState(1);
   const [videoPage, setVideoPage] = useState(1);
   const [videoTotal, setVideoTotal] = useState(0);
   const [toast, setToast] = useState("");
@@ -140,8 +141,8 @@ export default function Workbench() {
     if (!selectedVideo) { showToast("请先选择一条母视频或上传视频素材"); return; }
     setGenerating(true); setActiveTask(null);
     try {
-      const r = await bGenerate(selectedVideo.video_id, 5, selectedStrategy, prompt.trim() || undefined);
-      if (r.code === 0 && r.data?.task_id) { showToast("B台裂变任务已提交（0元/条）"); startPoll(r.data.task_id); }
+      const r = await bGenerate(selectedVideo.video_id, bCount, selectedStrategy, prompt.trim() || undefined);
+      if (r.code === 0 && r.data?.task_id) { showToast(`B台裂变任务已提交（${bCount}条，0元/条）`); startPoll(r.data.task_id); }
       else showToast(r.message || "B台生成失败");
     } catch { showToast("网络异常"); } finally { setGenerating(false); }
   };
@@ -298,9 +299,10 @@ export default function Workbench() {
           <button className="btn btn-primary" onClick={handleGenerate} disabled={generating || !online}>
             {generating ? "提交中..." : "⚡ 一句话批量生成"}
           </button>
-          <button className="btn btn-a" onClick={handleAGenerate} disabled={generating || !online}>🎬 A台·母视频</button>
+          <button className="btn btn-a" onClick={handleAGenerate} disabled={generating || !online}
+            title="A台调用火山引擎，会产生AI费用">🎬 A台·母视频（⚠️会产生费用）</button>
           <button className="btn btn-b" onClick={handleBGenerate} disabled={generating || !selectedVideo || !online}
-            title={!selectedVideo ? "请先选择母视频或上传视频" : ""}>🔁 B台·裂变</button>
+            title={!selectedVideo ? "请先选择母视频或上传视频" : "B台本地ffmpeg裂变，0 AI成本"}>🔁 B台·裂变（0元/条）</button>
         </div>
         {costPerVideo && prompt.trim() && (
           <div className={`cost-estimate ${overBudget ? "cost-over-budget" : ""}`}>
@@ -465,6 +467,12 @@ export default function Workbench() {
               <button key={s.key} className={selectedStrategy === s.key ? "strat-btn active" : "strat-btn"}
                 onClick={() => setSelectedStrategy(s.key)} title={s.goal}>{s.label}</button>
             ))}
+            <span className="bcount-control">
+              数量：<input type="number" min={1} max={50} value={bCount}
+                onChange={(e) => setBCount(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
+                className="bcount-input" />
+              条
+            </span>
           </div>
         )}
         {selectedVideo && (
@@ -496,6 +504,13 @@ export default function Workbench() {
                   <div className="video-info" onClick={() => setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v)}>
                     <span className="video-title">{v.title || `视频 #${v.video_id}`}</span>
                     <div className="video-actions">
+                      {videoTab === "mother" && (
+                        <button className={`btn btn-sm ${selectedVideo?.video_id === v.video_id ? "btn-selected" : "btn-b-split"}`}
+                          onClick={(e) => { e.stopPropagation(); setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v); }}
+                          title="选择此视频作为B台裂变源">
+                          {selectedVideo?.video_id === v.video_id ? "✓ 已选" : "🔁 用此裂变"}
+                        </button>
+                      )}
                       {v.download_url && (
                         <button className={dlBtnCls(v.video_id)} onClick={(e) => { e.stopPropagation(); handleSingleDownload(v); }}
                           disabled={dlStates[v.video_id] === "downloading"}>{dlBtnText(v.video_id)}</button>
