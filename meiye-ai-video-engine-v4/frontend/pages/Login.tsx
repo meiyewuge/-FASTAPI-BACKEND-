@@ -29,10 +29,10 @@ export default function Login() {
       const r = await login(phone.trim(), inviteCode.trim());
       if (r.code === 0) {
         navigate("/workbench", { replace: true });
-      } else if (r.code === 4010) {
-        setError("该邀请码已绑定其他手机号");
       } else {
-        setError(r.message || "登录失败");
+        // 直接显示后端返回的错误 message，不硬编码错误码
+        // 后端可能的错误码：1001=缺少令牌, 1002=邀约码无效/不存在, 4010=绑定其他手机号 等
+        setError(r.message || `登录失败 (code: ${r.code})`);
       }
     } catch {
       setError("网络异常，请检查后端是否启动");
