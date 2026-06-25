@@ -216,4 +216,52 @@
 
 ---
 
+## 管理员权限兼容说明
+
+### 当前临时 ADMIN_KEY 模式
+
+| 项目 | 说明 |
+|------|------|
+| 开关 | `ENABLE_ADMIN_KEY_FALLBACK = true`（client.ts 顶部） |
+| 工作方式 | 用户输入 ADMIN_KEY → 存入 sessionStorage → 请求带 `X-Admin-Key` header |
+| 安全约束 | 不进 localStorage，页面刷新后需重输，不写死代码 |
+| UI 标注 | 管理面板显示黄色"⚠️ 临时管理密钥模式，仅限 staging"标签 |
+| 入口控制 | 登录页"管理员发码"按钮、工作台"管理员"按钮均受 `ENABLE_ADMIN_KEY_FALLBACK` 控制 |
+| stable 版本 | 改为 `ENABLE_ADMIN_KEY_FALLBACK = false` → 入口自动隐藏 |
+
+### 未来 Patch6 /api/me 上线后如何切换
+
+1. Claude 后端 Patch6 上线 `GET /api/me`，返回 `{ phone, tenant_id, role, is_admin, permissions }`
+2. 前端已有 `fetchMe()` 函数（client.ts），调用后设置 `_userProfile`
+3. `getCurrentUserRole()` 优先读 `_userProfile.role`，fallback 到 ADMIN_KEY
+4. 把 `ENABLE_ADMIN_KEY_FALLBACK` 改为 `false`
+5. 管理面板改为用 `isAdmin()` 判断是否显示，用 `isSuperAdmin()` 判断功能范围
+6. 管理员 API header 只带 `Authorization: Bearer JWT`，不再带 `X-Admin-Key`
+
+### 三种角色显示规则
+
+| role | 管理员入口 | 发码 | 看码 | 作废 | 系统配置 |
+|------|-----------|------|------|------|---------|
+| `super_admin` | ✅ 显示 | ✅ | ✅ | ✅ | ✅ |
+| `invite_admin` | ✅ 显示 | ✅ | ✅ | ✅ | ❌ |
+| `user` | ❌ 隐藏 | ❌ | ❌ | ❌ | ❌ |
+
+**当前代码已预留：**
+- `UserRole` 类型定义（`"super_admin" | "invite_admin" | "user"`）
+- `getCurrentUserRole()` / `isAdmin()` / `isSuperAdmin()` 函数
+- `UserProfile` 接口（对齐后端 /api/me 返回结构）
+- `fetchMe()` API 封装
+- `ENABLE_ADMIN_KEY_FALLBACK` 全局开关
+
+### 等后端 Patch6 完成后再最终联调
+
+| 联调项 | 当前状态 | Patch6 后 |
+|--------|---------|----------|
+| 管理员身份验证 | ADMIN_KEY 临时 | JWT role |
+| /api/me 调用 | 函数已写，未调用 | 登录后自动调用 |
+| 角色权限显示 | 全功能显示 | 按 role 裁剪 |
+| stable 发布 | fallback=true | fallback=false |
+
+---
+
 **结论：前端已完成管理员发码 + 邀约登录 + B台裂变完整闭环，可交 Coze 部署让吴哥手动验收。**
