@@ -366,3 +366,83 @@ export async function stableDownload(
   }
   return { ok: false, error: "下载失败" };
 }
+
+// ---- 管理员（ADMIN_KEY 仅存 sessionStorage，刷新后需重新输入）----
+const SS_ADMIN_KEY = "v4_admin_key";
+
+export function getAdminKey(): string {
+  return sessionStorage.getItem(SS_ADMIN_KEY) || "";
+}
+
+export function setAdminKey(key: string) {
+  sessionStorage.setItem(SS_ADMIN_KEY, key);
+}
+
+export function clearAdminKey() {
+  sessionStorage.removeItem(SS_ADMIN_KEY);
+}
+
+function adminHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "X-Admin-Key": getAdminKey(),
+    ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+  };
+}
+
+async function adminPost<T = unknown>(path: string, body: unknown): Promise<Resp<T>> {
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: adminHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401 || res.status === 403) {
+      clearAdminKey();
+      return { code: -1, message: "管理员密钥无效或已过期", data: null as unknown as T };
+    }
+    if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as unknown as T };
+    return res.json();
+  } catch {
+    return { code: -1, message: "网络异常", data: null as unknown as T };
+  }
+}
+
+async function adminGet<T = unknown>(path: string): Promise<Resp<T>> {
+  try {
+    const res = await fetch(`${BASE}${path}`, { headers: adminHeaders() });
+    if (res.status === 401 || res.status === 403) {
+      clearAdminKey();
+      return { code: -1, message: "管理员密钥无效或已过期", data: null as unknown as T };
+    }
+    if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as unknown as T };
+    return res.json();
+  } catch {
+    return { code: -1, message: "网络异常", data: null as unknown as T };
+  }
+}
+
+// ---- 管理员：邀约码管理 ----
+export interface InviteItem {
+  code: string;
+  tenant_id: string | null;
+  phone: string | null;
+  used_count: number;
+  max_uses: number;
+  note: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export const adminInviteGenerate = (
+  count: number, maxUses: number, note?: string, tenantId?: string,
+) =>
+  adminPost<{ items: InviteItem[]; count: number }>("/admin/invite/generate", {
+    count, max_uses: maxUses, note, tenant_id: tenantId,
+  });
+
+export const adminInviteList = () =>
+  adminGet<{ items: InviteItem[]; total: number }>("/admin/invite/list");
+
+export const adminInviteRevoke = (code: string) =>
+  adminPost<{ code: string; active: boolean }>("/admin/invite/revoke", { code });

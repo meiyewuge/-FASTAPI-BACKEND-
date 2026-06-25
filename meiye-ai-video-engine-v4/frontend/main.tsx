@@ -12,6 +12,7 @@ import {
 import { getToken, register401 } from "./api/client";
 import Login from "./pages/Login";
 import Workbench from "./pages/Workbench";
+import AdminPanel from "./pages/AdminPanel";
 import "./styles.css";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -35,6 +36,15 @@ const router = createHashRouter([
     element: (
       <>
         <RequireAuth><Workbench /></RequireAuth>
+        <App />
+      </>
+    ),
+  },
+  {
+    path: "/admin",
+    element: (
+      <>
+        <RequireAuth><AdminPanel /></RequireAuth>
         <App />
       </>
     ),
