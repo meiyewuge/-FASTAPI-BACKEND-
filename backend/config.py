@@ -54,5 +54,11 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = "deepseek-chat"
 
+    # Patch2：上传
+    upload_dir: str = "/opt/v4-video-engine/uploads"
+    upload_base_url: str = ""           # nginx serve，如 https://video.beautypeaceai.com/static/uploads
+    max_image_mb: int = 10
+    max_video_mb: int = 500
+
 
 settings = Settings()

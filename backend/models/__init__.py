@@ -5,5 +5,6 @@ from .store import Store
 from .video import Video
 from .task import Task
 from .cost import CostRecord
+from .upload import Upload
 
-__all__ = ["Tenant", "Store", "Video", "Task", "CostRecord"]
+__all__ = ["Tenant", "Store", "Video", "Task", "CostRecord", "Upload"]

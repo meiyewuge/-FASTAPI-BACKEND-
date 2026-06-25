@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -21,8 +21,9 @@ from cost_engine import QuotaExceeded
 from intent import parse_intent
 from models import Store, Video
 from schemas.dto import AGenerateIn, BGenerateIn, ComposeIn, ExportIn, IntentIn, LoginIn, Resp
-from services import export_service, orchestrator, store_service
+from services import export_service, orchestrator, store_service, upload_service
 from tasks import video_task
+from utils.upload_util import UploadError
 from tasks.runner import execute_task, retry_task
 from utils import url_refresh
 
@@ -241,6 +242,31 @@ def get_video_url(
         return Resp(code=3001, message="视频不存在")
     url = url_refresh.refresh_video_url(db, v)
     return Resp(data={"video_id": v.id, "download_url": url, "share_url": v.share_url})
+
+
+# ---------------- 上传（Patch2）----------------
+@api_router.post("/upload")
+def upload(
+    type: str = Form(...),
+    file: UploadFile | None = File(None),
+    content: str | None = Form(None),
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """上传 image(jpg/png/webp≤10MB) / video(mp4/mov/avi≤500MB) / text(脚本文案)。"""
+    try:
+        if type == "text":
+            data = (content or "").encode("utf-8")
+            fname = "text.txt"
+        else:
+            if file is None:
+                return Resp(code=2001, message="缺少文件")
+            data = file.file.read()
+            fname = file.filename
+        result = upload_service.handle_upload(db, tenant_id, type, fname, data)
+    except UploadError as e:
+        return Resp(code=2001, message=str(e))
+    return Resp(data=result)
 
 
 # ---------------- 导出（筛选→清单，不分发）----------------
