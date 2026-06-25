@@ -1,6 +1,6 @@
 /**
- * 登录页 — 系统唯一入口。
- * 手机号/token 登录 → 自动绑定 tenant_id → 跳转工作台。
+ * 登录页 — 手机号 + 邀约码（Patch4）。
+ * 同一手机号可用同一邀约码重复登录（Patch4.1 修复）。
  */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -8,6 +8,7 @@ import { login, getToken } from "../api/client";
 
 export default function Login() {
   const [phone, setPhone] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
@@ -19,18 +20,19 @@ export default function Login() {
   }
 
   const handleLogin = async () => {
-    if (!phone.trim()) {
-      setError("请输入手机号或 token");
-      return;
-    }
+    if (!phone.trim()) { setError("请输入手机号"); return; }
+    if (!inviteCode.trim()) { setError("请输入邀约码"); return; }
+
     setLoading(true);
     setError("");
     try {
-      const r = await login(phone.trim());
+      const r = await login(phone.trim(), inviteCode.trim());
       if (r.code === 0) {
         navigate("/workbench", { replace: true });
+      } else if (r.code === 4010) {
+        setError("该邀请码已绑定其他手机号");
       } else {
-        setError(r.msg || "登录失败");
+        setError(r.message || "登录失败");
       }
     } catch {
       setError("网络异常，请检查后端是否启动");
@@ -47,12 +49,20 @@ export default function Login() {
           <p className="login-subtitle">V4.0 SaaS 工作台</p>
         </div>
         <div className="login-form">
-          <label>手机号 / Token</label>
+          <label>手机号</label>
           <input
-            type="text"
-            placeholder="请输入手机号或 token"
+            type="tel"
+            placeholder="请输入手机号"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
+            disabled={loading}
+          />
+          <label>邀约码</label>
+          <input
+            type="text"
+            placeholder="请输入邀约码"
+            value={inviteCode}
+            onChange={(e) => setInviteCode(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleLogin()}
             disabled={loading}
           />
@@ -60,7 +70,7 @@ export default function Login() {
           <button
             className="login-btn"
             onClick={handleLogin}
-            disabled={loading}
+            disabled={loading || !navigator.onLine}
           >
             {loading ? "登录中..." : "进入系统"}
           </button>

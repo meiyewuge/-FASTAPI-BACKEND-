@@ -1,46 +1,49 @@
 /**
- * API 绑定层 — 极简生产稳定版
- * 仅依赖允许的端点：
- *   /auth/login, /generate, /a/generate, /b/generate,
- *   /b/strategies, /tasks/{id}, /tasks, /videos,
- *   /cost/summary, /metrics/overview, /export
- * 无 mock 依赖，直接对接真实后端。
+ * API 绑定层 — V4 前端联调版（对齐 claude/v4-staging Patch1~Patch5+Patch4.1）
+ *
+ * 端点清单：
+ *   POST /auth/login  (phone + invite_code → JWT)
+ *   POST /generate, /a/generate, /b/generate, /compose
+ *   GET  /b/strategies
+ *   GET  /tasks/{id}, /tasks
+ *   POST /tasks/{id}/retry
+ *   GET  /videos, /videos/{id}/url
+ *   POST /upload (image/text/video)
+ *   POST /export (csv/json), /export/videos (mp4 URL list)
+ *   GET  /cost/summary, /metrics/overview, /subscription/status
+ *
+ * 鉴权：Authorization: Bearer <JWT>（无 X-Tenant-Id）
+ * 401 → 自动清 token + 跳登录
+ * 响应字段：{ code, message, data }（与后端 Resp 一致）
  */
 
 const BASE = "/api";
 
-// ---- 租户 & Token 持久化 ----
+// ---- JWT 持久化 ----
+const LS_TOKEN = "v4_jwt";
 const LS_TENANT = "v4_tenant_id";
-const LS_TOKEN = "v4_token";
 
-let TENANT = localStorage.getItem(LS_TENANT) || "default";
 let TOKEN = localStorage.getItem(LS_TOKEN) || "";
+let TENANT = localStorage.getItem(LS_TENANT) || "";
 
-export function setTenant(t: string) {
-  TENANT = t || "default";
-  localStorage.setItem(LS_TENANT, TENANT);
-}
-export function setToken(t: string) {
-  TOKEN = t || "";
-  localStorage.setItem(LS_TOKEN, TOKEN);
-}
-export function getTenant() {
-  return TENANT;
-}
-export function getToken() {
-  return TOKEN;
-}
+export function setToken(t: string) { TOKEN = t; localStorage.setItem(LS_TOKEN, t); }
+export function setTenant(t: string) { TENANT = t; localStorage.setItem(LS_TENANT, t); }
+export function getToken() { return TOKEN; }
+export function getTenant() { return TENANT; }
 export function clearAuth() {
-  TENANT = "default";
-  TOKEN = "";
-  localStorage.removeItem(LS_TENANT);
+  TOKEN = ""; TENANT = "";
   localStorage.removeItem(LS_TOKEN);
+  localStorage.removeItem(LS_TENANT);
 }
 
-// ---- 类型 ----
+// 401 回调：由 main.tsx 注入 router navigate
+let _on401: (() => void) | null = null;
+export function register401(cb: () => void) { _on401 = cb; }
+
+// ---- 类型（与后端 Resp 对齐）----
 export interface Resp<T = unknown> {
   code: number;
-  msg: string;
+  message: string;
   data: T;
 }
 
@@ -51,6 +54,7 @@ export interface VideoItem {
   source_video_id: number | null;
   download_url: string;
   share_url: string;
+  cover_url?: string;
   strategy?: string;
   store_id?: number;
 }
@@ -70,7 +74,7 @@ export interface CostSummary {
   quota: number;
   spend: number;
   remaining: number;
-  by_api: Record<string, number>;
+  by_api?: Record<string, number>;
 }
 
 export interface StrategyItem {
@@ -87,6 +91,20 @@ export interface MetricsOverview {
   remix_multiplier: number;
 }
 
+export interface SubscriptionStatus {
+  plan: string;
+  trial_remaining: number;
+  quota_remaining: number;
+}
+
+export interface UploadResult {
+  file_id: number;
+  file_url: string;
+  file_type: string;
+  file_name: string;
+  file_size: number;
+}
+
 export interface ExportParams {
   video_ids?: number[];
   type?: "mother" | "viral";
@@ -97,42 +115,56 @@ export interface ExportParams {
 }
 
 // ---- 底层请求 ----
-function headers(): Record<string, string> {
+function authHeaders(): Record<string, string> {
   return {
     "Content-Type": "application/json",
-    "X-Tenant-Id": TENANT,
     ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
   };
 }
 
-async function get<T = unknown>(path: string): Promise<Resp<T>> {
-  const res = await fetch(`${BASE}${path}`, { headers: headers() });
-  if (!res.ok) {
-    return { code: -1, msg: `HTTP ${res.status}`, data: null as T };
+/** 统一 401 检测 */
+function check401(res: Response) {
+  if (res.status === 401) {
+    clearAuth();
+    _on401?.();
   }
-  return res.json();
+}
+
+async function get<T = unknown>(path: string): Promise<Resp<T>> {
+  try {
+    const res = await fetch(`${BASE}${path}`, { headers: authHeaders() });
+    check401(res);
+    if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as T };
+    return res.json();
+  } catch {
+    return { code: -1, message: !navigator.onLine ? "网络连接已断开" : "网络异常", data: null as T };
+  }
 }
 
 async function post<T = unknown>(path: string, body: unknown): Promise<Resp<T>> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    return { code: -1, msg: `HTTP ${res.status}`, data: null as T };
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    check401(res);
+    if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as T };
+    return res.json();
+  } catch {
+    return { code: -1, message: !navigator.onLine ? "网络连接已断开" : "网络异常", data: null as T };
   }
-  return res.json();
 }
 
-// ---- 鉴权 ----
-export async function login(phoneOrToken: string) {
+// ---- 鉴权（Patch4：手机号 + 邀约码）----
+export async function login(phone: string, inviteCode: string) {
   const r = await post<{ token: string; tenant_id: string }>("/auth/login", {
-    phone: phoneOrToken,
+    phone,
+    invite_code: inviteCode,
   });
   if (r.code === 0 && r.data) {
-    setTenant(r.data.tenant_id);
     setToken(r.data.token);
+    setTenant(r.data.tenant_id);
   }
   return r;
 }
@@ -141,85 +173,196 @@ export async function login(phoneOrToken: string) {
 export const generate = (text: string) =>
   post<{ plan?: { task_ids?: string[] } }>("/generate", { text });
 
-export const aGenerate = (prompt: string, title?: string) =>
-  post<{ task_id: string }>("/a/generate", { prompt, title });
+export const aGenerate = (prompt: string, title?: string, duration?: number, resolution?: string) =>
+  post<{ task_id: string }>("/a/generate", { prompt, title, duration, resolution });
 
 export const bGenerate = (
-  sourceVideoId: number,
-  count = 10,
-  strategy = "mix",
-  prompt?: string,
+  sourceVideoId: number, count = 10, strategy = "mix", prompt?: string,
 ) =>
   post<{ task_id: string }>("/b/generate", {
-    source_video_id: sourceVideoId,
-    count,
-    strategy,
-    prompt,
+    source_video_id: sourceVideoId, count, strategy, prompt,
+  });
+
+export const compose = (prompt: string, totalSeconds = 30, resolution = "720p", title?: string) =>
+  post<{ task_id: string }>("/compose", {
+    prompt, total_seconds: totalSeconds, resolution, title,
   });
 
 export const strategies = () =>
   get<{ items: StrategyItem[] }>("/b/strategies");
 
-// ---- 任务（轮询）----
+// ---- 任务 ----
 export const getTask = (taskId: string) => get<TaskData>(`/tasks/${taskId}`);
-export const listTasks = () =>
-  get<{ items: TaskData[]; total: number }>("/tasks");
-export const retryTask = (taskId: string) =>
-  post(`/tasks/${taskId}/retry`, {});
+export const listTasks = () => get<{ items: TaskData[]; total: number }>("/tasks");
+export const retryTask = (taskId: string) => post(`/tasks/${taskId}/retry`, {});
 
-/** 轮询直到 done/failed。onTick 可用于更新进度。 */
 export async function pollTask(
-  taskId: string,
-  onTick?: (d: TaskData) => void,
-  intervalMs = 1500,
+  taskId: string, onTick?: (d: TaskData) => void, intervalMs = 2000,
 ): Promise<Resp<TaskData>> {
   for (;;) {
     const r = await getTask(taskId);
     const d = r.data;
     if (d) onTick?.(d);
-    if (d?.status === "done" || d?.status === "failed" || r.code !== 0)
-      return r;
+    if (d?.status === "done" || d?.status === "failed" || r.code !== 0) return r;
     await new Promise((res) => setTimeout(res, intervalMs));
   }
 }
 
 // ---- 视频 ----
-export const listVideos = (
-  type: "mother" | "viral" = "mother",
-  page = 1,
-  pageSize = 20,
-) =>
+export const listVideos = (type: "mother" | "viral" = "mother", page = 1, pageSize = 20) =>
   get<{ items: VideoItem[]; total: number }>(
     `/videos?type=${type}&page=${page}&page_size=${pageSize}`,
   );
 
+/** 刷新视频 URL（CDN 签名过期时用）*/
+export const refreshVideoUrl = (videoId: number) =>
+  get<{ video_id: number; download_url: string; share_url: string }>(`/videos/${videoId}/url`);
+
+// ---- 上传（Patch2）----
+export async function uploadFile(
+  type: "image" | "text" | "video",
+  file: File | null,
+  content?: string,
+  onProgress?: (pct: number) => void,
+): Promise<Resp<UploadResult>> {
+  const form = new FormData();
+  form.append("type", type);
+  if (file) form.append("file", file);
+  if (content !== undefined) form.append("content", content);
+
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/upload`);
+    if (TOKEN) xhr.setRequestHeader("Authorization", `Bearer ${TOKEN}`);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status === 401) { clearAuth(); _on401?.(); }
+      try {
+        resolve(JSON.parse(xhr.responseText));
+      } catch {
+        resolve({ code: -1, message: `HTTP ${xhr.status}`, data: null as unknown as UploadResult });
+      }
+    };
+    xhr.onerror = () => {
+      resolve({ code: -1, message: "网络异常", data: null as unknown as UploadResult });
+    };
+    xhr.send(form);
+  });
+}
+
 // ---- 成本 ----
 export const costSummary = () => get<CostSummary>("/cost/summary");
-
-// ---- 指标 ----
 export const metricsOverview = () => get<MetricsOverview>("/metrics/overview");
+export const subscriptionStatus = () => get<SubscriptionStatus>("/subscription/status");
 
 // ---- 导出 ----
-/** JSON 导出（返回结构化数据） */
-export const exportVideos = (params: ExportParams) =>
+/** CSV 元数据导出（浏览器下载） */
+export async function exportVideosCSV(params: ExportParams): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/export`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ ...params, format: "csv" }),
+    });
+    if (res.status === 401) { clearAuth(); _on401?.(); return false; }
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `视频导出_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** JSON 元数据导出 */
+export const exportVideosJSON = (params: ExportParams) =>
   post<{ count: number; items: unknown[] }>("/export", { ...params, format: "json" });
 
-/** CSV 导出（触发浏览器下载） */
-export async function exportVideosCSV(params: ExportParams): Promise<boolean> {
-  const res = await fetch(`${BASE}/export`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ ...params, format: "csv" }),
-  });
-  if (!res.ok) return false;
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `视频导出_${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  return true;
+/** 视频 mp4 URL 导出（Patch3 方案B） */
+export const exportVideosMp4 = (params: ExportParams) =>
+  post<{ count: number; videos: { video_id: number; title: string; download_url: string }[] }>(
+    "/export/videos", params,
+  );
+
+// ---- 稳定下载（AbortController + 30s超时 + 重试 + URL刷新）----
+export async function stableDownload(
+  video: { video_id: number; download_url: string; title?: string },
+  onProgress?: (pct: number) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  const maxRetries = 2;
+  let url = video.download_url;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000); // 30s
+
+      const resp = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (!resp.ok) {
+        // CDN URL 可能过期 → 刷新后重试
+        if ((resp.status === 403 || resp.status === 404) && attempt === 0) {
+          const refreshed = await refreshVideoUrl(video.video_id);
+          if (refreshed.code === 0 && refreshed.data?.download_url) {
+            url = refreshed.data.download_url;
+            continue; // 用新 URL 重试
+          }
+        }
+        return { ok: false, error: `HTTP ${resp.status}` };
+      }
+
+      // 读取 blob（带进度）
+      const contentLength = Number(resp.headers.get("content-length")) || 0;
+      const reader = resp.body?.getReader();
+      if (!reader) return { ok: false, error: "无法读取响应" };
+
+      const chunks: Uint8Array[] = [];
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        if (contentLength > 0 && onProgress) {
+          onProgress(Math.round((loaded / contentLength) * 100));
+        }
+      }
+
+      const blob = new Blob(chunks as unknown as BlobPart[], { type: "video/mp4" });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${video.title || `视频_${video.video_id}`}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      return { ok: true };
+    } catch (e: unknown) {
+      if (attempt < maxRetries - 1) {
+        // URL 可能过期，先刷新再重试
+        const refreshed = await refreshVideoUrl(video.video_id);
+        if (refreshed.code === 0 && refreshed.data?.download_url) {
+          url = refreshed.data.download_url;
+          continue;
+        }
+      }
+      const msg = e instanceof Error && e.name === "AbortError" ? "下载超时（30s）" : "下载失败";
+      return { ok: false, error: msg };
+    }
+  }
+  return { ok: false, error: "下载失败" };
 }
