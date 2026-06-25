@@ -291,6 +291,31 @@ def export(
     return Resp(data={"count": len(items), "items": items})
 
 
+@api_router.post("/export/videos")
+def export_videos(
+    body: ExportIn,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """视频导出（方案B）：返回选中视频的 mp4 下载 URL 列表（前端逐条下载）。
+    保留 /api/export 的 CSV/JSON 元数据导出不变；ZIP 打包留待下一阶段。"""
+    videos = export_service.select_videos(
+        db, tenant_id, body.video_ids, body.type, body.strategy,
+        body.store_id, body.source_video_id,
+    )
+    items = [
+        {
+            "video_id": v.id,
+            "type": v.type,
+            "title": v.title,
+            "download_url": v.download_url,
+            "cover_url": v.cover_url,
+        }
+        for v in videos
+    ]
+    return Resp(data={"count": len(items), "videos": items})
+
+
 # ---------------- 成本 ----------------
 @api_router.get("/cost/summary")
 def cost_summary(
