@@ -127,21 +127,24 @@ def main():
     assert zip_item.get("zip_entries") == ["a.txt", "b.txt"], zip_item
     print("  ✔ docx/zip 上传成功（zip 列出条目）；非法文件(exe/魔数不符)被拒")
 
-    # 4) 批量裂变 2 个源视频各 1 条
+    # 4) 批量裂变（P1：3 个合格源，duration≥30；auto_ratio=1 保持测试轻量）
+    from models import Video as _V
+    s = _db.SessionLocal()
+    for i in vid_ids:
+        s.get(_V, i).duration_seconds = 35.0
+    s.commit(); s.close()
     r = c.post("/api/b/batch-generate",
-               json={"sources": [{"source_video_id": vid_ids[0], "count": 1},
-                                 {"source_video_id": vid_ids[1], "count": 1}],
-                     "prompt": "抗衰主题", "total_limit": 50},
+               json={"prompt": "抗衰主题", "source_video_ids": vid_ids, "auto_ratio": 1},
                headers=A).json()["data"]
     batch_id = r["batch_id"]
-    assert r["total_outputs"] == 2, r
+    assert r["total_outputs"] == 3 and r["source_count"] == 3, r
     st = c.get(f"/api/b/batch/{batch_id}", headers=A).json()["data"]
-    assert st["status"] == "done" and st["completed"] == 2 and st["failed"] == 0, st
-    print(f"  ✔ 批量裂变 2 源各 1 条 → batch done, completed=2")
+    assert st["status"] == "done" and st["completed"] == 3 and st["failed"] == 0, st
+    print(f"  ✔ 批量裂变 3 合格源（auto_ratio=1）→ batch done, completed=3")
 
     # 5) 结果进入 viral 列表
     vl = c.get("/api/videos", params={"type": "viral", "batch_id": batch_id}, headers=A).json()["data"]
-    assert vl["total"] == 2, vl
+    assert vl["total"] == 3, vl
     assert all(it["source_type"] == "remixed" for it in vl["items"]), vl
     print("  ✔ 裂变结果进入裂变视频陈列面（source_type=remixed）")
 
@@ -169,9 +172,9 @@ def main():
     assert not os.path.exists(fpath), "文件应已删除"
     after = c.get("/api/videos", params={"type": "viral", "batch_id": batch_id, "include_expired": True}, headers=A).json()["data"]
     assert any(it["video_id"] == target and it["storage_status"] == "deleted" for it in after["items"]), after
-    # 默认列表（不含 expired/deleted）应少 1
+    # 默认列表（不含 expired/deleted）应少 1（3→2）
     vis = c.get("/api/videos", params={"type": "viral", "batch_id": batch_id}, headers=A).json()["data"]
-    assert vis["total"] == 1, vis
+    assert vis["total"] == 2, vis
     print("  ✔ 删除视频删服务器文件并标记 deleted（DB 记录保留）")
 
     # 9) storage/status 正常（普通 user → scope=tenant，不暴露全局磁盘）

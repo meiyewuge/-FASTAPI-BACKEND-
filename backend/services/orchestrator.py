@@ -38,50 +38,97 @@ def submit_a(db: Session, tenant_id: str, prompt: str, title: str | None = None,
     return video_task.create_task(db, tenant_id, "a", payload, run_id=run_id)
 
 
-def submit_b_batch(db: Session, tenant_id: str, sources: list[dict], prompt: str | None = None,
-                   total_limit: int | None = None, phone: str | None = None) -> dict:
-    """批量裂变：多源各设 count，本地 ffmpeg、0 成本、不调火山。返回 batch_id + 任务列表。"""
-    hard = settings.b_batch_total_limit
-    limit = min(total_limit or hard, hard)
-    if not sources:
-        raise ValueError("sources 不能为空")
-    total = sum(max(1, int(s.get("count", 1))) for s in sources)
-    if total > limit:
-        raise ValueError(f"批量裂变总产出 {total} 超过上限 {limit}")
+_MIN_QUALIFIED = 3       # 合格源视频最少数量（硬门槛）
+_MAX_SOURCES = 5         # P1：最多取前 5 个合格源参与
+_MIN_DURATION = 30       # 合格时长门槛（秒）
+_THRESHOLD_MSG = "请至少上传 3 个时长 30 秒以上的视频，才能稳定裂变。"
 
-    # 先校验全部源视频归属，避免部分入队后失败
-    for s in sources:
-        sid = s["source_video_id"]
-        src = (
-            db.query(Video)
-            .filter(Video.id == sid, Video.tenant_id == tenant_id, Video.type == "mother")
-            .first()
-        )
-        if src is None:
-            raise ValueError(f"源视频不存在或不属于该租户：id={sid}")
+
+def _qualified_sources(db: Session, tenant_id: str, source_video_ids: list[int] | None) -> list[Video]:
+    """选取合格源视频：本租户 + type=mother + active + duration_seconds>=30。
+
+    传 source_video_ids → 仅在其中筛（保持传入顺序，体现「会话源池优先」）；
+    为空 → fallback 本租户最近合格源（兜底，不作主流程默认）。
+    """
+    base = db.query(Video).filter(
+        Video.tenant_id == tenant_id,                  # 强制本租户（super_admin 也不跨租户混源）
+        Video.type == "mother",
+        Video.storage_status == "active",
+        Video.duration_seconds.isnot(None),            # 时长未知不计入
+        Video.duration_seconds >= _MIN_DURATION,
+    )
+    if source_video_ids:
+        rows = base.filter(Video.id.in_(source_video_ids)).all()
+        by_id = {v.id: v for v in rows}
+        # 按传入顺序保留（前 N 个优先）
+        return [by_id[i] for i in source_video_ids if i in by_id]
+    return base.order_by(Video.created_at.desc()).all()
+
+
+def submit_b_batch(db: Session, tenant_id: str, prompt: str | None = None,
+                   source_video_ids: list[int] | None = None, auto_ratio: int = 10,
+                   max_outputs: int = 50, strategy: str = "mix",
+                   sources: list[dict] | None = None, phone: str | None = None) -> dict:
+    """B台批量裂变（V4 P1）：会话源池优先 + 1:10，本地 ffmpeg、0 成本、不调火山。
+
+    返回 {batch_id, source_count, total_outputs, ignored_source_video_ids, status, cost, _tasks}。
+    """
+    auto_ratio = max(1, min(int(auto_ratio or 10), 10))
+    max_outputs = min(int(max_outputs or settings.b_batch_total_limit), settings.b_batch_total_limit)
+
+    # 兼容 P0 旧字段 sources → source_video_ids
+    if sources and not source_video_ids:
+        source_video_ids = [int(s["source_video_id"]) for s in sources]
+
+    cands = _qualified_sources(db, tenant_id, source_video_ids)
+    if len(cands) < _MIN_QUALIFIED:
+        raise ValueError(_THRESHOLD_MSG)
+
+    # P1：最多取前 5 个合格源；其余记入 ignored
+    used = cands[:_MAX_SOURCES]
+    ignored = [v.id for v in cands[_MAX_SOURCES:]]
+    used_count = len(used)
+
+    # 1:10，封顶 max_outputs（used_count≤5 × 10 ≤ 50）
+    total = min(used_count * auto_ratio, max_outputs)
+    plan: list[tuple[int, int]] = []
+    remaining = total
+    for v in used:
+        if remaining <= 0:
+            break
+        take = min(auto_ratio, remaining)
+        plan.append((v.id, take))
+        remaining -= take
 
     batch_id = uuid.uuid4().hex
     run_id = reflow_service.start_run(
         db, tenant_id, phone, "batch", prompt,
-        input_text_length=len(prompt or ""), source_video_count=len(sources),
+        input_text_length=len(prompt or ""), source_video_count=used_count,
     )
     tasks: list[Task] = []
-    for s in sources:
-        count = max(1, int(s.get("count", 1)))
-        cost_engine.ensure_budget(db, tenant_id, "video.remix.b", count)
+    for vid, take in plan:
+        cost_engine.ensure_budget(db, tenant_id, "video.remix.b", take)
         t = video_task.create_task(
             db, tenant_id, "b",
             {
-                "source_video_id": s["source_video_id"],
-                "count": count,
+                "source_video_id": vid,
+                "count": take,
                 "prompt": prompt,
-                "strategy": s.get("strategy", "mix"),
+                "strategy": strategy or "mix",
                 "batch_id": batch_id,
             },
             batch_id=batch_id, run_id=run_id,
         )
         tasks.append(t)
-    return {"batch_id": batch_id, "total_outputs": total, "_tasks": tasks}
+    return {
+        "batch_id": batch_id,
+        "source_count": used_count,
+        "total_outputs": total,
+        "ignored_source_video_ids": ignored,
+        "status": "queued",
+        "cost": 0,
+        "_tasks": tasks,
+    }
 
 
 def submit_b(

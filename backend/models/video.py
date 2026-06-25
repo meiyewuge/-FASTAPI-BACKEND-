@@ -1,6 +1,6 @@
 """视频表：母视频(mother) 与 裂变视频(viral) 共用，按 tenant_id 隔离。"""
 
-from sqlalchemy import Column, DateTime, Integer, String, Text, func
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, func
 
 from db import Base
 
@@ -16,6 +16,7 @@ class Video(Base):
     source_type = Column(String(16), nullable=False, default="generated")  # generated|uploaded|remixed
     storage_status = Column(String(16), nullable=False, default="active")  # active|expired|deleted
     expires_at = Column(DateTime, nullable=True, index=True)  # 临时存储到期时间；NULL=长期保留
+    duration_seconds = Column(Float, nullable=True)         # V4 P1：视频时长(秒)；NULL=时长未知
     origin_file_id = Column(String(40), nullable=True)       # uploaded：对应 uploads.file_id
     parent_video_id = Column(Integer, nullable=True)         # remixed：源视频 id（= source_video_id）
     batch_id = Column(String(40), nullable=True, index=True) # 批量裂变批次号

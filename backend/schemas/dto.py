@@ -113,7 +113,7 @@ class AGenerateIn(BaseModel):
 
 
 class BatchSourceIn(BaseModel):
-    """批量裂变的单个源。"""
+    """批量裂变的单个源（P0 旧字段 sources 用，仅兼容）。"""
 
     source_video_id: int
     count: int = Field(5, ge=1, le=50, description="该源产出条数")
@@ -121,11 +121,17 @@ class BatchSourceIn(BaseModel):
 
 
 class BatchGenerateIn(BaseModel):
-    """B台批量裂变：多个母/源视频 → 几十条裂变（本地 ffmpeg，0 成本）。"""
+    """B台批量裂变（V4 P1）：会话源池优先 + 1:10（本地 ffmpeg，0 成本）。"""
 
-    sources: list[BatchSourceIn] = Field(..., min_length=1, description="源视频列表")
     prompt: Optional[str] = None
-    total_limit: int = Field(50, ge=1, le=50, description="总产出硬上限（P0=50）")
+    # P1 标准字段：前端按「会话源池优先」三层优先级提交
+    source_video_ids: Optional[list[int]] = Field(None, description="P1 标准字段：源视频 id 列表")
+    auto_ratio: int = Field(10, ge=1, le=10, description="每源裂变条数（1:N，默认 10）")
+    max_outputs: int = Field(50, ge=1, le=50, description="总产出硬上限（P1=50）")
+    strategy: Optional[str] = Field("mix", description="内容策略")
+    # 兼容 P0（不推荐前端继续用）
+    sources: Optional[list[BatchSourceIn]] = Field(None, description="P0 旧字段，仅兼容")
+    total_limit: Optional[int] = Field(None, description="P0 旧字段，仅兼容")
 
 
 class BGenerateIn(BaseModel):

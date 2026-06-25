@@ -17,7 +17,7 @@ from b_engine.remixer import remix_videos
 from config import settings
 from models import Task, Video
 from services import store_service
-from utils import video_cover, video_storage
+from utils import video_cover, video_probe, video_storage
 
 
 def batch_status(db: Session, tenant_id: str, batch_id: str) -> dict | None:
@@ -136,6 +136,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         v.share_url = v.local_url
         v.cover_url = video_cover.extract_cover(v.id, final_path, "viral")
         v.thumbnail_path = video_cover.cover_path(v.id, "viral") if v.cover_url else None
+        v.duration_seconds = o.get("duration") or video_probe.probe_duration(final_path)  # V4 P1
 
         # B台本地裂变 = 0 元
         cost_engine.record(

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from models import Upload, Video
-from utils import upload_util, video_cover, video_storage
+from utils import upload_util, video_cover, video_probe, video_storage
 
 
 def _upload_expiry() -> datetime | None:
@@ -62,6 +62,8 @@ def register_uploaded_video(db: Session, tenant_id: str, upload_rec: Upload, dat
     final_path = os.path.join(mother_dir, f"{v.id}.mp4")
     with open(final_path, "wb") as f:
         f.write(data)
+    # V4 P1：ffprobe 解析时长（失败=None=时长未知，不计入合格源）
+    v.duration_seconds = video_probe.probe_duration(final_path)
     v.local_url = video_storage.local_url(v.id, "mother")
     v.download_url = v.local_url or upload_rec.file_url
     v.share_url = v.download_url

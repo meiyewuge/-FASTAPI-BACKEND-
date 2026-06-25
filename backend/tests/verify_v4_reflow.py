@@ -58,7 +58,8 @@ def _make_mother(tenant, title="母"):
     """直接建一条本地母视频，返回 video_id。"""
     from models import Video
     s = _db.SessionLocal()
-    v = Video(tenant_id=tenant, type="mother", source_type="uploaded", title=title)
+    v = Video(tenant_id=tenant, type="mother", source_type="uploaded", title=title,
+              duration_seconds=35.0)   # P1：合格源需 ≥30s
     s.add(v); s.commit(); vid = v.id; s.close()
     os.makedirs(os.path.join(_STORAGE, "mother"), exist_ok=True)
     _mp4(os.path.join(_STORAGE, "mother", f"{vid}.mp4"))
@@ -73,9 +74,9 @@ def main():
     # ---- 1) B台批量任务生成 workflow_run ----
     m1 = _make_mother("tenantA")
     m2 = _make_mother("tenantA")
+    m3 = _make_mother("tenantA")
     r = c.post("/api/b/batch-generate",
-               json={"sources": [{"source_video_id": m1, "count": 1},
-                                 {"source_video_id": m2, "count": 1}], "prompt": "抗衰"},
+               json={"prompt": "抗衰", "source_video_ids": [m1, m2, m3], "auto_ratio": 1},
                headers=A).json()["data"]
     batch_id = r["batch_id"]
     from models import WorkflowRun, VideoFeedbackSignal, KnowledgeCandidate
@@ -84,11 +85,11 @@ def main():
     assert len(runs) == 1, runs
     run = runs[0]
     assert run.status == "done", run.status
-    assert run.output_video_count == 2, run.output_video_count
+    assert run.output_video_count == 3, run.output_video_count
     assert run.cost_amount == 0, run.cost_amount       # B台 0 成本
-    assert run.source_video_count == 2, run.source_video_count
+    assert run.source_video_count == 3, run.source_video_count
     s.close()
-    print(f"  ✔ B台批量任务生成 workflow_run（output=2, cost=0, status=done）")
+    print(f"  ✔ B台批量任务生成 workflow_run（output=3, cost=0, status=done）")
 
     # 取一条裂变视频做行为/反馈
     vl = c.get("/api/videos", params={"type": "viral", "batch_id": batch_id}, headers=A).json()["data"]

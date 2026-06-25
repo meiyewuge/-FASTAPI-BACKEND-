@@ -58,6 +58,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     # 重命名成片为 {id}.mp4 并设本地URL/封面
     final_path = os.path.join(out_dir, f"{video.id}.mp4")
     os.replace(result["output_path"], final_path)
+    video.duration_seconds = float(result.get("total_seconds") or total_seconds)  # V4 P1
     video.local_url = video_storage.local_url(video.id, "composed")
     video.download_url = video.local_url
     video.cover_url = video_cover.extract_cover(video.id, final_path, "composed")

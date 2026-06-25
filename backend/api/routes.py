@@ -271,11 +271,17 @@ def b_batch_generate(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ) -> Resp:
-    """B台批量裂变：多源 → 几十条（本地 ffmpeg，0 成本）。异步，返回 batch_id。"""
-    sources = [s.model_dump() for s in body.sources]
+    """B台批量裂变（V4 P1）：会话源池优先 + 1:10（本地 ffmpeg，0 成本）。异步，返回 batch_id。
+
+    P1 标准字段 source_video_ids；旧字段 sources 仅兼容 P0。
+    """
+    legacy_sources = [s.model_dump() for s in body.sources] if body.sources else None
     try:
         result = orchestrator.submit_b_batch(
-            db, user["tenant_id"], sources, body.prompt, body.total_limit, phone=user.get("phone")
+            db, user["tenant_id"], prompt=body.prompt,
+            source_video_ids=body.source_video_ids,
+            auto_ratio=body.auto_ratio, max_outputs=body.max_outputs,
+            strategy=body.strategy, sources=legacy_sources, phone=user.get("phone"),
         )
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
@@ -283,7 +289,14 @@ def b_batch_generate(
         return Resp(code=2001, message=str(e))
     for t in result.pop("_tasks"):
         bg.add_task(execute_task, t.id)
-    return Resp(data={"batch_id": result["batch_id"], "total_outputs": result["total_outputs"]})
+    return Resp(data={
+        "batch_id": result["batch_id"],
+        "source_count": result["source_count"],
+        "total_outputs": result["total_outputs"],
+        "ignored_source_video_ids": result["ignored_source_video_ids"],
+        "status": result["status"],
+        "cost": result["cost"],
+    })
 
 
 @api_router.get("/b/batch/{batch_id}")
@@ -395,6 +408,7 @@ def list_videos(
             "source_type": v.source_type,
             "storage_status": v.storage_status,
             "expires_at": v.expires_at.isoformat() if v.expires_at else None,
+            "duration_seconds": v.duration_seconds,
             "title": v.title,
             "strategy": v.strategy,
             "store_id": v.store_id,

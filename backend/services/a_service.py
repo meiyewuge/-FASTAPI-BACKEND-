@@ -32,6 +32,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         download_url=cdn_url,
         share_url=cdn_url,
         volcano_task_id=data["meta"].get("provider_task_id"),
+        duration_seconds=float(data.get("duration") or duration),  # V4 P1：单段时长
         meta=json.dumps(data["meta"], ensure_ascii=False),
     )
     db.add(video)
