@@ -5,6 +5,27 @@
 
 ---
 
+## 🚨 生产零影响红线（务必先读）
+
+**本清单所有命令只允许作用于以下 staging 资源：**
+- 后端目录：`/opt/v4-video-engine-staging/backend/`
+- 前端目录：`/opt/v4-video-engine-staging/frontend/`
+- 视频/上传存储：`/opt/v4-video-engine/storage-staging/videos/`、`/opt/v4-video-engine/storage-staging/uploads/`
+- systemd 服务：`v4-video-engine-staging.service`
+- staging 入口端口：`19180`（后端）/ `19181`（nginx 对外）
+- staging 数据库：`/opt/v4-video-engine-staging/backend/meiye_v4_staging.db`
+
+**🚫 严禁作用于以下 production 资源（碰任意一项即视为事故）：**
+- `/opt/v4-video-engine/backend/`（production 后端）
+- `/opt/v4-video-engine/frontend/`（production 前端）
+- `/opt/v4-video-engine/backend/meiye_v4.db`（production DB）
+- `v4-video-engine.service`（production 服务）
+- `video.beautypeaceai.com` production 对外服务 / production nginx
+
+> 注意路径易混点：**后端/前端/DB 在 `…-staging/` 目录下**；**存储在 `…/storage-staging/` 目录下**（注意是 `storage-staging`，不是 `-staging/storage`）。
+
+---
+
 ## 一、代码版本
 
 **后端分支**：`claude/v4-staging`
@@ -21,7 +42,7 @@
 > 部署前请 `git fetch && git checkout claude/v4-staging && git pull`，并记录实际 HEAD commit 到部署报告。
 
 **前端分支**：`qoder/v4-frontend-workbench`
-- 前端 commit：`<WAIT_QODER_COMMIT>`（待 Qoder 完成 + ChatGPT 审核通过后填入）
+- 前端 commit：**`b0e0741`**（Qoder 已完成 + 审核通过）
 
 ---
 
@@ -29,16 +50,18 @@
 
 ```bash
 TS=$(date +%Y%m%d_%H%M%S)
-# 后端代码
-cp -r /opt/v4-video-engine/backend            /opt/v4-video-engine/backend.bak.$TS
-# 前端 dist
-cp -r /opt/v4-video-engine/frontend/dist      /opt/v4-video-engine/frontend/dist.bak.$TS
-# SQLite DB（若用 sqlite）
-cp /opt/v4-video-engine/backend/meiye_v4_staging.db  /opt/v4-video-engine/backend/meiye_v4_staging.db.bak.$TS
-# .env
-cp /opt/v4-video-engine/backend/.env          /opt/v4-video-engine/backend/.env.bak.$TS
-# Nginx
-cp /etc/nginx/conf.d/v4-staging.conf          /opt/v4-video-engine/nginx.v4-staging.conf.bak.$TS
+# 后端代码（staging）
+cp -r /opt/v4-video-engine-staging/backend            /opt/v4-video-engine-staging/backend.bak.$TS
+# 前端目录（staging）
+cp -r /opt/v4-video-engine-staging/frontend           /opt/v4-video-engine-staging/frontend.bak.$TS
+# SQLite DB（staging）
+cp /opt/v4-video-engine-staging/backend/meiye_v4_staging.db  /opt/v4-video-engine-staging/backend/meiye_v4_staging.db.bak.$TS
+# .env（staging）
+cp /opt/v4-video-engine-staging/backend/.env          /opt/v4-video-engine-staging/backend/.env.bak.$TS
+# 视频/上传存储（staging）
+cp -r /opt/v4-video-engine/storage-staging            /opt/v4-video-engine/storage-staging.bak.$TS
+# Nginx（staging 配置，以实际为准，见第六节）
+cp /etc/nginx/conf.d/v4-staging.conf          /opt/v4-video-engine-staging/nginx.v4-staging.conf.bak.$TS
 ```
 
 **明确禁止**：
@@ -63,7 +86,7 @@ cp /etc/nginx/conf.d/v4-staging.conf          /opt/v4-video-engine/nginx.v4-stag
 ```python
 # migrate_staging.py（一次性，跑完即弃）
 import sqlite3
-db = sqlite3.connect("meiye_v4_staging.db")
+db = sqlite3.connect("/opt/v4-video-engine-staging/backend/meiye_v4_staging.db")
 def addcol(table, col, ddl):
     cols = [r[1] for r in db.execute(f"PRAGMA table_info({table})")]
     if col not in cols:
@@ -120,7 +143,7 @@ ALTER TABLE invite_codes ADD COLUMN phone VARCHAR(32);
 > PostgreSQL 可用 `ADD COLUMN IF NOT EXISTS`，且 `DATETIME→TIMESTAMP`、`FLOAT` 通用。
 
 ### 3.3 回滚方案
-- **首选**：还原 DB 备份 `cp meiye_v4_staging.db.bak.$TS meiye_v4_staging.db`（最稳）。
+- **首选**：还原 staging DB 备份 `cp /opt/v4-video-engine-staging/backend/meiye_v4_staging.db.bak.$TS /opt/v4-video-engine-staging/backend/meiye_v4_staging.db`（最稳）。
 - 列回滚：SQLite < 3.35 不支持 `DROP COLUMN`，**保留多余空列即可，不影响旧逻辑**；≥3.35 可 `ALTER TABLE x DROP COLUMN y`。
 - 新表回滚：`DROP TABLE director_plans; DROP TABLE cost_ledger; ...`（或直接还原 DB 备份）。
 
@@ -129,7 +152,7 @@ ALTER TABLE invite_codes ADD COLUMN phone VARCHAR(32);
 ## 四、回填脚本（duration_seconds）
 
 ```bash
-cd /opt/v4-video-engine/backend
+cd /opt/v4-video-engine-staging/backend
 python -m tasks.backfill_duration
 # 输出：[backfill_duration] scanned=N updated=M unknown(NULL)=K
 ```
@@ -158,10 +181,12 @@ COMPOSE_MAX_IMAGES=9
 VOLC_MODEL=doubao-seedance-2-0-260128     # 与火山控制台一致（RISK-2，勿写错）
 # ---- 存储 / 上传（图片 preview 依赖 HTTPS 公网 URL）----
 STORAGE_ENABLED=true
-STORAGE_DIR=/opt/v4-video-engine/storage/videos
-STORAGE_BASE_URL=https://video.beautypeaceai.com/static/videos
-UPLOAD_DIR=/opt/v4-video-engine/uploads
-UPLOAD_BASE_URL=https://video.beautypeaceai.com/static/uploads   # 必须 https，否则 A台 preview 图片校验失败(2002)
+STORAGE_DIR=/opt/v4-video-engine/storage-staging/videos
+UPLOAD_DIR=/opt/v4-video-engine/storage-staging/uploads
+# 下面两个为「公网 HTTPS 静态访问基址」，必须指向 staging 静态入口（19181 nginx 暴露的 /static/...），
+# 以实际 staging 域名/路径为准，勿指向 production（video.beautypeaceai.com）：
+STORAGE_BASE_URL=https://<staging静态域名>/static/videos
+UPLOAD_BASE_URL=https://<staging静态域名>/static/uploads   # 必须 https，否则 A台 preview 图片校验失败(2002)
 # ---- 鉴权（Patch4/6）----
 JWT_SECRET=<保留 staging 既有值，勿覆盖>
 ADMIN_KEY=<保留 staging 既有值，勿覆盖>
@@ -177,14 +202,15 @@ AUTH_REQUIRED=true
 
 ## 六、Nginx / 静态路径
 
-确认 staging nginx：
-- `location /api/ { proxy_pass http://127.0.0.1:19180; }`（按 staging 实际端口校准；当前后端默认非生产端口，部署时以 staging service 监听端口为准）。
-- `location /static/videos/ { alias /opt/v4-video-engine/storage/videos/; }`
-- `location /static/uploads/ { alias /opt/v4-video-engine/uploads/; }`
+确认 staging nginx（**staging 入口 19181 对外；后端 19180**；只改 staging 配置，禁止改 production nginx）：
+- `location /api/ { proxy_pass http://127.0.0.1:19180; }`（staging 后端端口 19180；以 staging service 实际监听端口为准）。
+- `location /static/videos/ { alias /opt/v4-video-engine/storage-staging/videos/; }`（**指向 storage-staging**，勿指向 production storage）。
+- `location /static/uploads/ { alias /opt/v4-video-engine/storage-staging/uploads/; }`（同上）。
 - `client_max_body_size 600m;`（视频 ≤500MB + 余量；批量总量 ≤2GB 由后端拦，nginx 单请求放够即可）。
 - **图片 URL 必须公网 HTTPS 可访问**（`UPLOAD_BASE_URL=https://...`）——否则 A台 preview 图片校验返回 2002。
-- 上传图片**不再 502**：确认 `proxy_read_timeout`/`client_max_body_size` 足够，且 `/static/uploads/` 目录权限可读。
-- 改完 `nginx -t && systemctl reload nginx`（**staging 配置**，不动 production）。
+- 上传图片**不再 502**：确认 `proxy_read_timeout`/`client_max_body_size` 足够，且 `/opt/v4-video-engine/storage-staging/uploads/` 目录权限可读。
+- 配置文件：`/etc/nginx/conf.d/v4-staging.conf`；**如实际 staging 配置文件名不同，以当前 19181 入口正在使用的 Nginx 配置为准；禁止修改 production nginx 配置。**
+- 改完 `nginx -t && systemctl reload nginx`（仅 **staging 配置**，不动 production）。
 
 ---
 
@@ -203,19 +229,22 @@ AUTH_REQUIRED=true
 ## 八、部署顺序
 
 ```
-1.  systemctl stop v4-video-engine-staging          # 停 staging 后端
+1.  systemctl stop v4-video-engine-staging                       # 停 staging 后端（勿停 v4-video-engine.service）
 2.  执行「二、备份」全部备份
-3.  git fetch && git checkout claude/v4-staging && git pull   # 拉后端代码
-4.  保留 .env（恢复 .env.bak，确认 JWT_SECRET/ADMIN_KEY/VIDEO_API_KEY 未变；补「五」新增项）
-5.  python migrate_staging.py                        # DB migration（幂等）
-6.  python -m tasks.backfill_duration                # 回填 duration_seconds
-7.  systemctl start v4-video-engine-staging          # 启动 staging 后端
-8.  curl http://127.0.0.1:<staging_port>/health      # 期望 {"status":"ok",...}
-9.  curl .../api/info                                # 确认 env=staging（app_env）
-10. 前端：git checkout qoder/v4-frontend-workbench && git pull（<WAIT_QODER_COMMIT>）
-11. npm ci && npm run build
-12. 部署 dist 到 staging 前端目录
-13. nginx -t && systemctl reload nginx               # reload staging nginx
+3.  cd /opt/v4-video-engine-staging/backend
+    git fetch && git checkout claude/v4-staging && git pull       # 拉后端代码
+4.  保留 .env（恢复 /opt/v4-video-engine-staging/backend/.env.bak，
+    确认 JWT_SECRET/ADMIN_KEY/VIDEO_API_KEY 未变；补「五」新增项）
+5.  cd /opt/v4-video-engine-staging/backend && python migrate_staging.py   # DB migration（幂等）
+6.  cd /opt/v4-video-engine-staging/backend && python -m tasks.backfill_duration   # 回填 duration_seconds
+7.  systemctl start v4-video-engine-staging                       # 启动 staging 后端
+8.  curl http://127.0.0.1:19180/health                           # staging 后端，期望 {"status":"ok",...}
+9.  curl http://127.0.0.1:19180/api/info                         # 确认 env=staging（app_env）
+10. cd /opt/v4-video-engine-staging/frontend
+    git checkout qoder/v4-frontend-workbench && git pull          # 前端 commit b0e0741
+11. npm ci && npm run build                                       # 在 staging frontend 目录
+12. 部署 dist 到 staging 前端目录（/opt/v4-video-engine-staging/frontend 下的发布目录）
+13. nginx -t && systemctl reload nginx                           # reload staging nginx（19181 入口）
 14. 执行「九、验证清单」全链路验证
 ```
 
@@ -279,8 +308,8 @@ AUTH_REQUIRED=true
 # STAGING V4 全量部署报告
 
 - 后端 commit：<git rev-parse HEAD @ claude/v4-staging>
-- 前端 commit：<qoder/v4-frontend-workbench HEAD>
-- DB 备份路径：meiye_v4_staging.db.bak.<TS>
+- 前端 commit：b0e0741（qoder/v4-frontend-workbench）
+- DB 备份路径：/opt/v4-video-engine-staging/backend/meiye_v4_staging.db.bak.<TS>
 - migration 结果：<migrate_staging.py 输出，列出 +新增 / =跳过 的列>
 - backfill 结果：scanned=__ updated=__ unknown(NULL)=__
 - .env 检查：ENABLE_COMPOSE=false ✅ / JWT_SECRET 未变 ✅ / UPLOAD_BASE_URL=https ✅ / VOLC_MODEL=__
@@ -290,6 +319,6 @@ AUTH_REQUIRED=true
 - B台裂变测试：source_video_ids ✅ / batch_id ✅ / total_outputs=30 ✅ / viral 刷新 ✅ / cost=0 ✅
 - 候选池测试：feedback→pending ✅ / super_admin 可见 ✅ / user 不可见 ✅
 - Patch6 测试：/api/me ✅ / 发码 ✅
-- production 零影响检查：未停 prod service ✅ / 未改 prod DB ✅ / 未改 prod nginx ✅ / prod 健康 ✅
+- production 零影响检查：未停 `v4-video-engine.service` ✅ / 未改 `/opt/v4-video-engine/backend/meiye_v4.db` ✅ / 未改 production nginx ✅ / `video.beautypeaceai.com` 健康 ✅ / 仅作用 `/opt/v4-video-engine-staging/` 与 `/opt/v4-video-engine/storage-staging/` ✅
 - 是否可交吴哥手动验收：是 / 否（说明）
 ```
