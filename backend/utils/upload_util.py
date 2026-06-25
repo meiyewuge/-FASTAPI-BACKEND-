@@ -8,19 +8,29 @@ from __future__ import annotations
 import os
 import re
 import uuid
+import zipfile
 
 from config import settings
 
-SUBDIR = {"image": "images", "text": "texts", "video": "videos"}
+SUBDIR = {"image": "images", "text": "texts", "video": "videos", "file": "files"}
 _EXT = {
     "image": {"jpg", "jpeg", "png", "webp"},
     "video": {"mp4", "mov", "avi"},
+    "file": {"doc", "docx", "zip"},
     "text": {"txt", "md", ""},
 }
+
+# 扩展名 → 类别（批量上传混合文件分流用）
+_EXT2TYPE = {e: t for t, exts in _EXT.items() for e in exts if e}
 
 
 class UploadError(ValueError):
     pass
+
+
+def category_of(filename: str | None) -> str | None:
+    """按扩展名推断上传类别 image|video|file；未知返回 None。"""
+    return _EXT2TYPE.get(_ext_of(filename))
 
 
 def safe_name(name: str | None) -> str:
@@ -39,6 +49,8 @@ def _max_bytes(ftype: str) -> int:
         return settings.max_image_mb * 1024 * 1024
     if ftype == "video":
         return settings.max_video_mb * 1024 * 1024
+    if ftype == "file":
+        return settings.max_doc_mb * 1024 * 1024
     return 5 * 1024 * 1024  # text
 
 
@@ -58,7 +70,41 @@ def _magic_ok(ftype: str, ext: str, data: bytes) -> bool:
             return data[4:8] == b"ftyp"
         if ext == "avi":
             return head[:4] == b"RIFF" and data[8:12] == b"AVI "
+    if ftype == "file":
+        # docx/zip 同为 ZIP 容器（PK\x03\x04）；doc 为 OLE 复合文档
+        if ext in ("zip", "docx"):
+            return head[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+        if ext == "doc":
+            return head[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
     return False
+
+
+def inspect_zip(data: bytes) -> dict:
+    """安全列出 zip 内容（不解压），防 zip bomb：限制条目数/解压总大小/绝对或穿越路径。
+
+    返回 {"entries": [names...], "total_uncompressed": int}；越限抛 UploadError。
+    """
+    import io
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise UploadError("非法或损坏的 zip")
+    infos = zf.infolist()
+    if len(infos) > settings.zip_max_entries:
+        raise UploadError(f"zip 条目过多（>{settings.zip_max_entries}），疑似 zip bomb")
+    total = 0
+    names = []
+    for zi in infos:
+        name = zi.filename
+        # 防穿越：禁止绝对路径与 .. 成分
+        if name.startswith("/") or name.startswith("\\") or ".." in name.replace("\\", "/").split("/"):
+            raise UploadError(f"zip 含非法路径：{name}")
+        total += zi.file_size
+        if total > settings.zip_max_total_mb * 1024 * 1024:
+            raise UploadError(f"zip 解压总大小超限（>{settings.zip_max_total_mb}MB），疑似 zip bomb")
+        names.append(name)
+    return {"entries": names, "total_uncompressed": total}
 
 
 def validate(ftype: str, filename: str | None, data: bytes) -> str:

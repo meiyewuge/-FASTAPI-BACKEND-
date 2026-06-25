@@ -8,15 +8,64 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 import cost_engine
 from b_engine.remixer import remix_videos
 from config import settings
-from models import Video
+from models import Task, Video
 from services import store_service
 from utils import video_cover, video_storage
+
+
+def batch_status(db: Session, tenant_id: str, batch_id: str) -> dict | None:
+    """批量裂变进度聚合。无此批次返回 None。"""
+    tasks = (
+        db.query(Task)
+        .filter(Task.tenant_id == tenant_id, Task.batch_id == batch_id)
+        .all()
+    )
+    if not tasks:
+        return None
+    statuses = [t.status for t in tasks]
+    total_outputs = 0
+    completed = 0
+    for t in tasks:
+        try:
+            total_outputs += int(json.loads(t.payload or "{}").get("count", 0))
+        except Exception:  # noqa: BLE001
+            pass
+        if t.status == "done" and t.result:
+            try:
+                completed += len(json.loads(t.result).get("videos", []))
+            except Exception:  # noqa: BLE001
+                pass
+    failed = sum(1 for s in statuses if s == "failed")
+    video_ids = [
+        v.id for v in db.query(Video.id)
+        .filter(Video.tenant_id == tenant_id, Video.batch_id == batch_id).all()
+    ]
+    if all(s == "pending" for s in statuses):
+        status = "queued"
+    elif all(s in ("done", "failed") for s in statuses):
+        status = "failed" if all(s == "failed" for s in statuses) else "done"
+    else:
+        status = "running"
+    return {
+        "batch_id": batch_id,
+        "status": status,
+        "total_outputs": total_outputs,
+        "completed": completed,
+        "failed": failed,
+        "video_ids": video_ids,
+    }
+
+
+def _viral_expiry() -> datetime | None:
+    days = settings.viral_retention_days
+    return datetime.utcnow() + timedelta(days=days) if days and days > 0 else None
 
 
 def _mother_local_path(source: Video) -> str:
@@ -37,6 +86,8 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     count = payload.get("count", 10)
     prompt = payload.get("prompt")
     strategy = payload.get("strategy", "mix")
+    batch_id = payload.get("batch_id")
+    expires_at = _viral_expiry()
 
     source = (
         db.query(Video)
@@ -64,9 +115,14 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
             tenant_id=tenant_id,
             store_id=o.get("store_id"),
             type="viral",
+            source_type="remixed",
+            storage_status="active",
             title=o["title"],
             strategy=o.get("strategy"),
             source_video_id=source.id,
+            parent_video_id=source.id,
+            batch_id=batch_id,
+            expires_at=expires_at,
             meta=json.dumps(o["meta"], ensure_ascii=False),
         )
         db.add(v)
@@ -79,6 +135,7 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
         v.download_url = v.local_url
         v.share_url = v.local_url
         v.cover_url = video_cover.extract_cover(v.id, final_path, "viral")
+        v.thumbnail_path = video_cover.cover_path(v.id, "viral") if v.cover_url else None
 
         # B台本地裂变 = 0 元
         cost_engine.record(

@@ -16,4 +16,7 @@ class Upload(Base):
     file_size = Column(Integer, nullable=False, default=0)
     local_path = Column(String(512), nullable=True)
     file_url = Column(String(512), nullable=True)
+    # V4 P0：临时存储生命周期
+    storage_status = Column(String(16), nullable=False, default="active")  # active|expired|deleted
+    expires_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())

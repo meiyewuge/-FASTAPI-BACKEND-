@@ -19,6 +19,9 @@ def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
     resolution = payload.get("resolution", "720p")
     data = generate_mother_video(tenant_id, prompt, duration=duration, resolution=resolution)
     cdn_url = data["url"]
+    # V4 P0：参考图（来自上传）随母视频记录，便于追溯（不改火山调用本身）
+    if payload.get("image_file_id"):
+        data.setdefault("meta", {})["image_file_id"] = payload["image_file_id"]
 
     video = Video(
         tenant_id=tenant_id,

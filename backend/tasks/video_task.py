@@ -22,13 +22,15 @@ class TaskStatus(str, Enum):
 
 
 def create_task(
-    db: Session, tenant_id: str, ttype: str, payload: dict, store_id: int | None = None
+    db: Session, tenant_id: str, ttype: str, payload: dict,
+    store_id: int | None = None, batch_id: str | None = None
 ) -> Task:
     task = Task(
         id=uuid.uuid4().hex,
         tenant_id=tenant_id,
         store_id=store_id,
         type=ttype,
+        batch_id=batch_id,
         status=TaskStatus.PENDING.value,
         payload=json.dumps(payload, ensure_ascii=False),
     )

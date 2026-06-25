@@ -63,5 +63,21 @@ class Settings(BaseSettings):
     max_image_mb: int = 10
     max_video_mb: int = 500
 
+    # V4 P0：批量上传 / 文档 / 批次上限
+    max_doc_mb: int = 50                 # doc/docx/zip 单个上限
+    max_batch_count: int = 10            # 每类（image/video/file）单批最多文件数
+    max_batch_total_gb: float = 2.0      # 单批总量上限（防撑爆 ECS）
+    zip_max_entries: int = 1000          # zip 列条目数上限（防 zip bomb）
+    zip_max_total_mb: int = 500          # zip 解压后总大小上限（防 zip bomb）
+
+    # V4 P0：临时存储保留与清理（天；0=不自动过期，需手动删）
+    mother_retention_days: int = 0       # A台母视频：默认长期保留，可手动删
+    viral_retention_days: int = 5        # B台裂变视频：5 天临时
+    upload_retention_days: int = 7       # 上传素材：7 天临时
+
+    # V4 P0：批量裂变与 A台防误触上限
+    b_batch_total_limit: int = 50        # 单次批量裂变总产出硬上限（P0=50）
+    max_a_batch: int = 10                # 一句话/单次最多生成母视频数（防火山误触）
+
 
 settings = Settings()

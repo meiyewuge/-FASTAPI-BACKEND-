@@ -12,6 +12,7 @@ class Task(Base):
     tenant_id = Column(String(64), nullable=False, default="default", index=True)
     store_id = Column(Integer, nullable=True, index=True)   # 批量任务可为空；单店任务指向门店
     type = Column(String(8), nullable=False)                # a | b
+    batch_id = Column(String(40), nullable=True, index=True)  # V4 P0：批量裂变批次号
     status = Column(String(16), nullable=False, default="pending")  # pending|running|done|failed
     progress = Column(Float, nullable=False, default=0.0)
     payload = Column(Text, nullable=True)                   # JSON 输入

@@ -87,6 +87,23 @@ class AGenerateIn(BaseModel):
     title: Optional[str] = None
     duration: int = Field(15, ge=4, le=15, description="视频时长(秒)，Seedance 2.0 支持 4-15")
     resolution: str = Field("720p", description="视频分辨率: 480p/720p/1080p")
+    image_file_id: Optional[str] = Field(None, description="可选：参考图（来自 /api/upload 的 file_id）")
+
+
+class BatchSourceIn(BaseModel):
+    """批量裂变的单个源。"""
+
+    source_video_id: int
+    count: int = Field(5, ge=1, le=50, description="该源产出条数")
+    strategy: Optional[str] = Field("mix", description="内容策略")
+
+
+class BatchGenerateIn(BaseModel):
+    """B台批量裂变：多个母/源视频 → 几十条裂变（本地 ffmpeg，0 成本）。"""
+
+    sources: list[BatchSourceIn] = Field(..., min_length=1, description="源视频列表")
+    prompt: Optional[str] = None
+    total_limit: int = Field(50, ge=1, le=50, description="总产出硬上限（P0=50）")
 
 
 class BGenerateIn(BaseModel):

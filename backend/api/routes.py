@@ -24,12 +24,12 @@ from cost_engine import QuotaExceeded, get_or_create_tenant
 from intent import parse_intent
 from models import Store, Video
 from schemas.dto import (
-    AGenerateIn, BGenerateIn, BootstrapIn, ComposeIn, ExportIn, GrantIn, IntentIn,
-    InviteGenIn, InviteRevokeIn, LoginIn, Resp, UserRevokeIn,
+    AGenerateIn, BatchGenerateIn, BGenerateIn, BootstrapIn, ComposeIn, ExportIn, GrantIn,
+    IntentIn, InviteGenIn, InviteRevokeIn, LoginIn, Resp, UserRevokeIn,
 )
 from services import (
-    admin_service, export_service, invite_service, orchestrator, store_service,
-    subscription_service, upload_service,
+    admin_service, b_service, export_service, invite_service, orchestrator, storage_service,
+    store_service, subscription_service, upload_service,
 )
 from tasks import video_task
 from utils.upload_util import UploadError
@@ -185,6 +185,8 @@ def generate(
         result = orchestrator.plan_from_intent(db, tenant_id, body.text)
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
+    except ValueError as e:
+        return Resp(code=2001, message=str(e))
     for t in result.pop("_tasks"):
         bg.add_task(execute_task, t.id)
     return Resp(data=result)
@@ -228,9 +230,13 @@ def a_generate(
     db: Session = Depends(get_db),
     tenant_id: str = Depends(get_tenant_id),
 ) -> Resp:
-    """A台：一句话 → 母视频（异步，返回 task_id）。"""
+    """A台：一句话 → 母视频（异步，返回 task_id）。可带参考图 image_file_id。"""
     try:
-        task = orchestrator.submit_a(db, tenant_id, body.prompt, body.title, duration=body.duration, resolution=body.resolution)
+        task = orchestrator.submit_a(
+            db, tenant_id, body.prompt, body.title,
+            duration=body.duration, resolution=body.resolution,
+            image_file_id=body.image_file_id,
+        )
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
     bg.add_task(execute_task, task.id)
@@ -254,6 +260,39 @@ def b_generate(
         return Resp(code=4029, message=str(e))
     bg.add_task(execute_task, task.id)
     return Resp(data={"task_id": task.id})
+
+
+@api_router.post("/b/batch-generate")
+def b_batch_generate(
+    body: BatchGenerateIn,
+    bg: BackgroundTasks,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """B台批量裂变：多源 → 几十条（本地 ffmpeg，0 成本）。异步，返回 batch_id。"""
+    sources = [s.model_dump() for s in body.sources]
+    try:
+        result = orchestrator.submit_b_batch(db, tenant_id, sources, body.prompt, body.total_limit)
+    except QuotaExceeded as e:
+        return Resp(code=4029, message=str(e))
+    except ValueError as e:
+        return Resp(code=2001, message=str(e))
+    for t in result.pop("_tasks"):
+        bg.add_task(execute_task, t.id)
+    return Resp(data={"batch_id": result["batch_id"], "total_outputs": result["total_outputs"]})
+
+
+@api_router.get("/b/batch/{batch_id}")
+def b_batch_status(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """查询批量裂变进度。"""
+    st = b_service.batch_status(db, tenant_id, batch_id)
+    if st is None:
+        return Resp(code=3001, message="批次不存在")
+    return Resp(data=st)
 
 
 @api_router.get("/b/strategies")
@@ -303,29 +342,44 @@ def retry(
     return Resp(data={"task_id": task_id, "status": "pending"})
 
 
-# ---------------- 历史视频（筛选）----------------
+# ---------------- 历史视频 / 陈列面（筛选）----------------
 @api_router.get("/videos")
 def list_videos(
     type: str = "mother",
+    source_type: str | None = None,
     page: int = 1,
     page_size: int = 20,
     strategy: str | None = None,
     store_id: int | None = None,
     source_video_id: int | None = None,
+    batch_id: str | None = None,
+    sort: str = "created_desc",
+    include_expired: bool = False,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(get_tenant_id),
 ) -> Resp:
-    vtype = "viral" if type in ("viral", "裂变") else "mother"
-    q = db.query(Video).filter(Video.tenant_id == tenant_id, Video.type == vtype)
+    """陈列面：type=mother|viral|all；source_type=generated|uploaded|remixed；
+    默认隐藏已过期/已删除（include_expired=true 显示）。"""
+    q = db.query(Video).filter(Video.tenant_id == tenant_id)
+    if type not in ("all", "全部"):
+        vtype = "viral" if type in ("viral", "裂变") else "mother"
+        q = q.filter(Video.type == vtype)
+    if source_type:
+        q = q.filter(Video.source_type == source_type)
     if strategy:
         q = q.filter(Video.strategy == strategy)
     if store_id is not None:
         q = q.filter(Video.store_id == store_id)
     if source_video_id is not None:
         q = q.filter(Video.source_video_id == source_video_id)
+    if batch_id:
+        q = q.filter(Video.batch_id == batch_id)
+    if not include_expired:
+        q = q.filter(Video.storage_status == "active")
+    order = Video.created_at.asc() if sort == "created_asc" else Video.created_at.desc()
     total = q.count()
     rows = (
-        q.order_by(Video.created_at.desc())
+        q.order_by(order)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -334,17 +388,45 @@ def list_videos(
         {
             "video_id": v.id,
             "type": v.type,
+            "source_type": v.source_type,
+            "storage_status": v.storage_status,
+            "expires_at": v.expires_at.isoformat() if v.expires_at else None,
             "title": v.title,
             "strategy": v.strategy,
             "store_id": v.store_id,
             "source_video_id": v.source_video_id,
+            "parent_video_id": v.parent_video_id,
+            "batch_id": v.batch_id,
             "download_url": v.download_url,
             "share_url": v.share_url,
             "cover_url": v.cover_url,
+            "thumbnail_url": v.cover_url,
         }
         for v in rows
     ]
     return Resp(data={"items": items, "total": total})
+
+
+@api_router.delete("/videos/{video_id}")
+def delete_video(
+    video_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """删除视频：删服务器文件，保留 DB 记录（storage_status=deleted）。tenant 隔离。"""
+    ok = storage_service.delete_video(db, tenant_id, video_id)
+    if not ok:
+        return Resp(code=3001, message="视频不存在")
+    return Resp(data={"video_id": video_id, "storage_status": "deleted"})
+
+
+# ---------------- 存储状态 ----------------
+@api_router.get("/storage/status")
+def storage_status(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    """磁盘用量（全局）+ 本租户视频/上传数量。"""
+    return Resp(data=storage_service.storage_status(db, tenant_id))
 
 
 @api_router.get("/videos/{video_id}/url")
@@ -383,6 +465,25 @@ def upload(
         result = upload_service.handle_upload(db, tenant_id, type, fname, data)
     except UploadError as e:
         return Resp(code=2001, message=str(e))
+    return Resp(data=result)
+
+
+@api_router.post("/uploads/batch")
+def uploads_batch(
+    files: list[UploadFile] = File(default=[]),
+    texts: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> Resp:
+    """批量上传：混合 image/video/file(doc/docx/zip) + text。按扩展名自动分流。
+
+    返回 {uploaded:[...], failed:[{file_name, reason}]}。
+    video 自动登记进「母视频/源视频陈列面」（source_type=uploaded）。
+    """
+    pairs: list[tuple[str | None, bytes]] = []
+    for f in files:
+        pairs.append((f.filename, f.file.read()))
+    result = upload_service.handle_batch(db, tenant_id, pairs, list(texts or []))
     return Resp(data=result)
 
 
