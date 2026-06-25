@@ -6,9 +6,10 @@
 
 | 项 | 值 |
 |----|----|
-| **commit** | `7184bbd`（`V4 page redesign P0: 批量上传/上传视频进陈列面/批量裂变/临时存储与自动清理`） |
+| **commit（工作流）** | `7184bbd`（批量上传/上传视频进陈列面/批量裂变/临时存储与自动清理） |
+| **commit（回流层）** | `7e6e840`（workflow_runs + 行为信号 + 知识候选池，见「九、业务资产回流层」） |
 | 分支 | `claude/v4-staging`（已推送 origin） |
-| 测试 | `tests/verify_v4_p0.py` 13 项全过 + 全量回归通过 |
+| 测试 | `verify_v4_p0.py`（13 项）+ `verify_v4_reflow.py`（8 项）+ 全量回归通过 |
 
 ---
 
@@ -100,7 +101,9 @@ ALTER TABLE uploads ADD COLUMN storage_status VARCHAR(16) NOT NULL DEFAULT 'acti
 ALTER TABLE uploads ADD COLUMN expires_at DATETIME;
 -- tasks
 ALTER TABLE tasks ADD COLUMN batch_id VARCHAR(40);
+ALTER TABLE tasks ADD COLUMN run_id VARCHAR(40);   -- 回流层工作流记录关联
 ```
+> 回流层三张表 `workflow_runs` / `video_feedback_signals` / `knowledge_candidates` 均为**新表**，`create_all` 自动建，无需手工。
 > 全新库 / 测试库无需手工操作（建表即含新列）。SQLite 与 PostgreSQL 语法基本一致；PostgreSQL 可加 `CREATE INDEX` 于 batch_id/expires_at（模型已声明 index，全新建表自带）。
 
 ---
@@ -191,10 +194,61 @@ Persistent=true
 
 ---
 
-## 九、未决 / P1
+## 九、业务资产回流层（commit `7e6e840`）
+
+> 定位：本系统是**美业 AI 操作系统的视频业务模块**，不是单纯视频工具。视频生产中的高价值「过程与经验」要回流到阿里云大库——但**不直接写正式库，必须先进候选池，经审核才入库**。
+
+### 1. 哪些数据被记录（过程与经验，非文件本体）
+- **workflow_runs**：每次 A台/B台/批量任务的工作流过程（prompt、模式、各类输入计数、源/产出条数、成本、状态、错误、起止时间）。任务结束由 `runner` 自动回填 `output_video_count / cost_amount / status / completed_at`。
+- **video_feedback_signals**：用户对视频的行为信号（play/select/send_to_b/download/export/favorite/dislike/delete）+ 轻量脱敏上下文。
+- **knowledge_candidates**：知识候选池。当前来源 `user_feedback`（反馈），预留 `prompt/script/strategy/workflow_summary/failure_case`。只存**脱敏摘要**（`content_summary` 截断 ≤500 字）+ `raw_ref` 引用，**不内联原文**。
+
+### 2. 哪些数据「不会」直接入库（安全边界，已落实）
+- ❌ 不把 **mp4 原文件**写入大库（mp4 仍按存储策略临时保留，重点回流的是过程/经验）。
+- ❌ 不把 **Word 全文 / 压缩包内容**默认写入大库（仅 `raw_ref` 引用 + 脱敏摘要）。
+- ❌ 不**跨租户**读取：`track`/`feedback` 的 `tenant_id`、`phone` 一律取自 **JWT**，不信任前端；写入前校验视频归属，跨租户操作 → `2001`。
+- ❌ 不**绕过审核**直接进正式库：候选池 `status=pending`，仅 `super_admin` 可 approve/reject；**P0 不推送阿里云大库**，approved 仅置状态。
+- ❌ 不存未脱敏敏感信息：摘要截断、只引用不内联；`risk_level` 字段预留人工/规则分级。
+
+### 3. 候选池表结构（`knowledge_candidates`）
+`id, tenant_id, phone, source_module(video_v4), source_type, task_id, batch_id, video_id, title, content_summary(脱敏摘要), tags(JSON), raw_ref(原始引用), risk_level(low|medium|high), status(pending|approved|rejected|archived), created_at, reviewed_at, reviewed_by, review_note`。
+
+### 4. 回流接口
+| 方法 | 路径 | 守卫 | 说明 |
+|----|----|----|----|
+| POST | `/api/events/track` | JWT | 行为埋点 `{action, video_id?, context?}`；tenant/phone 取自 JWT |
+| POST | `/api/videos/{id}/feedback` | JWT | `{rating:good\|bad, tags, note}` → 1 条信号 + 1 条候选(pending) |
+| GET | `/api/admin/knowledge-candidates?status=` | **super_admin** | 候选池列表（平台级审核） |
+| POST | `/api/admin/knowledge-candidates/{id}/approve` | **super_admin** | 审核通过（置 approved，记 reviewer） |
+| POST | `/api/admin/knowledge-candidates/{id}/reject` | **super_admin** | 驳回（置 rejected） |
+
+> 候选池审核为**平台级**（super_admin = 吴哥），跨租户可见——这是大库策展的固有需要；普通用户的 track/feedback/workflow_runs 仍严格按租户隔离，互不可见。
+
+### 5. 与阿里云大库的未来对接方式（P1+，已为此预留）
+```
+用户行为/反馈/工作流  →  knowledge_candidates(pending)
+        ↓  super_admin 审核
+     approved  →  [P1] 导出器：脱敏校验 + 风险分级 + 去重
+        ↓
+   阿里云大库（正式知识库 / 向量库）   ← 仅 approved 且脱敏通过的条目
+```
+- P1 增加「approved → 大库」的**单向导出任务**（可 OSS/RDS/向量库），导出前再做一次脱敏与 `risk_level` 闸门。
+- `raw_ref` 指向原始数据，便于人工复核但不默认搬运原文。
+- `source_type=failure_case/workflow_summary` 等可由 `workflow_runs` 批量沉淀（P1 规则化生成候选）。
+
+### 6. 回流层测试（`tests/verify_v4_reflow.py`，8/8 ✅）
+B台批量生成 workflow_run（output/cost 回填）· 下载/收藏生成信号 · 非法 action 拒绝 · 反馈生成候选(pending) · user 访问候选池 403 · super_admin 可查看 · approve/reject 流转 · 多租户隔离。
+
+### 表 migration（回流层新表，`create_all` 自动建；存量库无需手工——均为新表）
+`workflow_runs` / `video_feedback_signals` / `knowledge_candidates` 为全新表；`tasks` 新增 `run_id`（存量库需 `ALTER TABLE tasks ADD COLUMN run_id VARCHAR(40);`）。
+
+---
+
+## 十、未决 / P1
 
 1. zip **深度解析**（解出内部文件入库）留 P1；P0 仅「存储 + 列条目」。
 2. `rar` 暂缓（需服务器安全解压能力）。
 3. 大文件 / OSS 迁移留 P1（字段已预留）。
 4. 删除/存储状态是否收敛为管理员能力，待产品确认。
 5. A台真实火山联调与图生视频（image_file_id 透传到 provider）留待真实 key 环境，本轮仅记录不压测。
+6. 回流层「approved → 阿里云大库」单向导出器 + 脱敏/风险闸门留 P1；P0 仅进候选池、不推送大库。
