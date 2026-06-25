@@ -38,8 +38,10 @@ def _fresh_app():
     config.settings.storage_base_url = "https://test.local/static/videos"
     from fastapi.testclient import TestClient
     from main import app
+    from utils import jwt_util
     _db.init_db()
-    return TestClient(app)
+    token = jwt_util.encode({"tenant_id": "default"}, config.settings.jwt_secret)
+    return TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
 
 def _stub_ok():

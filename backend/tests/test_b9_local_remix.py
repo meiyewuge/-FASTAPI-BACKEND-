@@ -40,7 +40,9 @@ def test_b9_local_ffmpeg_remix():
 
     from fastapi.testclient import TestClient
     from main import app
-    c = TestClient(app)
+    from utils import jwt_util
+    token = jwt_util.encode({"tenant_id": "default"}, config.settings.jwt_secret)
+    c = TestClient(app, headers={"Authorization": f"Bearer {token}"})
     tb = c.post("/api/b/generate", json={"source_video_id": mid, "count": 3}).json()["data"]["task_id"]
     res = c.get(f"/api/tasks/{tb}").json()["data"]
     assert res["status"] == "done" and len(res["result"]["videos"]) == 3

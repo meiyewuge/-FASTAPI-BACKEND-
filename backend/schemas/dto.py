@@ -14,8 +14,23 @@ class Resp(BaseModel):
 
 
 class LoginIn(BaseModel):
-    phone: Optional[str] = None
-    token: Optional[str] = None
+    """登录：手机号 + 邀约码（Patch4）。无邀约码不得登录。"""
+
+    phone: str = Field(..., min_length=4, description="手机号")
+    invite_code: str = Field(..., min_length=1, description="邀约码（必填）")
+
+
+class InviteGenIn(BaseModel):
+    """管理员生成邀约码。"""
+
+    count: int = Field(1, ge=1, le=100, description="批量生成数量")
+    tenant_id: Optional[str] = Field(None, description="绑定租户；空=按手机号自动建租户")
+    max_uses: int = Field(1, ge=1, le=100000, description="每码可用次数")
+    note: Optional[str] = None
+
+
+class InviteRevokeIn(BaseModel):
+    code: str = Field(..., min_length=1)
 
 
 class ExportIn(BaseModel):

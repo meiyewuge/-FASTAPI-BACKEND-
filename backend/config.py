@@ -15,8 +15,11 @@ class Settings(BaseSettings):
     # 多租户：未带租户信息时的默认 tenant
     default_tenant: str = "default"
 
-    # 鉴权（占位）
+    # 鉴权（Patch4：邀约码 + JWT）
     jwt_secret: str = "change_me"
+    jwt_ttl_seconds: int = 7 * 24 * 3600   # token 有效期（默认 7 天）
+    admin_key: str = ""                     # 管理员端点口令（X-Admin-Key）；空=禁用管理端点
+    auth_required: bool = True              # 业务 API 是否强制 JWT（测试可关）
 
     # 视频生成 provider：mock | volcano_seedance | (future) keling / jimeng / runway ...
     video_provider: str = "mock"

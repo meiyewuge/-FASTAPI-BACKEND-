@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.routes import api_router
 from db import init_db
@@ -36,6 +37,16 @@ async def _on_validation_error(request: Request, exc: RequestValidationError):
             "message": "参数校验失败",
             "data": [{"loc": e.get("loc"), "msg": e.get("msg")} for e in exc.errors()],
         },
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _on_http_error(request: Request, exc: StarletteHTTPException):
+    """HTTP 异常（含鉴权 401/403）也走统一 {code, message, data} 结构。"""
+    code = 1001 if exc.status_code in (401, 403) else exc.status_code
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": code, "message": str(exc.detail), "data": None},
     )
 
 

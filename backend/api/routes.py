@@ -14,18 +14,21 @@ from sqlalchemy.orm import Session
 
 import analytics
 import cost_engine
-from api.deps import get_db, get_tenant_id
+from api.deps import get_db, get_tenant_id, require_admin
 from config import settings
 from b_engine.strategies import STRATEGIES
-from cost_engine import QuotaExceeded
+from cost_engine import QuotaExceeded, get_or_create_tenant
 from intent import parse_intent
 from models import Store, Video
-from schemas.dto import AGenerateIn, BGenerateIn, ComposeIn, ExportIn, IntentIn, LoginIn, Resp
-from services import export_service, orchestrator, store_service, upload_service
+from schemas.dto import (
+    AGenerateIn, BGenerateIn, ComposeIn, ExportIn, IntentIn,
+    InviteGenIn, InviteRevokeIn, LoginIn, Resp,
+)
+from services import export_service, invite_service, orchestrator, store_service, upload_service
 from tasks import video_task
 from utils.upload_util import UploadError
 from tasks.runner import execute_task, retry_task
-from utils import url_refresh
+from utils import jwt_util, url_refresh
 
 api_router = APIRouter()
 
@@ -42,11 +45,55 @@ def _task_brief(t) -> dict:
     }
 
 
-# ---------------- 鉴权 ----------------
+# ---------------- 鉴权（Patch4：邀约码 + JWT）----------------
 @api_router.post("/auth/login")
-def login(body: LoginIn, tenant_id: str = Depends(get_tenant_id)) -> Resp:
-    """手机号 / token 登录，绑定 tenant_id（占位鉴权）。"""
-    return Resp(data={"token": f"tk_{tenant_id}", "tenant_id": tenant_id})
+def login(body: LoginIn, db: Session = Depends(get_db)) -> Resp:
+    """手机号 + 邀约码登录。无邀约码 / 邀约码无效 → 拒绝；成功签发 JWT。"""
+    tenant_id = invite_service.validate_and_consume(db, body.invite_code, body.phone)
+    if tenant_id is None:
+        return Resp(code=1002, message="邀约码无效或已用尽")
+    get_or_create_tenant(db, tenant_id)
+    db.commit()
+    token = jwt_util.encode(
+        {"tenant_id": tenant_id, "phone": body.phone},
+        settings.jwt_secret,
+        ttl_seconds=settings.jwt_ttl_seconds,
+    )
+    return Resp(data={"token": token, "tenant_id": tenant_id})
+
+
+# ---------------- 管理员：邀约码（最小版，X-Admin-Key 守卫）----------------
+@api_router.post("/admin/invite/generate")
+def admin_invite_generate(
+    body: InviteGenIn,
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_admin),
+) -> Resp:
+    items = invite_service.generate(
+        db, body.count, body.tenant_id, body.max_uses, body.note
+    )
+    return Resp(data={"items": items, "count": len(items)})
+
+
+@api_router.get("/admin/invite/list")
+def admin_invite_list(
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_admin),
+) -> Resp:
+    items = invite_service.list_codes(db)
+    return Resp(data={"items": items, "total": len(items)})
+
+
+@api_router.post("/admin/invite/revoke")
+def admin_invite_revoke(
+    body: InviteRevokeIn,
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_admin),
+) -> Resp:
+    ok = invite_service.revoke(db, body.code)
+    if not ok:
+        return Resp(code=3001, message="邀约码不存在")
+    return Resp(data={"code": body.code, "active": False})
 
 
 # ---------------- Intent Layer（业务理解层）----------------
