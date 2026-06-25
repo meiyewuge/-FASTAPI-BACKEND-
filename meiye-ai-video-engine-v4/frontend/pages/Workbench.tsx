@@ -1,30 +1,41 @@
 /**
- * 工作台 — V4 前端联调版
- * 结构：顶部 → 输入+上传 → 任务状态 → 视频库(含勾选) → 产能
+ * 工作台 — V4 单框工作流（Manus 风格）
+ * 三区块：操作对话框 → 母视频/源视频陈列面 → 裂变视频陈列面
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  generate, aGenerate, bGenerate, compose,
-  pollTask, listTasks, listVideos, refreshVideoUrl,
-  costSummary, strategies as fetchStrategies, metricsOverview,
-  retryTask, exportVideosCSV, exportVideosMp4,
-  uploadFile, stableDownload,
+  listVideos, refreshVideoUrl, stableDownload, costSummary,
+  strategies as fetchStrategies, uploadFile, batchUpload,
+  batchGenerate, pollBatchStatus, deleteVideo, storageStatus,
+  trackEvent, videoFeedback,
   getTenant, clearAuth, getToken,
-  isAdmin, getUserProfile, fetchMe,
-  type TaskData, type VideoItem, type CostSummary,
-  type StrategyItem, type MetricsOverview,
+  isAdmin, isSuperAdmin, getUserProfile, fetchMe,
+  type VideoItem, type CostSummary, type StrategyItem,
+  type BatchUploadItem, type BatchStatus, type StorageStatus,
 } from "../api/client";
 
-function statusLabel(s: string) {
-  const m: Record<string, { text: string; cls: string }> = {
-    pending: { text: "排队中", cls: "tag-pending" },
-    running: { text: "生成中", cls: "tag-running" },
-    done: { text: "已完成", cls: "tag-done" },
-    failed: { text: "失败", cls: "tag-failed" },
-  };
-  const item = m[s] || { text: s, cls: "" };
-  return <span className={`tag ${item.cls}`}>{item.text}</span>;
+function fmtDuration(s?: number) {
+  if (!s) return "-";
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+function fmtSize(bytes?: number) {
+  if (!bytes) return "-";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// ====================== 上传文件本地类型 ======================
+interface LocalFile {
+  id: string; // 本地唯一ID
+  file: File;
+  type: "image" | "video" | "file" | "text";
+  status: "pending" | "uploading" | "ok" | "failed";
+  progress?: number;
+  fileUrl?: string;
+  fileId?: number;
+  error?: string;
 }
 
 export default function Workbench() {
@@ -32,39 +43,48 @@ export default function Workbench() {
 
   // ---- 基础状态 ----
   const [prompt, setPrompt] = useState("");
-  const [generating, setGenerating] = useState(false);
-  const [tasks, setTasks] = useState<TaskData[]>([]);
-  const [activeTask, setActiveTask] = useState<TaskData | null>(null);
-  const [videos, setVideos] = useState<VideoItem[]>([]);
-  const [videoTab, setVideoTab] = useState<"mother" | "viral">("mother");
-  const [cost, setCost] = useState<CostSummary | null>(null);
-  const [metrics, setMetrics] = useState<MetricsOverview | null>(null);
-  const [strats, setStrats] = useState<StrategyItem[]>([]);
-  const [selectedStrategy, setSelectedStrategy] = useState("mix");
-  const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
-  const [bCount, setBCount] = useState(1);
-  const [videoPage, setVideoPage] = useState(1);
-  const [videoTotal, setVideoTotal] = useState(0);
   const [toast, setToast] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
-  const pollRef = useRef(false);
+  const [cost, setCost] = useState<CostSummary | null>(null);
+  const [strats, setStrats] = useState<StrategyItem[]>([]);
+  const [storage, setStorage] = useState<StorageStatus | null>(null);
 
   // ---- 上传状态 ----
-  const [uploadTab, setUploadTab] = useState<"image" | "text" | "video">("image");
+  const [localFiles, setLocalFiles] = useState<LocalFile[]>([]);
+  const [textExtra, setTextExtra] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadResult, setUploadResult] = useState<{ file_url?: string; file_id?: number; file_name?: string } | null>(null);
-  const [textContent, setTextContent] = useState("");
+
+  // ---- 母视频 / 源视频 ----
+  const [motherVideos, setMotherVideos] = useState<VideoItem[]>([]);
+  const [motherTotal, setMotherTotal] = useState(0);
+  const [motherPage, setMotherPage] = useState(1);
+  const [motherSelected, setMotherSelected] = useState<Set<number>>(new Set());
+
+  // ---- 裂变视频 ----
+  const [viralVideos, setViralVideos] = useState<VideoItem[]>([]);
+  const [viralTotal, setViralTotal] = useState(0);
+  const [viralPage, setViralPage] = useState(1);
+  const [viralSelected, setViralSelected] = useState<Set<number>>(new Set());
+
+  // ---- 批量裂变配置 ----
+  const [showBatchConfig, setShowBatchConfig] = useState(false);
+  const [batchCount, setBatchCount] = useState(3);
+  const [batchStrategy, setBatchStrategy] = useState("mix");
+  const [batchPrompt, setBatchPrompt] = useState("");
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null);
+  const batchPollRef = useRef(false);
+
+  // ---- 反馈弹出菜单 ----
+  const [feedbackOpen, setFeedbackOpen] = useState<number | null>(null);
 
   // ---- 下载状态 ----
   type DLState = "waiting" | "downloading" | "done" | "error";
   const [dlStates, setDlStates] = useState<Record<number, DLState>>({});
 
-  // ---- 导出/勾选 ----
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [exporting, setExporting] = useState(false);
-
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
+  const PAGE_SIZE = 50;
 
   // ---- 网络状态 ----
   useEffect(() => {
@@ -75,218 +95,261 @@ export default function Workbench() {
     return () => { window.removeEventListener("offline", off); window.removeEventListener("online", on); };
   }, []);
 
-  // ---- 获取用户角色（页面刷新后恢复） ----
+  // ---- 获取用户角色 ----
   useEffect(() => {
-    if (!getUserProfile() && getToken()) {
-      fetchMe(); // /api/me → 设置 _userProfile → isAdmin() 生效
-    }
+    if (!getUserProfile() && getToken()) fetchMe();
   }, []);
 
-  // ---- 加载 ----
+  // ---- 加载仪表盘 ----
   const loadDashboard = useCallback(async () => {
-    const [cR, mR, tR, vR, sR] = await Promise.all([
-      costSummary(), metricsOverview(), listTasks(), listVideos("mother", 1, 20), fetchStrategies(),
-    ]);
+    const [cR, sR, stR] = await Promise.all([costSummary(), fetchStrategies(), storageStatus()]);
     if (cR.code === 0) setCost(cR.data);
-    if (mR.code === 0) setMetrics(mR.data);
-    if (tR.code === 0) setTasks(tR.data?.items || []);
-    if (vR.code === 0) { setVideos(vR.data?.items || []); setVideoTotal(vR.data?.total || 0); }
     if (sR.code === 0) setStrats(sR.data?.items || []);
+    if (stR.code === 0) setStorage(stR.data);
   }, []);
   useEffect(() => { loadDashboard(); }, [loadDashboard]);
 
-  const switchVideoTab = async (type: "mother" | "viral") => {
-    setVideoTab(type); setVideoPage(1); setSelectedIds(new Set());
-    const r = await listVideos(type, 1, 20);
-    if (r.code === 0) { setVideos(r.data?.items || []); setVideoTotal(r.data?.total || 0); }
-  };
-  const loadVideoPage = async (page: number) => {
-    setVideoPage(page); setSelectedIds(new Set());
-    const r = await listVideos(videoTab, page, 20);
-    if (r.code === 0) { setVideos(r.data?.items || []); setVideoTotal(r.data?.total || 0); }
+  // ---- 加载母视频 ----
+  const loadMother = useCallback(async (p = 1) => {
+    const r = await listVideos("mother", p, PAGE_SIZE);
+    if (r.code === 0) { setMotherVideos(r.data?.items || []); setMotherTotal(r.data?.total || 0); }
+  }, []);
+
+  // ---- 加载裂变视频 ----
+  const loadViral = useCallback(async (p = 1) => {
+    const r = await listVideos("viral", p, PAGE_SIZE);
+    if (r.code === 0) { setViralVideos(r.data?.items || []); setViralTotal(r.data?.total || 0); }
+  }, []);
+
+  useEffect(() => { loadMother(motherPage); }, [motherPage, loadMother]);
+  useEffect(() => { loadViral(viralPage); }, [viralPage, loadViral]);
+
+  // ===================== 上传处理 =====================
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFilesSelected = (files: FileList | null, type: "image" | "video" | "file") => {
+    if (!files) return;
+    const maxCounts = { image: 10, video: 10, file: 10 };
+    const current = localFiles.filter(f => f.type === type);
+    const remaining = maxCounts[type] - current.length;
+    if (remaining <= 0) { showToast(`${type === "image" ? "图片" : type === "video" ? "视频" : "文件"}已达上限 ${maxCounts[type]} 个`); return; }
+
+    const arr = Array.from(files).slice(0, remaining);
+    const newFiles: LocalFile[] = arr.map((f, i) => ({
+      id: `${Date.now()}-${i}`,
+      file: f,
+      type,
+      status: "pending" as const,
+    }));
+    setLocalFiles(prev => [...prev, ...newFiles]);
   };
 
-  // ---- 轮询（F3 — 2s）----
-  const startPoll = async (taskId: string) => {
-    pollRef.current = true;
-    const r = await pollTask(taskId, (d) => { if (pollRef.current) setActiveTask({ ...d }); }, 2000);
-    pollRef.current = false;
-    if (r.code === 0 && r.data) {
-      setActiveTask(r.data);
-      showToast(r.data.status === "done"
-        ? `视频生成完成! 共 ${r.data.result?.videos?.length || 0} 条`
-        : "任务失败: " + (r.data.error || "未知原因"));
-    } else if (r.code === 4029) { showToast("配额不足"); }
-    else if (r.code === -1) { showToast("网络连接中断"); }
-    loadDashboard();
+  const removeLocalFile = (id: string) => {
+    setLocalFiles(prev => prev.filter(f => f.id !== id));
   };
 
-  // ---- 生成 ----
-  const handleGenerate = async () => {
-    if (!prompt.trim()) { showToast("请输入视频需求"); return; }
-    setGenerating(true); setActiveTask(null);
-    try {
-      const r = await generate(prompt.trim());
+  const uploadAllFiles = async () => {
+    const pending = localFiles.filter(f => f.status === "pending");
+    if (!pending.length && !prompt.trim() && !textExtra.trim()) {
+      showToast("请输入视频需求或上传素材");
+      return;
+    }
+    setUploading(true);
+    setUploadProgress(0);
+
+    // 按类型分组上传
+    const types: ("image" | "video" | "file")[] = ["image", "video", "file"];
+    for (const type of types) {
+      const files = pending.filter(f => f.type === type);
+      if (!files.length) continue;
+      const fileObjs = files.map(f => f.file);
+      setLocalFiles(prev => prev.map(f => files.find(x => x.id === f.id) ? { ...f, status: "uploading" as const } : f));
+
+      const r = await batchUpload(fileObjs, type, (pct) => setUploadProgress(pct));
       if (r.code === 0 && r.data) {
-        const ids = r.data.plan?.task_ids || [];
-        showToast(`已提交 ${ids.length} 个任务`);
-        if (ids.length > 0) startPoll(ids[0]);
-      } else showToast(r.message || "生成失败");
-    } catch { showToast("网络异常"); } finally { setGenerating(false); }
-  };
-
-  const handleAGenerate = async () => {
-    if (!prompt.trim()) { showToast("请输入视频需求"); return; }
-    setGenerating(true); setActiveTask(null);
-    try {
-      const r = await aGenerate(prompt.trim());
-      if (r.code === 0 && r.data?.task_id) { showToast("A台任务已提交"); startPoll(r.data.task_id); }
-      else showToast(r.message || "A台生成失败");
-    } catch { showToast("网络异常"); } finally { setGenerating(false); }
-  };
-
-  const handleBGenerate = async () => {
-    if (!selectedVideo) { showToast("请先选择一条母视频或上传视频素材"); return; }
-    setGenerating(true); setActiveTask(null);
-    try {
-      const r = await bGenerate(selectedVideo.video_id, bCount, selectedStrategy, prompt.trim() || undefined);
-      if (r.code === 0 && r.data?.task_id) { showToast(`B台裂变任务已提交（${bCount}条，0元/条）`); startPoll(r.data.task_id); }
-      else showToast(r.message || "B台生成失败");
-    } catch { showToast("网络异常"); } finally { setGenerating(false); }
-  };
-
-  const handleRetry = async (taskId: string) => {
-    const r = await retryTask(taskId);
-    if (r.code === 0) { showToast("已重新提交"); startPoll(taskId); }
-    else showToast(r.message || "重试失败");
-  };
-
-  // ---- 上传 ----
-  const handleUpload = async (file: File | null) => {
-    setUploading(true); setUploadProgress(0); setUploadResult(null);
-    const r = await uploadFile(uploadTab, file, undefined, (p) => setUploadProgress(p));
-    if (r.code === 0 && r.data) {
-      setUploadResult(r.data);
-      showToast(`上传成功: ${r.data.file_name}`);
-      if (uploadTab === "video") {
-        // 视频上传后可作为B台源
-        loadDashboard();
+        const items = r.data.items || [];
+        setLocalFiles(prev => prev.map(f => {
+          const idx = files.findIndex(x => x.id === f.id);
+          if (idx === -1) return f;
+          const item = items[idx];
+          if (item?.status === "ok") return { ...f, status: "ok" as const, fileUrl: item.file_url, fileId: item.file_id };
+          return { ...f, status: "failed" as const, error: item?.error || "上传失败" };
+        }));
+      } else {
+        setLocalFiles(prev => prev.map(f => files.find(x => x.id === f.id) ? { ...f, status: "failed" as const, error: r.message } : f));
       }
-    } else {
-      showToast(r.message || "上传失败");
     }
     setUploading(false);
+    setUploadProgress(100);
+    // 刷新母视频列表（上传的视频会出现在列表中）
+    loadMother(1);
+    loadDashboard();
+    showToast("素材上传完成");
   };
 
-  const handleTextUpload = async () => {
-    if (!textContent.trim()) { showToast("请输入文本内容"); return; }
-    setUploading(true); setUploadProgress(0); setUploadResult(null);
-    const r = await uploadFile("text", null, textContent, (p) => setUploadProgress(p));
-    if (r.code === 0 && r.data) { setUploadResult(r.data); showToast("脚本上传成功"); }
-    else showToast(r.message || "上传失败");
-    setUploading(false);
+  // ===================== 操作按钮 =====================
+  const handleAGenerate = async () => {
+    if (!prompt.trim()) { showToast("请输入视频需求"); return; }
+    if (!confirm("A 台母视频生成会产生费用，确认继续？")) return;
+    // P0 阶段不自动触发 A 台，仅提示
+    showToast("A 台功能请谨慎使用，请联系管理员操作");
   };
 
-  // ---- 稳定下载（F8 + Task5）----
-  const handleSingleDownload = async (v: VideoItem) => {
-    if (!v.download_url) return;
-    setDlStates((p) => ({ ...p, [v.video_id]: "downloading" }));
-    const result = await stableDownload(v, (pct) => {
-      // 进度更新（可选）
-    });
-    setDlStates((p) => ({ ...p, [v.video_id]: result.ok ? "done" : "error" }));
-    if (!result.ok) showToast("下载失败: " + result.error);
-    setTimeout(() => setDlStates((p) => { const n = { ...p }; delete n[v.video_id]; return n; }), 3000);
+  const handleOpenBatchConfig = () => {
+    if (motherSelected.size === 0) {
+      showToast("请先在下方母视频陈列面勾选 1~10 个源视频");
+      return;
+    }
+    if (motherSelected.size > 10) {
+      showToast("最多选择 10 个源视频");
+      return;
+    }
+    setShowBatchConfig(true);
+  };
+
+  const handleBatchSubmit = async () => {
+    const sourceIds = Array.from(motherSelected);
+    const totalOutputs = sourceIds.length * batchCount;
+    if (totalOutputs > 50) {
+      showToast(`总产出 ${totalOutputs} 条超过上限 50，请减少数量`);
+      return;
+    }
+    if (!confirm(`确认裂变 ${sourceIds.length} 个源视频 × ${batchCount} 条 = ${totalOutputs} 条？`)) return;
+    setBatchRunning(true);
+    setBatchStatus(null);
+    trackEvent("send_to_b", { source_ids: sourceIds, count: batchCount });
+
+    const r = await batchGenerate(sourceIds, batchCount, batchStrategy, batchPrompt || undefined);
+    if (r.code === 0 && r.data) {
+      const batchId = r.data.batch_id;
+      showToast(`裂变任务已提交 (${batchId})，开始轮询...`);
+      batchPollRef.current = true;
+      pollBatchStatus(batchId, (d) => {
+        setBatchStatus(d);
+      }).then((final) => {
+        batchPollRef.current = false;
+        setBatchRunning(false);
+        if (final.data?.status === "done") {
+          showToast(`裂变完成！产出 ${final.data.completed}/${final.data.total_outputs} 条`);
+          loadViral(1);
+          loadDashboard();
+        } else {
+          showToast(`裂变任务结束: ${final.data?.status || "未知状态"}`);
+        }
+      });
+    } else {
+      showToast(r.message || "提交裂变失败");
+      setBatchRunning(false);
+    }
+  };
+
+  // ===================== 视频操作 =====================
+  const handlePlay = (v: VideoItem) => {
+    trackEvent("video_play", { video_id: v.video_id });
+    if (v.download_url) window.open(v.download_url, "_blank");
+    else if (v.share_url) window.open(v.share_url, "_blank");
+  };
+
+  const handleDownload = async (v: VideoItem) => {
+    if (!v.download_url) { showToast("暂无下载链接"); return; }
+    trackEvent("video_download", { video_id: v.video_id });
+    setDlStates(p => ({ ...p, [v.video_id]: "downloading" }));
+    const r = await stableDownload(v);
+    setDlStates(p => ({ ...p, [v.video_id]: r.ok ? "done" : "error" }));
+    if (!r.ok) showToast(r.error || "下载失败");
+    setTimeout(() => setDlStates(p => { const n = { ...p }; delete n[v.video_id]; return n; }), 3000);
   };
 
   const handleBatchDownload = async (list: VideoItem[]) => {
-    const downloadable = list.filter((v) => v.download_url);
-    if (!downloadable.length) { showToast("没有可下载的视频"); return; }
-    showToast(`开始下载 ${downloadable.length} 个视频...`);
-    let okCount = 0;
-    for (let i = 0; i < downloadable.length; i++) {
-      const v = downloadable[i];
-      setDlStates((p) => ({ ...p, [v.video_id]: "downloading" }));
-      const r = await stableDownload(v);
-      setDlStates((p) => ({ ...p, [v.video_id]: r.ok ? "done" : "error" }));
-      if (r.ok) okCount++;
-      if (i < downloadable.length - 1) await new Promise((r) => setTimeout(r, 300));
+    const ok = list.filter(v => v.download_url);
+    if (!ok.length) { showToast("没有可下载的视频"); return; }
+    showToast(`开始下载 ${ok.length} 个视频...`);
+    let count = 0;
+    for (let i = 0; i < ok.length; i++) {
+      setDlStates(p => ({ ...p, [ok[i].video_id]: "downloading" }));
+      const r = await stableDownload(ok[i]);
+      setDlStates(p => ({ ...p, [ok[i].video_id]: r.ok ? "done" : "error" }));
+      if (r.ok) count++;
+      if (i < ok.length - 1) await new Promise(r => setTimeout(r, 300));
     }
-    showToast(`下载完成：${okCount}/${downloadable.length} 成功`);
-    setTimeout(() => setDlStates({}), 3000);
+    showToast(`下载完成：${count}/${ok.length} 成功`);
   };
 
-  // ---- 导出视频 mp4 ----
-  const handleExportMp4 = async () => {
-    if (selectedIds.size === 0) { showToast("请先勾选要导出的视频"); return; }
-    setExporting(true);
-    try {
-      const r = await exportVideosMp4({ video_ids: Array.from(selectedIds) });
-      if (r.code === 0 && r.data?.videos?.length) {
-        showToast(`获取到 ${r.data.videos.length} 个视频URL，开始下载...`);
-        const list: VideoItem[] = r.data.videos.map((v) => ({
-          ...v, type: "mother" as const, source_video_id: null, share_url: "",
-        }));
-        await handleBatchDownload(list);
-      } else {
-        showToast(r.message || "获取视频URL失败");
-      }
-    } catch { showToast("导出异常"); }
-    setExporting(false);
+  const handleDelete = async (v: VideoItem) => {
+    if (!confirm(`确认删除视频 #${v.video_id}？此操作不可恢复。`)) return;
+    const r = await deleteVideo(v.video_id);
+    if (r.code === 0) {
+      trackEvent("video_delete", { video_id: v.video_id });
+      showToast(`视频 #${v.video_id} 已删除`);
+      if (v.type === "viral") loadViral(viralPage);
+      else loadMother(motherPage);
+      loadDashboard();
+    } else {
+      showToast(r.message || (r.code === 403 || r.code === 2001 ? "无权删除该视频" : "删除失败"));
+    }
   };
 
-  // ---- 导出 CSV ----
-  const handleExportCSV = async () => {
-    setExporting(true);
-    const ok = await exportVideosCSV({ type: videoTab });
-    showToast(ok ? "CSV导出成功" : "导出失败");
-    setExporting(false);
+  const handleFeedback = async (videoId: number, action: "favorite" | "useful" | "useless" | "note") => {
+    setFeedbackOpen(null);
+    const r = await videoFeedback(videoId, action);
+    if (r.code === 0) showToast(`反馈已提交: ${action === "favorite" ? "收藏" : action === "useful" ? "好用" : action === "useless" ? "不好用" : "备注"}`);
+    else showToast(r.message || "反馈提交失败");
   };
 
-  // ---- 勾选 ----
-  const toggleSelect = (id: number) => {
-    setSelectedIds((prev) => {
+  // ===================== 选择操作 =====================
+  const toggleMother = (id: number) => {
+    setMotherSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      trackEvent("video_select", { video_id: id });
+      return next;
+    });
+  };
+  const toggleAllMother = () => {
+    if (motherSelected.size === motherVideos.length) setMotherSelected(new Set());
+    else setMotherSelected(new Set(motherVideos.map(v => v.video_id)));
+  };
+  const toggleViral = (id: number) => {
+    setViralSelected(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
-  const toggleAll = () => {
-    if (selectedIds.size === videos.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(videos.map((v) => v.video_id)));
+  const toggleAllViral = () => {
+    if (viralSelected.size === viralVideos.length) setViralSelected(new Set());
+    else setViralSelected(new Set(viralVideos.map(v => v.video_id)));
   };
 
-  // ---- 费用预估 ----
-  const costPerVideo = metrics && metrics.videos_per_cost_unit > 0 ? 1 / metrics.videos_per_cost_unit : null;
-  const parseCount = (t: string) => { const m = t.match(/(\d+)\s*[个条份张]/); return m ? parseInt(m[1], 10) : 1; };
-  const batchCount = parseCount(prompt);
-  const estimateA = costPerVideo;
-  const estimateBatch = estimateA ? estimateA * batchCount : null;
-  const overBudget = cost ? (estimateBatch ?? 0) > (cost.remaining ?? 0) : false;
+  // ===================== 汇总统计 =====================
+  const imageFiles = localFiles.filter(f => f.type === "image");
+  const videoFiles = localFiles.filter(f => f.type === "video");
+  const docFiles = localFiles.filter(f => f.type === "file");
+  const hasText = !!(prompt.trim() || textExtra.trim());
+  const hasUploads = localFiles.length > 0;
+  const sourceCount = motherSelected.size;
+  const batchTotal = sourceCount * batchCount;
 
-  const resultVideos = activeTask?.result?.videos || [];
-  const progressPct = Math.round((activeTask?.progress || 0) * 100);
   const dlBtnText = (id: number) => {
     const s = dlStates[id];
-    return s === "downloading" ? "下载中..." : s === "done" ? "已完成" : s === "error" ? "重试" : "下载";
-  };
-  const dlBtnCls = (id: number) => {
-    const s = dlStates[id];
-    return `btn btn-sm ${s === "done" ? "btn-done" : s === "error" ? "btn-error" : ""}`;
+    return s === "downloading" ? "下载中..." : s === "done" ? "✓" : s === "error" ? "重试" : "下载";
   };
 
+  // ===================== RENDER =====================
   return (
-    <div className="workbench">
+    <div className="wf-page">
       {toast && <div className="toast">{toast}</div>}
       {!online && <div className="offline-bar">网络连接已断开，请检查网络</div>}
 
-      {/* 1. 顶部 */}
-      <header className="wb-header">
-        <div className="wb-header-left">
+      {/* ===== Header ===== */}
+      <header className="wf-header">
+        <div className="wf-header-left">
           <h1>美业AI视频系统</h1>
           <span className="tenant-badge">租户: {getTenant()}</span>
         </div>
-        <div className="wb-header-right">
+        <div className="wf-header-right">
           {cost && (
             <div className="cost-panel">
               <span className="cost-label">剩余额度</span>
@@ -301,258 +364,332 @@ export default function Workbench() {
         </div>
       </header>
 
-      {/* 2. 输入区 */}
-      <section className="wb-input">
-        <textarea className="wb-textarea" placeholder="请输入视频需求，例如：帮我做10个广州美容院抗衰视频"
-          value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} disabled={generating} />
-        <div className="wb-actions">
-          <button className="btn btn-primary" onClick={handleGenerate} disabled={generating || !online}>
-            {generating ? "提交中..." : "⚡ 一句话批量生成"}
-          </button>
-          <button className="btn btn-a" onClick={handleAGenerate} disabled={generating || !online}
-            title="A台调用火山引擎，会产生AI费用">🎬 A台·母视频（⚠️会产生费用）</button>
-          <button className="btn btn-b" onClick={handleBGenerate} disabled={generating || !selectedVideo || !online}
-            title={!selectedVideo ? "请先选择母视频或上传视频" : "B台本地ffmpeg裂变，0 AI成本"}>🔁 B台·裂变（0元/条）</button>
-        </div>
-        {costPerVideo && prompt.trim() && (
-          <div className={`cost-estimate ${overBudget ? "cost-over-budget" : ""}`}>
-            <span className="cost-estimate-label">预估费用：</span>
-            {batchCount > 1 ? <span>批量{batchCount}条 ≈ <strong>¥{estimateBatch!.toFixed(2)}</strong></span>
-              : <span>A台单条 ≈ <strong>¥{estimateA!.toFixed(2)}</strong></span>}
-            <span className="cost-estimate-sep">|</span>
-            <span>B台裂变 = <strong>0元/条</strong>（本地ffmpeg）</span>
-            <span className="cost-estimate-sep">|</span>
-            <span className="cost-estimate-remaining">剩余 ¥{cost?.remaining?.toFixed(2) ?? "--"}</span>
-            {overBudget && <span className="cost-over-warn">⚠️ 超出剩余额度</span>}
-          </div>
-        )}
-      </section>
-
-      {/* 3. 上传素材 */}
-      <section className="wb-upload">
-        <h2>上传素材</h2>
-        <div className="upload-tabs">
-          <button className={uploadTab === "image" ? "tab active" : "tab"} onClick={() => setUploadTab("image")}>图片</button>
-          <button className={uploadTab === "text" ? "tab active" : "tab"} onClick={() => setUploadTab("text")}>文字/脚本</button>
-          <button className={uploadTab === "video" ? "tab active" : "tab"} onClick={() => setUploadTab("video")}>视频</button>
-        </div>
-        <div className="upload-area">
-          {uploadTab === "text" ? (
-            <div className="upload-text">
-              <textarea className="wb-textarea" placeholder="输入脚本/分镜文案..." value={textContent}
-                onChange={(e) => setTextContent(e.target.value)} rows={4} />
-              <button className="btn btn-sm" onClick={handleTextUpload} disabled={uploading}>
-                {uploading ? `上传中 ${uploadProgress}%` : "上传文本"}
-              </button>
-            </div>
-          ) : (
-            <div className="upload-file-area" onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleUpload(f); }}>
-              <input type="file" id="fileInput" className="upload-file-input"
-                accept={uploadTab === "image" ? ".jpg,.png,.webp" : ".mp4,.mov,.avi"}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f); }} />
-              <label htmlFor="fileInput" className="upload-drop-zone">
-                <p>{uploadTab === "image" ? "点击或拖拽上传图片（jpg/png/webp，≤10MB）" : "点击或拖拽上传视频（mp4/mov/avi，≤500MB）"}</p>
-              </label>
-              {uploading && (
-                <div className="upload-progress">
-                  <div className="progress-bar"><div className="progress-fill" style={{ width: `${uploadProgress}%` }} /></div>
-                  <span>{uploadProgress}%</span>
-                </div>
-              )}
-            </div>
-          )}
-          {uploadResult && (
-            <div className="upload-result">
-              <span>上传成功: {uploadResult.file_name || `#${uploadResult.file_id}`}</span>
-              {uploadResult.file_url && <a href={uploadResult.file_url} target="_blank" rel="noreferrer">查看</a>}
-            </div>
+      {/* ===== 存储状态条 ===== */}
+      {storage && (
+        <div className="storage-bar">
+          <strong>存储:</strong>
+          <span>母视频 {storage.mother_count}</span>
+          <span>裂变 {storage.viral_count}</span>
+          <span>上传 {storage.upload_count}</span>
+          <span>占用 {storage.estimated_used_mb?.toFixed(1)} MB</span>
+          {isSuperAdmin() && storage.disk_used_percent != null && (
+            <span>磁盘 {storage.disk_used_percent.toFixed(1)}%</span>
           )}
         </div>
-      </section>
-
-      {/* 4. 任务状态 */}
-      <section className="wb-tasks">
-        <h2>任务状态</h2>
-        {activeTask && (
-          <div className="active-task">
-            <div className="task-header">
-              <span className="task-id">{activeTask.task_id.slice(0, 8)}</span>
-              <span className="task-type-badge">{activeTask.type === "a" ? "A台·母视频" : "B台·裂变"}</span>
-              {statusLabel(activeTask.status)}
-            </div>
-            {activeTask.status === "running" && (
-              <div className="progress-section">
-                <div className="progress-bar"><div className="progress-fill" style={{ width: `${progressPct}%` }} /></div>
-                <span className="progress-text">{progressPct}%</span>
-              </div>
-            )}
-            {activeTask.status === "pending" && <p className="task-hint">任务排队中...</p>}
-            {activeTask.error && (
-              <div className="task-error">
-                <span>{activeTask.error}</span>
-                <button className="btn btn-sm" onClick={() => handleRetry(activeTask.task_id)}>重试</button>
-              </div>
-            )}
-          </div>
-        )}
-        {resultVideos.length > 0 && (
-          <div className="result-videos">
-            <div className="result-header">
-              <h3>生成结果（{resultVideos.length} 条）</h3>
-              {resultVideos.some((v) => v.download_url) && (
-                <button className="btn btn-download-all" onClick={() => handleBatchDownload(resultVideos)}>
-                  📥 全部下载（{resultVideos.filter((v) => v.download_url).length}）
-                </button>
-              )}
-            </div>
-            <div className="video-grid">
-              {resultVideos.map((v, i) => (
-                <div key={v.video_id || i} className="video-card">
-                  <div className="video-preview">
-                    {v.download_url ? <video src={v.download_url} controls preload="metadata" />
-                      : <div className="video-placeholder">视频加载中</div>}
-                  </div>
-                  <div className="video-info">
-                    <span className="video-type-badge">{v.type === "mother" ? "母视频" : "裂变"}</span>
-                    {v.strategy && <span className="video-strategy">{v.strategy}</span>}
-                    <span className="video-id">#{v.video_id || `tmp-${i}`}</span>
-                    <div className="video-actions">
-                      {v.download_url && (
-                        <button className={dlBtnCls(v.video_id)} onClick={() => handleSingleDownload(v)}
-                          disabled={dlStates[v.video_id] === "downloading"}>{dlBtnText(v.video_id)}</button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {tasks.length > 0 && (
-          <div className="task-list">
-            <h3>近期任务</h3>
-            <table className="task-table">
-              <thead><tr><th>编号</th><th>类型</th><th>状态</th><th>进度</th><th>操作</th></tr></thead>
-              <tbody>
-                {tasks.slice(0, 10).map((t) => (
-                  <tr key={t.task_id} className={activeTask?.task_id === t.task_id ? "active-row" : ""}
-                    onClick={() => setActiveTask(t)}>
-                    <td>{t.task_id.slice(0, 8)}</td>
-                    <td>{t.type === "a" ? "A台" : "B台"}</td>
-                    <td>{statusLabel(t.status)}</td>
-                    <td>{Math.round((t.progress || 0) * 100)}%</td>
-                    <td>{t.status === "failed" && <button className="btn btn-sm"
-                      onClick={(e) => { e.stopPropagation(); handleRetry(t.task_id); }}>重试</button>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* 5. 视频库 + 勾选 + 导出 */}
-      <section className="wb-videos">
-        <div className="video-section-header">
-          <h2>视频库</h2>
-          <div className="video-section-actions">
-            <div className="video-tabs">
-              <button className={videoTab === "mother" ? "tab active" : "tab"} onClick={() => switchVideoTab("mother")}>母视频</button>
-              <button className={videoTab === "viral" ? "tab active" : "tab"} onClick={() => switchVideoTab("viral")}>裂变视频</button>
-            </div>
-            <button className="btn btn-export" onClick={handleExportCSV} disabled={exporting || !videos.length}>
-              {exporting ? "导出中..." : "📄 导出CSV"}
-            </button>
-            <button className="btn btn-export-mp4" onClick={handleExportMp4} disabled={exporting || selectedIds.size === 0}>
-              📥 导出视频（{selectedIds.size}）
-            </button>
-          </div>
-        </div>
-        {/* B台策略 */}
-        {selectedVideo && strats.length > 0 && (
-          <div className="strategy-bar">
-            <span>裂变策略：</span>
-            {strats.map((s) => (
-              <button key={s.key} className={selectedStrategy === s.key ? "strat-btn active" : "strat-btn"}
-                onClick={() => setSelectedStrategy(s.key)} title={s.goal}>{s.label}</button>
-            ))}
-            <span className="bcount-control">
-              数量：<input type="number" min={1} max={50} value={bCount}
-                onChange={(e) => setBCount(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
-                className="bcount-input" />
-              条
-            </span>
-          </div>
-        )}
-        {selectedVideo && (
-          <p className="selected-hint">
-            已选：{selectedVideo.title || `#${selectedVideo.video_id}`}
-            <button className="btn-text" onClick={() => setSelectedVideo(null)}>取消</button>
-          </p>
-        )}
-        {videos.length === 0 ? (
-          <div className="empty-state">暂无{videoTab === "mother" ? "母视频" : "裂变视频"}记录</div>
-        ) : (
-          <>
-            <div className="select-bar">
-              <button className="btn btn-sm" onClick={toggleAll}>
-                {selectedIds.size === videos.length ? "取消全选" : "全选"}
-              </button>
-              <span>已选 {selectedIds.size} 条</span>
-            </div>
-            <div className="video-grid">
-              {videos.map((v) => (
-                <div key={v.video_id} className={`video-card ${selectedVideo?.video_id === v.video_id ? "selected" : ""} ${selectedIds.has(v.video_id) ? "checked" : ""}`}>
-                  <div className="video-checkbox" onClick={(e) => { e.stopPropagation(); toggleSelect(v.video_id); }}>
-                    <input type="checkbox" checked={selectedIds.has(v.video_id)} readOnly />
-                  </div>
-                  <div className="video-preview" onClick={() => setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v)}>
-                    {v.download_url ? <video src={v.download_url} controls preload="metadata" />
-                      : <div className="video-placeholder">{v.title || "视频"}</div>}
-                  </div>
-                  <div className="video-info" onClick={() => setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v)}>
-                    <span className="video-title">{v.title || `视频 #${v.video_id}`}</span>
-                    <div className="video-actions">
-                      {videoTab === "mother" && (
-                        <button className={`btn btn-sm ${selectedVideo?.video_id === v.video_id ? "btn-selected" : "btn-b-split"}`}
-                          onClick={(e) => { e.stopPropagation(); setSelectedVideo(selectedVideo?.video_id === v.video_id ? null : v); }}
-                          title="选择此视频作为B台裂变源">
-                          {selectedVideo?.video_id === v.video_id ? "✓ 已选" : "🔁 用此裂变"}
-                        </button>
-                      )}
-                      {v.download_url && (
-                        <button className={dlBtnCls(v.video_id)} onClick={(e) => { e.stopPropagation(); handleSingleDownload(v); }}
-                          disabled={dlStates[v.video_id] === "downloading"}>{dlBtnText(v.video_id)}</button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {videoTotal > 20 && (
-              <div className="pagination">
-                <button disabled={videoPage <= 1} onClick={() => loadVideoPage(videoPage - 1)}>上一页</button>
-                <span>{videoPage} / {Math.ceil(videoTotal / 20)}</span>
-                <button disabled={videoPage >= Math.ceil(videoTotal / 20)} onClick={() => loadVideoPage(videoPage + 1)}>下一页</button>
-              </div>
-            )}
-          </>
-        )}
-      </section>
-
-      {/* 6. 产能 */}
-      {metrics && (
-        <section className="wb-metrics">
-          <h2>产能概览</h2>
-          <div className="metrics-grid">
-            <div className="metric-card"><span className="metric-value">{metrics.total_videos ?? 0}</span><span className="metric-label">总视频数</span></div>
-            <div className="metric-card"><span className="metric-value">¥{metrics.total_cost?.toFixed(2) ?? "0"}</span><span className="metric-label">总成本</span></div>
-            <div className="metric-card"><span className="metric-value">{metrics.videos_per_cost_unit?.toFixed(1) ?? "0"}</span><span className="metric-label">每元产出</span></div>
-            <div className="metric-card"><span className="metric-value">{metrics.remix_multiplier?.toFixed(1) ?? "0"}x</span><span className="metric-label">裂变倍率</span></div>
-          </div>
-        </section>
       )}
+
+      {/* ===== 区块一：操作对话框 ===== */}
+      <section className="wf-dialog">
+        <h2>我能为你做什么？</h2>
+        <textarea
+          className="wf-prompt"
+          placeholder="请输入视频需求，或上传素材开始创作…"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={3}
+        />
+
+        {/* 上传区 */}
+        <div className="upload-zone">
+          <label className="upload-btn">
+            🖼️ 图片
+            <input ref={imageInputRef} type="file" accept=".jpg,.jpeg,.png,.webp" multiple
+              onChange={(e) => { handleFilesSelected(e.target.files, "image"); e.target.value = ""; }} />
+          </label>
+          <label className="upload-btn">
+            📁 文件
+            <input type="file" accept=".doc,.docx,.zip" multiple
+              onChange={(e) => { handleFilesSelected(e.target.files, "file"); e.target.value = ""; }} />
+          </label>
+          <label className="upload-btn">
+            🎬 视频
+            <input ref={videoInputRef} type="file" accept=".mp4,.mov,.avi" multiple
+              onChange={(e) => { handleFilesSelected(e.target.files, "video"); e.target.value = ""; }} />
+          </label>
+          <button className="upload-btn" onClick={() => {
+            const txt = window.prompt("输入脚本/分镜/口播要求:");
+            if (txt) setTextExtra(prev => prev ? prev + "\n" + txt : txt);
+          }}>📝 文本</button>
+        </div>
+
+        {/* 素材汇总条 */}
+        {(hasUploads || hasText) && (
+          <div className="upload-summary">
+            {imageFiles.length > 0 && <span className="upload-summary-item">🖼️ 图片 x{imageFiles.length}</span>}
+            {docFiles.length > 0 && <><span className="upload-summary-sep">/</span><span className="upload-summary-item">📁 文件 x{docFiles.length}</span></>}
+            {videoFiles.length > 0 && <><span className="upload-summary-sep">/</span><span className="upload-summary-item">🎬 视频 x{videoFiles.length}</span></>}
+            {hasText && <><span className="upload-summary-sep">/</span><span className="upload-summary-item">📝 文本已输入</span></>}
+            <span className="upload-summary-link" onClick={() => setLocalFiles([])}>清除全部</span>
+          </div>
+        )}
+
+        {/* 上传缩略图 */}
+        {localFiles.length > 0 && (
+          <div className="upload-thumbs">
+            {localFiles.map(f => (
+              <div key={f.id} className="upload-thumb">
+                {f.type === "image" ? (
+                  <img src={URL.createObjectURL(f.file)} alt={f.file.name} />
+                ) : f.type === "video" ? (
+                  <video src={URL.createObjectURL(f.file)} muted />
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 11, color: "#64748b", padding: 4, textAlign: "center" }}>
+                    {f.file.name}
+                  </div>
+                )}
+                <span className="thumb-name">{f.file.name}</span>
+                <button className="thumb-remove" onClick={(e) => { e.stopPropagation(); removeLocalFile(f.id); }}>✕</button>
+                {f.status === "failed" && <div className="thumb-fail">{f.error || "失败"}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 上传进度 */}
+        {uploading && (
+          <div className="upload-progress-bar">
+            <div className="upload-progress-fill" style={{ width: `${uploadProgress}%` }} />
+          </div>
+        )}
+
+        {/* 操作按钮 */}
+        <div className="action-bar">
+          <button className="btn btn-a" onClick={handleAGenerate} disabled={uploading || !online}
+            title="A台母视频生成，会产生费用，请谨慎使用">
+            🎬 A台·母视频（⚠️会产生费用）
+          </button>
+          <button className="btn btn-b" onClick={handleOpenBatchConfig}
+            disabled={uploading || !online || motherVideos.length === 0 && motherSelected.size === 0}
+            title="B台本地ffmpeg裂变，0 AI成本。请先上传3~5个视频，或选择已有母视频">
+            🔁 B台·裂变（0 元/条）
+          </button>
+          {hasUploads && (
+            <button className="btn btn-primary" onClick={uploadAllFiles} disabled={uploading || !online}>
+              {uploading ? `上传中 ${uploadProgress}%` : "📤 上传素材"}
+            </button>
+          )}
+        </div>
+
+        {/* 文本额外输入 */}
+        {textExtra && (
+          <div style={{ marginTop: 12, padding: "8px 12px", background: "#f0f9ff", borderRadius: 8, fontSize: 13, color: "#0369a1" }}>
+            📝 附加文本: {textExtra.slice(0, 80)}{textExtra.length > 80 ? "…" : ""}
+            <button onClick={() => setTextExtra("")} style={{ marginLeft: 8, color: "#ef4444", background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>清除</button>
+          </div>
+        )}
+      </section>
+
+      {/* ===== 批量裂变配置面板 ===== */}
+      {showBatchConfig && (
+        <div className="batch-config-panel">
+          <h4>🔁 B台裂变配置</h4>
+          <div className="batch-config-row">
+            <label>已选源视频</label>
+            <span style={{ fontWeight: 600 }}>{sourceCount} 个</span>
+            <button className="btn btn-sm" onClick={() => { setMotherSelected(new Set()); setShowBatchConfig(false); }}>重选</button>
+          </div>
+          <div className="batch-config-row">
+            <label>每个源裂变数</label>
+            <input type="number" min={1} max={10} value={batchCount}
+              onChange={(e) => setBatchCount(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))} />
+          </div>
+          <div className="batch-config-row">
+            <label>裂变策略</label>
+            <select value={batchStrategy} onChange={(e) => setBatchStrategy(e.target.value)}>
+              {strats.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+            </select>
+          </div>
+          <div className="batch-config-row">
+            <label>补充 Prompt</label>
+            <input type="text" placeholder="可选：叠加文案要求" value={batchPrompt}
+              onChange={(e) => setBatchPrompt(e.target.value)} style={{ width: 240 }} />
+          </div>
+          <div className="batch-estimate">
+            预计产出: <strong>{sourceCount}</strong> 个源 × <strong>{batchCount}</strong> 条 = <strong>{batchTotal}</strong> 条
+            {batchTotal > 50 && <span style={{ color: "#dc2626", marginLeft: 8 }}>⚠️ 超过上限 50</span>}
+          </div>
+
+          {/* 批量进度 */}
+          {batchStatus && (
+            <div className="batch-progress">
+              <div className="batch-progress-header">
+                <span>{batchStatus.status === "running" ? "裂变中..." : batchStatus.status === "done" ? "裂变完成" : "裂变失败"}</span>
+                <span>{batchStatus.completed} / {batchStatus.total_outputs}</span>
+              </div>
+              <div className="progress-bar">
+                <div className="progress-fill" style={{
+                  width: `${batchStatus.total_outputs > 0 ? (batchStatus.completed / batchStatus.total_outputs * 100) : 0}%`
+                }} />
+              </div>
+            </div>
+          )}
+
+          <div className="batch-submit-row">
+            <button className="btn btn-b" onClick={handleBatchSubmit}
+              disabled={batchRunning || batchTotal > 50 || !online}>
+              {batchRunning ? "裂变中..." : `开始裂变 (${batchTotal} 条)`}
+            </button>
+            <button className="btn" onClick={() => setShowBatchConfig(false)}>取消</button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 区块二：母视频 / 源视频陈列面 ===== */}
+      <section className="video-gallery">
+        <div className="gallery-header">
+          <h3>母视频 / 源视频<span className="gallery-count">({motherTotal})</span></h3>
+          <div className="gallery-toolbar">
+            <button className="btn" onClick={toggleAllMother}>
+              {motherSelected.size === motherVideos.length ? "取消全选" : "全选"}
+            </button>
+            {motherSelected.size > 0 && (
+              <>
+                <span style={{ fontSize: 12, color: "#64748b" }}>已选 {motherSelected.size}</span>
+                <button className="btn" onClick={() => handleBatchDownload(motherVideos.filter(v => motherSelected.has(v.video_id)))}>下载选中</button>
+                <button className="btn btn-b" onClick={handleOpenBatchConfig}>🔁 发送到B台裂变</button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {motherVideos.length === 0 ? (
+          <div className="empty-state">暂无母视频/源视频。请上传素材或使用A台生成。</div>
+        ) : (
+          <div className="video-grid">
+            {motherVideos.map(v => (
+              <div key={v.video_id} className={`video-card ${motherSelected.has(v.video_id) ? "selected" : ""}`}
+                onClick={() => toggleMother(v.video_id)}>
+                <label className="video-checkbox" onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={motherSelected.has(v.video_id)}
+                    onChange={() => toggleMother(v.video_id)} />
+                </label>
+                <div className="video-preview" onClick={(e) => { e.stopPropagation(); handlePlay(v); }}>
+                  {v.cover_url ? <img className="video-cover" src={v.cover_url} alt="" /> :
+                    v.download_url ? <video src={v.download_url} muted /> :
+                      <span className="video-placeholder">暂无预览</span>}
+                  <span className={`video-source-badge ${v.source === "upload" ? "source-upload" : "source-a"}`}>
+                    {v.source === "upload" ? "上传" : "A台生成"}
+                  </span>
+                </div>
+                <div className="video-info">
+                  <div className="video-title">{v.title || `视频 #${v.video_id}`}</div>
+                  <div className="video-meta">
+                    <span className="video-id">#{v.video_id}</span>
+                    {v.duration != null && <span>{fmtDuration(v.duration)}</span>}
+                    {v.file_size != null && <span>{fmtSize(v.file_size)}</span>}
+                    {v.created_at && <span>{new Date(v.created_at).toLocaleDateString("zh-CN")}</span>}
+                  </div>
+                </div>
+                <div className="video-actions" onClick={(e) => e.stopPropagation()}>
+                  <button className="btn btn-sm" onClick={() => handlePlay(v)}>播放</button>
+                  <button className="btn btn-sm" onClick={() => handleDownload(v)}>{dlBtnText(v.video_id)}</button>
+                  <button className="btn btn-sm btn-error" onClick={() => handleDelete(v)}>删除</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {motherTotal > PAGE_SIZE && (
+          <div className="pagination">
+            <button disabled={motherPage <= 1} onClick={() => setMotherPage(p => p - 1)}>上一页</button>
+            <span>第 {motherPage} 页 / 共 {Math.ceil(motherTotal / PAGE_SIZE)} 页</span>
+            <button disabled={motherPage * PAGE_SIZE >= motherTotal} onClick={() => setMotherPage(p => p + 1)}>下一页</button>
+          </div>
+        )}
+      </section>
+
+      {/* ===== 区块三：裂变视频陈列面 ===== */}
+      <section className="video-gallery">
+        <div className="gallery-header">
+          <h3>裂变视频<span className="gallery-count">({viralTotal})</span></h3>
+          <div className="gallery-toolbar">
+            <button className="btn" onClick={toggleAllViral}>
+              {viralSelected.size === viralVideos.length ? "取消全选" : "全选"}
+            </button>
+            {viralSelected.size > 0 && (
+              <>
+                <span style={{ fontSize: 12, color: "#64748b" }}>已选 {viralSelected.size}</span>
+                <button className="btn" onClick={() => handleBatchDownload(viralVideos.filter(v => viralSelected.has(v.video_id)))}>下载选中</button>
+                <button className="btn btn-error" onClick={async () => {
+                  const ids = Array.from(viralSelected);
+                  if (!confirm(`确认删除 ${ids.length} 个视频？`)) return;
+                  for (const id of ids) await deleteVideo(id);
+                  showToast(`已删除 ${ids.length} 个视频`);
+                  loadViral(viralPage);
+                  loadDashboard();
+                }}>删除选中</button>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="viral-notice">
+          ⏰ 裂变视频服务器临时保留 5 天，请及时下载到本地。
+        </div>
+
+        {viralVideos.length === 0 ? (
+          <div className="empty-state">暂无裂变视频。请在上方选择母视频并点击"发送到B台裂变"。</div>
+        ) : (
+          <div className="video-grid">
+            {viralVideos.map(v => (
+              <div key={v.video_id} className={`video-card ${viralSelected.has(v.video_id) ? "selected" : ""}`}
+                onClick={() => toggleViral(v.video_id)}>
+                <label className="video-checkbox" onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={viralSelected.has(v.video_id)}
+                    onChange={() => toggleViral(v.video_id)} />
+                </label>
+                <div className="video-preview" onClick={(e) => { e.stopPropagation(); handlePlay(v); }}>
+                  {v.cover_url ? <img className="video-cover" src={v.cover_url} alt="" /> :
+                    v.download_url ? <video src={v.download_url} muted /> :
+                      <span className="video-placeholder">暂无预览</span>}
+                  <span className="video-source-badge source-b">B台裂变</span>
+                </div>
+                <div className="video-info">
+                  <div className="video-title">{v.title || `裂变 #${v.video_id}`}</div>
+                  <div className="video-meta">
+                    <span className="video-id">#{v.video_id}</span>
+                    {v.source_video_id && <span>源: #{v.source_video_id}</span>}
+                    {v.duration != null && <span>{fmtDuration(v.duration)}</span>}
+                    {v.file_size != null && <span>{fmtSize(v.file_size)}</span>}
+                    {v.days_remaining != null && v.days_remaining > 0 ? (
+                      <span className="days-tag">剩 {v.days_remaining} 天</span>
+                    ) : v.days_remaining === 0 ? (
+                      <span className="expired-tag">已过期</span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="video-actions" onClick={(e) => e.stopPropagation()}>
+                  <button className="btn btn-sm" onClick={() => handlePlay(v)}>播放</button>
+                  <button className="btn btn-sm" onClick={() => handleDownload(v)}
+                    title="浏览器将保存到你的电脑下载目录">{dlBtnText(v.video_id)}</button>
+                  <button className="btn btn-sm btn-error" onClick={() => handleDelete(v)}>删除</button>
+                  <div className="feedback-menu">
+                    <button className="btn btn-sm" onClick={() => setFeedbackOpen(feedbackOpen === v.video_id ? null : v.video_id)}>更多 ▾</button>
+                    {feedbackOpen === v.video_id && (
+                      <div className="feedback-dropdown">
+                        <button onClick={() => handleFeedback(v.video_id, "favorite")}>⭐ 收藏</button>
+                        <button onClick={() => handleFeedback(v.video_id, "useful")}>👍 好用</button>
+                        <button onClick={() => handleFeedback(v.video_id, "useless")}>👎 不好用</button>
+                        <button onClick={() => {
+                          const note = window.prompt("输入备注:");
+                          if (note) handleFeedback(v.video_id, "note");
+                        }}>📝 备注</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {viralTotal > PAGE_SIZE && (
+          <div className="pagination">
+            <button disabled={viralPage <= 1} onClick={() => setViralPage(p => p - 1)}>上一页</button>
+            <span>第 {viralPage} 页 / 共 {Math.ceil(viralTotal / PAGE_SIZE)} 页</span>
+            <button disabled={viralPage * PAGE_SIZE >= viralTotal} onClick={() => setViralPage(p => p + 1)}>下一页</button>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

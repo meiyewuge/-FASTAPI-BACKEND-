@@ -49,7 +49,7 @@ export interface Resp<T = unknown> {
 
 export interface VideoItem {
   video_id: number;
-  type: "mother" | "viral";
+  type: "mother" | "viral" | "source";
   title: string;
   source_video_id: number | null;
   download_url: string;
@@ -57,6 +57,13 @@ export interface VideoItem {
   cover_url?: string;
   strategy?: string;
   store_id?: number;
+  duration?: number;
+  file_size?: number;
+  source?: string;
+  created_at?: string;
+  storage_expires_at?: string;
+  days_remaining?: number;
+  status?: string;
 }
 
 export interface TaskData {
@@ -517,3 +524,191 @@ export const adminRevokeUser = (phone: string) =>
 /** 查看管理员列表 */
 export const adminListUsers = () =>
   adminGet<{ items: AdminUserItem[]; total: number }>("/admin/users/list");
+
+// ===========================================================================
+// V4 页面重构 — 新增端点（Claude P0 主干 + 回流层）
+// ===========================================================================
+
+// ---- 底层 DELETE 请求 ----
+async function del<T = unknown>(path: string): Promise<Resp<T>> {
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    check401(res);
+    if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as T };
+    return res.json();
+  } catch {
+    return { code: -1, message: !navigator.onLine ? "网络连接已断开" : "网络异常", data: null as T };
+  }
+}
+
+// ---- 批量上传 ----
+export interface BatchUploadItem {
+  file_id: number;
+  file_url: string;
+  file_type: string;
+  file_name: string;
+  file_size: number;
+  status: "ok" | "failed";
+  error?: string;
+}
+
+/**
+ * 批量上传文件 — POST /uploads/batch (FormData)
+ * type: image | video | file
+ * 失败文件不影响其他文件展示
+ */
+export async function batchUpload(
+  files: File[],
+  type: "image" | "video" | "file",
+  onProgress?: (pct: number) => void,
+): Promise<Resp<{ items: BatchUploadItem[]; total: number; ok_count: number; failed_count: number }>> {
+  const form = new FormData();
+  form.append("type", type);
+  files.forEach((f) => form.append("files", f));
+
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/uploads/batch`);
+    if (TOKEN) xhr.setRequestHeader("Authorization", `Bearer ${TOKEN}`);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status === 401) { clearAuth(); _on401?.(); }
+      try {
+        resolve(JSON.parse(xhr.responseText));
+      } catch {
+        resolve({ code: -1, message: `HTTP ${xhr.status}`, data: null as unknown as { items: BatchUploadItem[]; total: number; ok_count: number; failed_count: number } });
+      }
+    };
+    xhr.onerror = () => {
+      resolve({ code: -1, message: "网络异常", data: null as unknown as { items: BatchUploadItem[]; total: number; ok_count: number; failed_count: number } });
+    };
+    xhr.send(form);
+  });
+}
+
+// ---- B台批量裂变 ----
+export interface BatchGenerateResult {
+  batch_id: string;
+  status: "pending" | "running" | "done" | "failed";
+  source_count: number;
+  total_outputs: number;
+}
+
+export interface BatchStatusItem {
+  video_id: number;
+  source_video_id: number;
+  status: "pending" | "running" | "done" | "failed";
+  download_url?: string;
+}
+
+export interface BatchStatus {
+  batch_id: string;
+  status: "pending" | "running" | "done" | "failed";
+  completed: number;
+  total_outputs: number;
+  failed: number;
+  items: BatchStatusItem[];
+}
+
+/** B台批量裂变 — POST /b/batch-generate */
+export const batchGenerate = (
+  sourceVideoIds: number[], count: number, strategy = "mix", prompt?: string,
+) =>
+  post<BatchGenerateResult>("/b/batch-generate", {
+    source_video_ids: sourceVideoIds,
+    count,
+    strategy,
+    prompt,
+  });
+
+/** B台批量状态轮询 — GET /b/batch/{batchId} */
+export const getBatchStatus = (batchId: string) =>
+  get<BatchStatus>(`/b/batch/${batchId}`);
+
+/** B台批量轮询（异步，不阻塞页面） */
+export async function pollBatchStatus(
+  batchId: string,
+  onTick?: (d: BatchStatus) => void,
+  intervalMs = 3000,
+): Promise<Resp<BatchStatus>> {
+  for (;;) {
+    const r = await getBatchStatus(batchId);
+    const d = r.data;
+    if (d) onTick?.(d);
+    if (d?.status === "done" || d?.status === "failed" || r.code !== 0) return r;
+    await new Promise((res) => setTimeout(res, intervalMs));
+  }
+}
+
+// ---- 删除视频 ----
+/** DELETE /videos/{videoId} */
+export const deleteVideo = (videoId: number) =>
+  del<{ video_id: number; deleted: boolean }>(`/videos/${videoId}`);
+
+// ---- 存储状态 ----
+export interface StorageStatus {
+  scope: "tenant" | "global";
+  mother_count: number;
+  viral_count: number;
+  upload_count: number;
+  estimated_used_mb: number;
+  disk_used_percent?: number;
+  tenant_summary?: { tenant_id: string; count: number }[];
+}
+
+/** GET /storage/status */
+export const storageStatus = () => get<StorageStatus>("/storage/status");
+
+// ---- 事件埋点（失败不阻断） ----
+/**
+ * POST /events/track — 埋点接口，失败仅 console.warn
+ */
+export async function trackEvent(
+  event: string,
+  payload: Record<string, unknown> = {},
+): Promise<void> {
+  try {
+    await post("/events/track", { event, ...payload });
+  } catch (e) {
+    console.warn(`[trackEvent] ${event} 埋点失败:`, e);
+  }
+}
+
+// ---- 视频反馈 ----
+/** POST /videos/{videoId}/feedback */
+export const videoFeedback = (
+  videoId: number, action: "favorite" | "useful" | "useless" | "note", note?: string,
+) =>
+  post<{ video_id: number; action: string }>(`/videos/${videoId}/feedback`, { action, note });
+
+// ---- 管理员：候选池 ----
+export interface KnowledgeCandidate {
+  id: number;
+  title: string;
+  source: string;
+  type: string;
+  tags: string[];
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+  video_id?: number;
+}
+
+/** GET /admin/knowledge-candidates */
+export const adminListCandidates = () =>
+  adminGet<{ items: KnowledgeCandidate[]; total: number }>("/admin/knowledge-candidates");
+
+/** POST /admin/knowledge-candidates/{id}/approve */
+export const adminApproveCandidate = (id: number) =>
+  adminPost<{ id: number; status: string }>(`/admin/knowledge-candidates/${id}/approve`, {});
+
+/** POST /admin/knowledge-candidates/{id}/reject */
+export const adminRejectCandidate = (id: number) =>
+  adminPost<{ id: number; status: string }>(`/admin/knowledge-candidates/${id}/reject`, {});

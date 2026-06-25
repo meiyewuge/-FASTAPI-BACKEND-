@@ -9,9 +9,10 @@ import { useNavigate } from "react-router-dom";
 import {
   adminInviteGenerate, adminInviteList, adminInviteRevoke,
   adminGrantUser, adminRevokeUser, adminListUsers,
+  adminListCandidates, adminApproveCandidate, adminRejectCandidate,
   getToken, getUserProfile, fetchMe,
   isAdmin, isSuperAdmin, getCurrentUserRole,
-  type InviteItem, type AdminUserItem, type UserRole,
+  type InviteItem, type AdminUserItem, type UserRole, type KnowledgeCandidate,
 } from "../api/client";
 
 export default function AdminPanel() {
@@ -35,7 +36,11 @@ export default function AdminPanel() {
   const [grantPhone, setGrantPhone] = useState("");
   const [grantRole, setGrantRole] = useState<UserRole>("invite_admin");
   const [granting, setGranting] = useState(false);
-  const [activeTab, setActiveTab] = useState<"invite" | "users">("invite");
+  const [activeTab, setActiveTab] = useState<"invite" | "users" | "candidates">("invite");
+
+  // 候选池（super_admin only）
+  const [candidates, setCandidates] = useState<KnowledgeCandidate[]>([]);
+  const [candidatesLoading, setCandidatesLoading] = useState(false);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3000); };
 
@@ -67,12 +72,22 @@ export default function AdminPanel() {
     if (r.code === 0 && r.data) setAdminUsers(r.data.items || []);
   }, []);
 
+  // 加载候选池（super_admin）
+  const loadCandidates = useCallback(async () => {
+    if (!isSuperAdmin()) return;
+    setCandidatesLoading(true);
+    const r = await adminListCandidates();
+    if (r.code === 0 && r.data) setCandidates(r.data.items || []);
+    else showToast(r.message || "加载候选池失败");
+    setCandidatesLoading(false);
+  }, []);
+
   useEffect(() => {
     if (profileLoaded && isAdmin()) {
       loadList();
-      if (isSuperAdmin()) loadAdminUsers();
+      if (isSuperAdmin()) { loadAdminUsers(); loadCandidates(); }
     }
-  }, [profileLoaded, loadList, loadAdminUsers]);
+  }, [profileLoaded, loadList, loadAdminUsers, loadCandidates]);
 
   // 生成邀请码
   const handleGenerate = async () => {
@@ -128,6 +143,19 @@ export default function AdminPanel() {
     else showToast(r.message || "取消失败");
   };
 
+  // 候选池审核
+  const handleApprove = async (id: number) => {
+    const r = await adminApproveCandidate(id);
+    if (r.code === 0) { showToast(`候选 #${id} 已通过`); loadCandidates(); }
+    else showToast(r.message || "审核失败");
+  };
+  const handleReject = async (id: number) => {
+    if (!confirm(`确定拒绝候选 #${id}？`)) return;
+    const r = await adminRejectCandidate(id);
+    if (r.code === 0) { showToast(`候选 #${id} 已拒绝`); loadCandidates(); }
+    else showToast(r.message || "审核失败");
+  };
+
   // 退出
   const handleExit = () => navigate("/workbench", { replace: true });
 
@@ -146,7 +174,7 @@ export default function AdminPanel() {
           <span className="role-badge">{isSuper ? "超级管理员" : "发码管理员"}</span>
         </h1>
         <div className="admin-header-actions">
-          <button className="btn" onClick={() => { loadList(); if (isSuper) loadAdminUsers(); }}>刷新</button>
+          <button className="btn" onClick={() => { loadList(); if (isSuper) { loadAdminUsers(); loadCandidates(); } }}>刷新</button>
           <button className="btn btn-logout" onClick={handleExit}>返回工作台</button>
         </div>
       </header>
@@ -158,6 +186,8 @@ export default function AdminPanel() {
             onClick={() => setActiveTab("invite")}>邀请码管理</button>
           <button className={activeTab === "users" ? "tab active" : "tab"}
             onClick={() => setActiveTab("users")}>用户授权</button>
+          <button className={activeTab === "candidates" ? "tab active" : "tab"}
+            onClick={() => setActiveTab("candidates")}>回流候选池</button>
         </div>
       )}
 
@@ -267,6 +297,50 @@ export default function AdminPanel() {
                       <td>
                         {u.role !== "super_admin" && (
                           <button className="btn btn-sm btn-error" onClick={() => handleRevokeUser(u.phone)}>取消授权</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ======== 回流候选池（仅 super_admin）======== */}
+      {isSuper && activeTab === "candidates" && (
+        <section className="admin-section">
+          <h2>回流候选池</h2>
+          <p style={{ color: "#64748b", fontSize: 13, marginBottom: 12 }}>
+            来自视频反馈的回流知识候选项，审核通过后将加入知识库。
+          </p>
+          {candidatesLoading ? <p>加载中...</p> : candidates.length === 0 ? (
+            <p className="empty-state">暂无候选项</p>
+          ) : (
+            <div className="admin-table-wrap">
+              <table className="task-table admin-table">
+                <thead><tr><th>ID</th><th>标题</th><th>来源</th><th>类型</th><th>标签</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                <tbody>
+                  {candidates.map((c) => (
+                    <tr key={c.id}>
+                      <td>#{c.id}</td>
+                      <td>{c.title}</td>
+                      <td>{c.source}</td>
+                      <td>{c.type}</td>
+                      <td>{c.tags?.join(", ") || "-"}</td>
+                      <td>
+                        <span className={`tag ${c.status === "approved" ? "tag-done" : c.status === "rejected" ? "tag-failed" : "tag-pending"}`}>
+                          {c.status === "approved" ? "已通过" : c.status === "rejected" ? "已拒绝" : "待审核"}
+                        </span>
+                      </td>
+                      <td>{c.created_at ? new Date(c.created_at).toLocaleString("zh-CN") : "-"}</td>
+                      <td>
+                        {c.status === "pending" && (
+                          <>
+                            <button className="btn btn-sm" onClick={() => handleApprove(c.id)} style={{ marginRight: 4 }}>通过</button>
+                            <button className="btn btn-sm btn-error" onClick={() => handleReject(c.id)}>拒绝</button>
+                          </>
                         )}
                       </td>
                     </tr>
