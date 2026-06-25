@@ -3,6 +3,35 @@
 > 范围：**后端 only**（不碰前端 / 不部署 / 不碰生产）。基于 `claude/v4-staging` 继续，独立 commit 可回滚。
 > 目标：从「前端输入 ADMIN_KEY 调接口发码」升级为「吴哥账号登录后凭身份拥有超级管理员权限」。
 
+| 项 | 值 |
+|----|----|
+| **commit** | `553ea13`（`Patch6 admin role and invite permission`） |
+| 分支 | `claude/v4-staging`（已推送 origin） |
+| 状态 | ✅ 已完成并验证（12 项测试全过 + 回归全过） |
+
+---
+
+## 验收结论（对照吴哥 7 点）
+
+| # | 验收项 | 结论 |
+|---|----|----|
+| 1 | `/api/me` 返回 `{phone, tenant_id, role, is_admin, permissions}` | ✅ 已实现（下方有三角色实测样本） |
+| 2 | bootstrap：仅无 super_admin 时、ADMIN_KEY 保护、吴哥手机号初始化、重复必拒 | ✅ 全部满足（重复→4090，缺 key→401） |
+| 3 | 登录 JWT 写入 role（super_admin/invite_admin/user） | ✅ 已实现（按 `admin_users` 判定） |
+| 4 | 发码端点改 JWT 权限（super/invite 放行，user→403） | ✅ 已实现（ADMIN_KEY 仅应急兜底） |
+| 5 | 员工授权（仅 super_admin grant/revoke，invite_admin 不能授权） | ✅ 已实现（invite_admin 授权→403） |
+| 6 | 测试 10 项 | ✅ 全过（实际 12 项，见测试段） |
+| 7 | 输出 `PATCH6_ADMIN_PERMISSION_REPORT.md` | ✅ 本文件 |
+
+### `/api/me` 三角色实测样本（sandbox 真实跑通）
+
+```json
+super_admin  => {"phone":"13800000001","tenant_id":"t_13800000001","role":"super_admin","is_admin":true,"permissions":["invite:generate","invite:list","invite:revoke","admin:grant","admin:revoke"]}
+invite_admin => {"phone":"13800000002","tenant_id":"t_13800000002","role":"invite_admin","is_admin":true,"permissions":["invite:generate","invite:list","invite:revoke"]}
+user         => {"phone":"13800000003","tenant_id":"t_13800000003","role":"user","is_admin":false,"permissions":[]}
+# user 调 POST /api/admin/invite/generate → HTTP 403
+```
+
 ---
 
 ## 1. 角色权限体系
@@ -138,16 +167,34 @@ POST /api/admin/bootstrap  (X-Admin-Key + 吴哥手机号)  → 设初始超管
 
 ---
 
-## 给前端（Qoder）的对接口径
+## 前端 Qoder 如何切换到 JWT role 模式
 
+Qoder 已完成兼容预留（`fetchMe()` / `role` / `ENABLE_ADMIN_KEY_FALLBACK` / `isAdmin()` / `isSuperAdmin()` / `adminHeaders`）。后端 Patch6 与之对齐如下：
+
+| 前端预留 | 后端对应 | 切换动作 |
+|----|----|----|
+| `fetchMe()` | `GET /api/me` → `{phone,tenant_id,role,is_admin,permissions}` | 登录后直接调用，字段即用 |
+| `role` | JWT 内 `role` + `/api/me.role`（三值：`super_admin`/`invite_admin`/`user`） | 直接读取，无需映射 |
+| `isAdmin()` | `/api/me.is_admin`（= role ∈ {super_admin, invite_admin}） | 用 `is_admin` 控制「管理面板」显隐 |
+| `isSuperAdmin()` | `role === "super_admin"`（或 `permissions` 含 `admin:grant`） | 控制「员工授权」能力显隐 |
+| `adminHeaders` | `Authorization: Bearer <JWT>`（**不再带 X-Admin-Key**） | 见下方开关 |
+| `ENABLE_ADMIN_KEY_FALLBACK` | 后端 `require_invite_permission` 同时接受 JWT 角色与 X-Admin-Key | 平滑切换：先 `true` 双轨，验证 JWT 链路 OK 后切 `false` |
+
+**切换步骤（建议）**
+1. 后端部署 + bootstrap 吴哥为 super_admin。
+2. 前端保持 `ENABLE_ADMIN_KEY_FALLBACK=true`：`adminHeaders` 暂可带 JWT；后端 JWT 角色已能放行。
+3. 验证吴哥/员工登录后 `fetchMe()` 返回正确 role、发码端点 JWT 放行、user→403。
+4. 验证通过后把 `ENABLE_ADMIN_KEY_FALLBACK` 切 `false`，`adminHeaders` 只带 `Bearer JWT`，前端彻底不再持有/发送 ADMIN_KEY。
+5. ADMIN_KEY 此后仅由运维保管，用于 bootstrap / 应急。
+
+**入口渲染口径**
 ```
-管理员入口不再是“输入 ADMIN_KEY 发码”；
-而是吴哥正常登录后，前端调用 GET /api/me：
-- role=super_admin → 显示“管理员后台”（发码 + 员工授权）
-- role=invite_admin → 只显示“发码管理”
-- role=user        → 不显示任何管理员入口
-发码/授权请求统一带 Authorization: Bearer <JWT>，不再传 ADMIN_KEY。
+role=super_admin → 显示“管理员后台”（发码 + 员工授权）
+role=invite_admin → 只显示“发码管理”
+role=user        → 不显示任何管理员入口
 ```
+
+> 注意：后端发码/授权端点**每次以 DB 角色为准核验**，前端隐藏入口只是 UX；即使前端绕过，后端对 user 仍返回 403，对被 revoke 的员工旧 JWT 也即时失效。
 
 ---
 
