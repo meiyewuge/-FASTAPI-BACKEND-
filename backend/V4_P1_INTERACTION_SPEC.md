@@ -26,26 +26,32 @@
 |----|----|----|----|----|
 | 默认 | 需求框非空 | 橙色 + 副标「⚠️ 会产生费用」 | ✅ | 弹「A台费用确认弹窗」 |
 | 禁用 | 需求框为空 | 橙色半透明 + tooltip「请先描述需求」 | ❌ | — |
-| 确认中 | 费用弹窗已弹 | — | — | 「确认生成」→ 调 `POST /api/a/generate`；「取消」→ 关闭 |
+| 确认中 | 费用弹窗已弹 | — | — | 「确认生成」→ 调 **`POST /api/compose`**（主工作台 A台默认入口）；「取消」→ 关闭 |
 | 生成中 | 任务 pending/running | 橙色 + 旋转图标 + 文字「正在生成第 N 段/共 M 段」 | ❌ | 轮询 `GET /api/tasks/{id}` |
 | 拼接中 | 多段已生成，concat 阶段 | 文字「正在拼接…」 | ❌ | 继续轮询 |
 | 完成 | task.status=done | 橙色默认 | ✅ | 母视频陈列面新增卡片 + toast「母视频已生成」 |
 | 失败 | task.status=failed | 橙色默认 | ✅ | toast 错误（见异常矩阵） |
 
 > 备注：A台**会扣费**，进入确认弹窗前不发任何请求；确认后才请求。
+> **A台主入口 = `POST /api/compose`**（文字+图片 → 多段15s → 后端自动拼接 → 一个成型母视频 → 进母视频/源视频陈列面）。`POST /api/a/generate` 仅作**底层单段生成/技术备用接口**，不作为主工作台默认入口。生成进度统一轮询 `GET /api/tasks/{task_id}`（compose 任务）。
 
 ### 1.2 「B台 · 裂变」按钮（P1 核心改动：自动选源 + 1:10）
 | 状态 | 条件 | 外观 | 可点击 | 点击后 |
 |----|----|----|----|----|
-| 默认可用 | 本租户「时长≥30s 的源视频」≥3 个 | 绿色 + 副标「0 元/条」 | ✅ | 弹「裂变进行中弹窗」，调 `POST /api/b/batch-generate` |
+| 默认可用 | `current_source_video_ids` 中合格(`duration_seconds≥30`)源视频 ≥3 个 | 绿色 + 副标「0 元/条」 | ✅ | 弹「裂变进行中弹窗」，提交 `POST /api/b/batch-generate {source_video_ids:[...]}` |
 | 禁用·数量不足 | 合格源视频 < 3 | 灰色 + tooltip「至少上传3个时长30秒以上的视频」 | ❌ | （若强行点）弹「裂变门槛弹窗」 |
-| 禁用·时长不足 | 有视频但合格(≥30s)的 < 3 | 灰色 + tooltip「存在时长不足30秒的视频」 | ❌ | 弹「裂变门槛弹窗」 |
+| 禁用·时长不足 | 有视频但合格(`duration_seconds≥30`)的 < 3 | 灰色 + tooltip「存在时长不足30秒的视频」 | ❌ | 弹「裂变门槛弹窗」 |
 | 加载中 | 裂变请求已发出，等待 batch_id | 绿色 + 旋转图标 | ❌ | — |
 | 运行中 | 轮询 batch.status=running | 绿色 + 旋转 | ❌ | 轮询 `GET /api/b/batch/{batch_id}` |
 | 完成 | batch.status=done | 绿色 + 角标「N 条新」 | ✅ | 滚动到裂变陈列面并刷新 |
 | 部分失败 | done 且 failed>0 | 绿色 + 角标 | ✅ | toast「部分裂变失败，已成功 N 条」（不阻断） |
 
-> **P1 规则**：前端**不再要求勾选源视频**。点 B台后端**自动选取**本租户 `type=mother & storage_status=active & 时长≥30s` 的源视频，按 1:10 产出，30/40/50 封顶（见 L4）。
+> **P1 规则（source_pool 优先级，前端不强制勾选）**：前端内部维护本次会话源视频池 `current_source_video_ids`，B台按以下三层优先级提交 `source_video_ids`：
+> 1. **优先**：本次会话刚上传/A台刚产出的视频（`current_source_video_ids`）。
+> 2. 用户在「高级选择」里手动更换素材 → 用用户指定的视频 id。
+> 3. 前端未传任何 `source_video_ids` → **后端才 fallback** 到本租户最近合格历史源视频。
+>
+> **不再让后端默认盲扫全租户历史视频**。合格判定 `duration_seconds >= 30`（硬门槛）；合格源 ≥3 才可裂变；按 1:10 产出，`max_outputs=50` 封顶（见 L4）。
 
 ### 1.3 上传入口（📷图片 / 📎文件 / 🎬视频）
 | 状态 | 条件 | 外观 | 行为 |
@@ -100,15 +106,15 @@
 
 ### 3.1 A台费用确认弹窗
 - 标题：`生成母视频`
-- 正文：`A台使用火山API生成高质量母视频，每条约消耗 ¥1.50。当前余额：¥98.50。确认继续？`
-  - （余额数值来自 `GET /api/subscription/status` 的 `quota_remaining`；单价为后端配置估算，前端展示用）
+- 正文：`A台会调用火山API生成母视频，具体费用以实际扣费为准。确认继续吗？`
+  - （不写固定单价；实际扣费由后端 cost_engine 按秒×分辨率计；如需展示余额可附 `GET /api/subscription/status` 的 `quota_remaining`）
 - 确认按钮：`确认生成`
 - 取消按钮：`取消`
 
 ### 3.2 裂变门槛不足弹窗
 - 标题：`暂无法裂变`
 - 正文：`请至少上传3个时长30秒以上的视频。当前：N个视频，最长XX秒`
-  - （N=母视频/源视频总数；XX=最长时长秒数，由前端按列表 duration 计算）
+  - （N=源视频池数；XX=最长时长秒数，由前端按列表 `duration_seconds` 计算）
 - 按钮：`知道了`
 
 ### 3.3 裂变进行中弹窗
@@ -163,18 +169,19 @@
 
 ### 6.1 上传 → 陈列面
 1. 点 🎬视频 → 选文件 → `POST /api/uploads/batch`。
-2. 成功响应 `uploaded[].video_id` 非空 → 刷新 `GET /api/videos?type=mother&source_type=uploaded` → 卡片出现（标签「本地上传」）。
-3. 解决「上传了不知道去哪用」：上传 video 即时进入母视频/源视频陈列面。
+2. 成功响应 `uploaded[].video_id` 非空 → 刷新 `GET /api/videos?type=mother&source_type=uploaded` → 卡片出现（标签「本地上传」，显示 `duration_seconds`）。
+3. 同时把这些 `video_id` 加入本次会话 `current_source_video_ids`（前端内存维护），供 B台优先使用。
+4. 解决「上传了不知道去哪用」：上传 video 即时进入母视频/源视频陈列面。
 
 ### 6.2 A台一键成片（文字+图片→多段15s→拼接→母视频）
 1. 填需求（可选上传图片做参考）→ 点 A台 → 费用确认弹窗 → 确认。
-2. `POST /api/a/generate`（或一句话 `POST /api/generate`）→ 返回 `task_id`。
+2. **`POST /api/compose`** `{prompt, total_seconds, resolution, title?}`（主入口；文字+图片→多段15s→后端自动拼接）→ 返回 `task_id`。（`/api/a/generate` 仅底层单段备用）
 3. 轮询 `GET /api/tasks/{task_id}`，展示「第 N 段/共 M 段」「正在拼接」。
 4. `status=done` → 刷新母视频陈列面（标签「A台生成」）。
 
-### 6.3 B台批量裂变（自动选源 + 1:10）
-1. 点 B台 → 前端先本地判断合格源视频数（≥3 且 ≥30s），不足弹门槛弹窗。
-2. 满足 → `POST /api/b/batch-generate {prompt, total_limit?}`（**不传 sources，后端自动选**）→ 返回 `batch_id, total`。
+### 6.3 B台批量裂变（source_pool 优先 + 1:10）
+1. 点 B台 → 前端先本地判断 `current_source_video_ids` 中合格(`duration_seconds≥30`)源视频数（≥3），不足弹门槛弹窗。
+2. 满足 → `POST /api/b/batch-generate {prompt, source_video_ids:[...], auto_ratio:10, max_outputs:50, strategy?}`（**优先提交本次会话源池**；为空时后端 fallback）→ 返回 `batch_id, total_outputs, source_count`。
 3. 弹「正在裂变」，轮询 `GET /api/b/batch/{batch_id}`，更新「N/M」。
 4. `done` → 刷新 `GET /api/videos?type=viral&batch_id=...`，裂变陈列面出现 30~50 条（0 元标签）。
 

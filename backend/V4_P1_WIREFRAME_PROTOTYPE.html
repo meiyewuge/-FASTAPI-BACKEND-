@@ -107,14 +107,14 @@
     <div class="matbar">
       <span>已上传：📽️ 视频×<b id="cV">0</b> / 🖼️ 图片×<b id="cI">0</b> / 📎 文件×<b id="cF">0</b></span>
       <span class="op" onclick="clearMat()">清除全部</span>
-      <span class="scope-tag">（上传 video 成功后自动进入下方「母视频/源视频」陈列面）</span>
+      <span class="scope-tag">（上传 video 成功后自动进入「母视频/源视频」陈列面，并加入本次会话 current_source_video_ids；B台优先用它，合格=时长≥30s）</span>
     </div>
     <div class="thumbs" id="thumbs"></div>
 
     <!-- 底部仅两个按钮 -->
     <div class="actions">
-      <button class="btn btn-a" onclick="clickA()">🟠 A台 · 母视频<small>⚠️ 会产生费用（火山API）</small><span class="api">POST /api/a/generate · require_auth</span></button>
-      <button class="btn btn-b" id="btnB" onclick="clickB()">🟢 B台 · 裂变<small>0 元/条（本地 ffmpeg）</small><span class="api">POST /api/b/batch-generate · require_auth</span></button>
+      <button class="btn btn-a" onclick="clickA()">🟠 A台 · 母视频<small>⚠️ 会产生费用（火山API）</small><span class="api">POST /api/compose · require_auth</span></button>
+      <button class="btn btn-b" id="btnB" onclick="clickB()">🟢 B台 · 裂变<small>0 元/条（本地 ffmpeg）</small><span class="api">POST /api/b/batch-generate · source_video_ids</span></button>
     </div>
   </div>
 
@@ -144,12 +144,12 @@
 <div class="mask" id="mA">
   <div class="modal">
     <h3>生成母视频</h3>
-    <p>A台使用火山 API 生成高质量母视频，每条约消耗 <b>¥1.50</b>。当前余额：<b>¥98.50</b>。<br>确认继续？</p>
+    <p>A台会调用火山 API 生成母视频，具体费用以实际扣费为准。确认继续吗？</p>
     <div class="row">
       <button class="m-ghost" onclick="hide('mA')">取消</button>
       <button class="m-primary" onclick="hide('mA');startA()">确认生成</button>
     </div>
-    <div class="api">确认 → POST /api/a/generate（异步，轮询 GET /api/tasks/{id}）· 会扣费</div>
+    <div class="api">确认 → POST /api/compose（文字+图片→多段15s→后端自动拼接，异步，轮询 GET /api/tasks/{id}）· 会扣费</div>
   </div>
 </div>
 
@@ -182,7 +182,7 @@
     <p id="bRunText">已生成 0 / 共 30 条</p>
     <div class="progress"><i></i></div>
     <div class="row"><button class="m-ghost" onclick="hide('mBrun')">后台运行</button></div>
-    <div class="api">POST /api/b/batch-generate → 轮询 GET /api/b/batch/{batch_id}（0 元）</div>
+    <div class="api">POST /api/b/batch-generate {prompt, source_video_ids, auto_ratio:10, max_outputs:50} → 轮询 GET /api/b/batch/{batch_id}（0 元）</div>
   </div>
 </div>
 
@@ -299,8 +299,10 @@ function startA(){
     if(seg>=3){ clearInterval(t); document.getElementById('aRunText').textContent='正在拼接…'; setTimeout(()=>{ hide('mArun'); state.mothers.push({id:++vid,title:'A台母视频_'+vid+'.mp4',dur:45,src:'gen'}); renderAll(); toast('母视频已生成（A台·已扣费）'); },1200);} },900);
 }
 
-// B台 门槛
-function eligibleSources(){ return state.mothers.filter(m=>m.dur>=30); }
+// B台 门槛：current_source_video_ids = 本次会话源视频池（上传/A台产出的母视频）。
+// 合格 = 时长≥30s（硬门槛）。点B台优先提交这些 id；为空时后端才 fallback 最近合格历史源。
+function currentSourcePool(){ return state.mothers; }          // 本次会话源池
+function eligibleSources(){ return currentSourcePool().filter(m=>m.dur>=30); }  // 合格(≥30s)
 function updateBtnB(){
   const ok = eligibleSources().length>=3;
   document.getElementById('btnB').disabled = !ok;
@@ -313,7 +315,9 @@ function clickB(){
     document.getElementById('bGateText').textContent=`请至少上传 3 个时长 30 秒以上的视频。当前：${state.mothers.length} 个视频，最长 ${longest} 秒`;
     show('mBgate'); return;
   }
-  const total = Math.min(elig.length*10, 50);
+  const total = Math.min(elig.length*10, 50);   // 1:10，封顶 50
+  const ids = elig.map(m=>m.id);                 // 提交 source_video_ids（本次会话合格源池）
+  toast('POST /api/b/batch-generate {source_video_ids:['+ids.join(',')+'], auto_ratio:10, max_outputs:50}');
   show('mBrun'); let n=0; document.getElementById('bRunText').textContent=`已生成 0 / 共 ${total} 条`;
   const t=setInterval(()=>{ n+=Math.ceil(total/8); if(n>=total)n=total; document.getElementById('bRunText').textContent=`已生成 ${n} / 共 ${total} 条`;
     state.virals.push({id:++vid,dur:100}); renderAll();

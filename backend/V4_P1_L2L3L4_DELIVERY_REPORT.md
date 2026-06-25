@@ -2,6 +2,8 @@
 
 > 阶段：开发前置设计（**不写业务代码、不改 production、不触发火山、不大文件压测**）。
 > 依据：`CLAUDE_L2L3L4_PROMPT.md`（精细版）+ 仓库 `claude/v4-staging` 真实代码 / DB schema / API / 权限。
+>
+> **📌 修订说明（第二轮）**：本三件套已按 ChatGPT 第一轮审核意见修订，详见 **`V4_P1_L2L3L4_REVIEW_FIX_REPORT.md`**。主要变更：A台主入口统一为 `/api/compose`；B台标准字段 `source_video_ids` + 会话源池三层优先级；30s 硬门槛；命名统一 `duration_seconds`；回填脚本改为强制；90–120s 列 P1-B。本文件下方第 8 节「待拍板点」中第 1/2/4/5 项多已被 ChatGPT 决议固化，最新待拍板见修订报告末尾。
 
 ## 1. 三份文件是否已生成 —— ✅ 全部生成
 
