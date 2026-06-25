@@ -14,12 +14,14 @@ from sqlalchemy.orm import Session
 import cost_engine
 from intent import Intent, parse_intent
 from models import Store, Task
-from services import a_service, b_service, compose_service, store_service
+from services import a_service, b_service, compose_service, store_service, subscription_service
 from tasks import video_task
 
 
 def submit_a(db: Session, tenant_id: str, prompt: str, title: str | None = None, duration: int = 15, resolution: str = "720p") -> Task:
     cost_engine.ensure_budget(db, tenant_id, "video.generate.a", 1)
+    # Patch5：试用额度仅 A台扣减（B台裂变不扣）
+    subscription_service.consume_trial(db, tenant_id)
     return video_task.create_task(
         db, tenant_id, "a", {"prompt": prompt, "title": title, "duration": duration, "resolution": resolution}
     )
@@ -75,6 +77,8 @@ def plan_from_intent(db: Session, tenant_id: str, text: str) -> dict:
             "resolution": intent.resolution or "720p",
         }
         tasks.append(video_task.create_task(db, tenant_id, "a", payload, store_id=store.id))
+        # Patch5：每条母视频（A台）扣减一次试用额度；B台裂变不扣
+        subscription_service.consume_trial(db, tenant_id)
 
     return {
         "intent": intent.to_dict(),

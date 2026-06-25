@@ -24,7 +24,10 @@ from schemas.dto import (
     AGenerateIn, BGenerateIn, ComposeIn, ExportIn, IntentIn,
     InviteGenIn, InviteRevokeIn, LoginIn, Resp,
 )
-from services import export_service, invite_service, orchestrator, store_service, upload_service
+from services import (
+    export_service, invite_service, orchestrator, store_service,
+    subscription_service, upload_service,
+)
 from tasks import video_task
 from utils.upload_util import UploadError
 from tasks.runner import execute_task, retry_task
@@ -361,6 +364,15 @@ def export_videos(
         for v in videos
     ]
     return Resp(data={"count": len(items), "videos": items})
+
+
+# ---------------- 订阅/试用（Patch5，暂不接支付）----------------
+@api_router.get("/subscription/status")
+def subscription_status(
+    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+) -> Resp:
+    """返回订阅状态、试用余量、配额余量。试用仅 A台扣减，B台不扣。"""
+    return Resp(data=subscription_service.get_status(db, tenant_id))
 
 
 # ---------------- 成本 ----------------
