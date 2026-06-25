@@ -642,60 +642,14 @@ body {
 }
 .storage-bar strong { font-weight: 600; }
 
-/* ---- 裂变配置面板 ---- */
-.batch-config-panel {
-  background: var(--card);
-  border: 2px solid var(--primary);
-  border-radius: var(--radius);
-  padding: 24px;
-  margin-top: 16px;
-  box-shadow: var(--shadow-md);
-}
-.batch-config-panel h4 {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 16px;
-  color: var(--text);
-}
-.batch-config-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-.batch-config-row label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  min-width: 100px;
-}
-.batch-config-row input,
-.batch-config-row select {
-  padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  outline: none;
-}
-.batch-config-row input:focus,
-.batch-config-row select:focus {
-  border-color: var(--primary);
-}
-.batch-estimate {
-  padding: 10px 14px;
-  background: #f0f9ff;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  color: #0369a1;
-  margin: 12px 0;
-}
-.batch-submit-row {
-  display: flex;
-  gap: 10px;
-  margin-top: 16px;
+/* ---- P1: 进度动画 ---- */
+@keyframes load {
+  0% { width: 10%; }
+  50% { width: 70%; }
+  100% { width: 95%; }
 }
 
-/* ---- 批量进度条 ---- */
+/* ---- 批量进度条（P1: A台+B台共用） ---- */
 .batch-progress {
   margin-top: 16px;
   padding: 16px;
@@ -1095,10 +1049,6 @@ body {
   }
   .video-grid {
     grid-template-columns: 1fr;
-  }
-  .batch-config-row {
-    flex-direction: column;
-    align-items: flex-start;
   }
   .gallery-toolbar {
     flex-direction: column;

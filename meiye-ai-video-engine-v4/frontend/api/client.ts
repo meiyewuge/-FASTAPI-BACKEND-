@@ -58,12 +58,18 @@ export interface VideoItem {
   strategy?: string;
   store_id?: number;
   duration?: number;
+  duration_seconds?: number | null;
+  source_type?: string;
   file_size?: number;
   source?: string;
   created_at?: string;
   storage_expires_at?: string;
   days_remaining?: number;
   status?: string;
+  storage_status?: string;
+  parent_video_id?: number | null;
+  batch_id?: string;
+  thumbnail_url?: string;
 }
 
 export interface TaskData {
@@ -216,10 +222,11 @@ export async function pollTask(
 }
 
 // ---- 视频 ----
-export const listVideos = (type: "mother" | "viral" = "mother", page = 1, pageSize = 20) =>
-  get<{ items: VideoItem[]; total: number }>(
-    `/videos?type=${type}&page=${page}&page_size=${pageSize}`,
-  );
+export const listVideos = (type: "mother" | "viral" = "mother", page = 1, pageSize = 50, batchId?: string) => {
+  let url = `/videos?type=${type}&page=${page}&page_size=${pageSize}`;
+  if (batchId) url += `&batch_id=${batchId}`;
+  return get<{ items: VideoItem[]; total: number }>(url);
+};
 
 /** 刷新视频 URL（CDN 签名过期时用）*/
 export const refreshVideoUrl = (videoId: number) =>
@@ -544,27 +551,33 @@ async function del<T = unknown>(path: string): Promise<Resp<T>> {
   }
 }
 
-// ---- 批量上传 ----
-export interface BatchUploadItem {
+// ---- 批量上传（P1 标准响应）----
+export interface BatchUploadedItem {
   file_id: number;
-  file_url: string;
-  file_type: string;
   file_name: string;
+  file_type: string;
   file_size: number;
-  status: "ok" | "failed";
-  error?: string;
+  file_url: string;
+  thumbnail_url?: string;
+  status: string;
+  video_id?: number | null;
+}
+
+export interface BatchUploadFailedItem {
+  file_name: string;
+  reason: string;
 }
 
 /**
  * 批量上传文件 — POST /uploads/batch (FormData)
- * type: image | video | file
- * 失败文件不影响其他文件展示
+ * P1 标准：响应含 uploaded[] + failed[]
+ * 上传 video 成功后返回 video_id，自动进入母视频/源视频陈列面
  */
 export async function batchUpload(
   files: File[],
   type: "image" | "video" | "file",
   onProgress?: (pct: number) => void,
-): Promise<Resp<{ items: BatchUploadItem[]; total: number; ok_count: number; failed_count: number }>> {
+): Promise<Resp<{ uploaded: BatchUploadedItem[]; failed: BatchUploadFailedItem[] }>> {
   const form = new FormData();
   form.append("type", type);
   files.forEach((f) => form.append("files", f));
@@ -584,22 +597,24 @@ export async function batchUpload(
       try {
         resolve(JSON.parse(xhr.responseText));
       } catch {
-        resolve({ code: -1, message: `HTTP ${xhr.status}`, data: null as unknown as { items: BatchUploadItem[]; total: number; ok_count: number; failed_count: number } });
+        resolve({ code: -1, message: `HTTP ${xhr.status}`, data: null as unknown as { uploaded: BatchUploadedItem[]; failed: BatchUploadFailedItem[] } });
       }
     };
     xhr.onerror = () => {
-      resolve({ code: -1, message: "网络异常", data: null as unknown as { items: BatchUploadItem[]; total: number; ok_count: number; failed_count: number } });
+      resolve({ code: -1, message: "网络异常", data: null as unknown as { uploaded: BatchUploadedItem[]; failed: BatchUploadFailedItem[] } });
     };
     xhr.send(form);
   });
 }
 
-// ---- B台批量裂变 ----
+// ---- B台批量裂变（P1 标准）----
 export interface BatchGenerateResult {
   batch_id: string;
-  status: "pending" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed";
   source_count: number;
   total_outputs: number;
+  ignored_source_video_ids?: number[];
+  cost: number;
 }
 
 export interface BatchStatusItem {
@@ -611,33 +626,35 @@ export interface BatchStatusItem {
 
 export interface BatchStatus {
   batch_id: string;
-  status: "pending" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed";
   completed: number;
   total_outputs: number;
   failed: number;
   items: BatchStatusItem[];
+  video_ids?: number[];
 }
 
-/** B台批量裂变 — POST /b/batch-generate */
+/** B台批量裂变 — POST /b/batch-generate（P1 标准：source_video_ids） */
 export const batchGenerate = (
-  sourceVideoIds: number[], count: number, strategy = "mix", prompt?: string,
+  sourceVideoIds: number[], prompt?: string, strategy = "mix", autoRatio = 10, maxOutputs = 50,
 ) =>
   post<BatchGenerateResult>("/b/batch-generate", {
     source_video_ids: sourceVideoIds,
-    count,
+    prompt: prompt || undefined,
+    auto_ratio: autoRatio,
+    max_outputs: maxOutputs,
     strategy,
-    prompt,
   });
 
 /** B台批量状态轮询 — GET /b/batch/{batchId} */
 export const getBatchStatus = (batchId: string) =>
   get<BatchStatus>(`/b/batch/${batchId}`);
 
-/** B台批量轮询（异步，不阻塞页面） */
+/** B台批量轮询（异步，不阻塞页面） — 默认 1.5s */
 export async function pollBatchStatus(
   batchId: string,
   onTick?: (d: BatchStatus) => void,
-  intervalMs = 3000,
+  intervalMs = 1500,
 ): Promise<Resp<BatchStatus>> {
   for (;;) {
     const r = await getBatchStatus(batchId);
@@ -670,24 +687,27 @@ export const storageStatus = () => get<StorageStatus>("/storage/status");
 // ---- 事件埋点（失败不阻断） ----
 /**
  * POST /events/track — 埋点接口，失败仅 console.warn
+ * P1 标准：action = play|select|send_to_b|download|export|delete
  */
 export async function trackEvent(
-  event: string,
+  action: string,
   payload: Record<string, unknown> = {},
 ): Promise<void> {
   try {
-    await post("/events/track", { event, ...payload });
+    await post("/events/track", { action, ...payload });
   } catch (e) {
-    console.warn(`[trackEvent] ${event} 埋点失败:`, e);
+    console.warn(`[trackEvent] ${action} 埋点失败:`, e);
   }
 }
 
-// ---- 视频反馈 ----
+// ---- 视频反馈（P1 标准：rating + tags + note → 候选池 pending）----
 /** POST /videos/{videoId}/feedback */
 export const videoFeedback = (
-  videoId: number, action: "favorite" | "useful" | "useless" | "note", note?: string,
+  videoId: number, rating: "good" | "bad", tags?: string[], note?: string,
 ) =>
-  post<{ video_id: number; action: string }>(`/videos/${videoId}/feedback`, { action, note });
+  post<{ signal_id: string; candidate_id: number; status: string }>(
+    `/videos/${videoId}/feedback`, { rating, tags, note },
+  );
 
 // ---- 管理员：候选池 ----
 export interface KnowledgeCandidate {
