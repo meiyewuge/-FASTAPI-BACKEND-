@@ -17,23 +17,29 @@ import cost_engine
 from config import settings
 from intent import Intent, parse_intent
 from models import Store, Task, Video
-from services import a_service, b_service, compose_service, store_service, subscription_service
+from services import (
+    a_service, b_service, compose_service, reflow_service, store_service, subscription_service,
+)
 from tasks import video_task
 
 
 def submit_a(db: Session, tenant_id: str, prompt: str, title: str | None = None, duration: int = 15,
-             resolution: str = "720p", image_file_id: str | None = None) -> Task:
+             resolution: str = "720p", image_file_id: str | None = None, phone: str | None = None) -> Task:
     cost_engine.ensure_budget(db, tenant_id, "video.generate.a", 1)
     # Patch5：试用额度仅 A台扣减（B台裂变不扣）
     subscription_service.consume_trial(db, tenant_id)
+    run_id = reflow_service.start_run(
+        db, tenant_id, phone, "a_generate", prompt,
+        input_image_count=1 if image_file_id else 0, input_text_length=len(prompt or ""),
+    )
     payload = {"prompt": prompt, "title": title, "duration": duration, "resolution": resolution}
     if image_file_id:
         payload["image_file_id"] = image_file_id
-    return video_task.create_task(db, tenant_id, "a", payload)
+    return video_task.create_task(db, tenant_id, "a", payload, run_id=run_id)
 
 
 def submit_b_batch(db: Session, tenant_id: str, sources: list[dict], prompt: str | None = None,
-                   total_limit: int | None = None) -> dict:
+                   total_limit: int | None = None, phone: str | None = None) -> dict:
     """批量裂变：多源各设 count，本地 ffmpeg、0 成本、不调火山。返回 batch_id + 任务列表。"""
     hard = settings.b_batch_total_limit
     limit = min(total_limit or hard, hard)
@@ -55,6 +61,10 @@ def submit_b_batch(db: Session, tenant_id: str, sources: list[dict], prompt: str
             raise ValueError(f"源视频不存在或不属于该租户：id={sid}")
 
     batch_id = uuid.uuid4().hex
+    run_id = reflow_service.start_run(
+        db, tenant_id, phone, "batch", prompt,
+        input_text_length=len(prompt or ""), source_video_count=len(sources),
+    )
     tasks: list[Task] = []
     for s in sources:
         count = max(1, int(s.get("count", 1)))
@@ -68,7 +78,7 @@ def submit_b_batch(db: Session, tenant_id: str, sources: list[dict], prompt: str
                 "strategy": s.get("strategy", "mix"),
                 "batch_id": batch_id,
             },
-            batch_id=batch_id,
+            batch_id=batch_id, run_id=run_id,
         )
         tasks.append(t)
     return {"batch_id": batch_id, "total_outputs": total, "_tasks": tasks}
@@ -81,8 +91,13 @@ def submit_b(
     count: int,
     prompt: str | None = None,
     strategy: str | None = "mix",
+    phone: str | None = None,
 ) -> Task:
     cost_engine.ensure_budget(db, tenant_id, "video.remix.b", count)
+    run_id = reflow_service.start_run(
+        db, tenant_id, phone, "b_remix", prompt,
+        input_text_length=len(prompt or ""), source_video_count=1,
+    )
     return video_task.create_task(
         db,
         tenant_id,
@@ -93,6 +108,7 @@ def submit_b(
             "prompt": prompt,
             "strategy": strategy,
         },
+        run_id=run_id,
     )
 
 
@@ -101,7 +117,7 @@ def _build_prompt(intent: Intent, store: Store) -> str:
     return f"为{store.name}制作一条{desc}视频"
 
 
-def plan_from_intent(db: Session, tenant_id: str, text: str) -> dict:
+def plan_from_intent(db: Session, tenant_id: str, text: str, phone: str | None = None) -> dict:
     """Intent Layer 入口：一句话 → 解析 → 拆单 → 创建多门店任务（仍属 1 个 tenant）。
 
     门店是 tenant 内 target，绝不拆 tenant。返回 plan + task 列表（由调用方分派执行）。
@@ -121,6 +137,9 @@ def plan_from_intent(db: Session, tenant_id: str, text: str) -> dict:
 
     stores = store_service.ensure_stores(db, tenant_id, count, intent.city, intent.industry)
 
+    run_id = reflow_service.start_run(
+        db, tenant_id, phone, "a_generate", text, input_text_length=len(text or ""),
+    )
     tasks: list[Task] = []
     for store in stores:
         payload = {
@@ -130,7 +149,7 @@ def plan_from_intent(db: Session, tenant_id: str, text: str) -> dict:
             "duration": intent.duration or 15,        # B4：透传时长（"15秒"→duration 而非 count）
             "resolution": intent.resolution or "720p",
         }
-        tasks.append(video_task.create_task(db, tenant_id, "a", payload, store_id=store.id))
+        tasks.append(video_task.create_task(db, tenant_id, "a", payload, store_id=store.id, run_id=run_id))
         # Patch5：每条母视频（A台）扣减一次试用额度；B台裂变不扣
         subscription_service.consume_trial(db, tenant_id)
 

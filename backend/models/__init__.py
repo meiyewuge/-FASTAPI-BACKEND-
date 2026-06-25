@@ -8,5 +8,9 @@ from .cost import CostRecord
 from .upload import Upload
 from .invite import InviteCode
 from .admin_user import AdminUser
+from .reflow import WorkflowRun, VideoFeedbackSignal, KnowledgeCandidate
 
-__all__ = ["Tenant", "Store", "Video", "Task", "CostRecord", "Upload", "InviteCode", "AdminUser"]
+__all__ = [
+    "Tenant", "Store", "Video", "Task", "CostRecord", "Upload", "InviteCode", "AdminUser",
+    "WorkflowRun", "VideoFeedbackSignal", "KnowledgeCandidate",
+]

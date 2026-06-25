@@ -54,6 +54,28 @@ class UserRevokeIn(BaseModel):
     phone: str = Field(..., min_length=4)
 
 
+class TrackIn(BaseModel):
+    """行为埋点（V4 P0 回流层）。tenant_id/phone 由 JWT 取，不信任前端。"""
+
+    action: str = Field(..., description="play|select|send_to_b|download|export|favorite|dislike|delete")
+    video_id: Optional[int] = None
+    context: Optional[dict] = None
+
+
+class FeedbackIn(BaseModel):
+    """视频反馈 → 知识候选池（pending）。"""
+
+    rating: str = Field(..., description="good | bad")
+    tags: Optional[list[str]] = None
+    note: Optional[str] = None
+
+
+class CandidateReviewIn(BaseModel):
+    """候选池审核备注（approve/reject）。"""
+
+    note: Optional[str] = None
+
+
 class ExportIn(BaseModel):
     """导出：按 ids 或筛选条件，产出视频清单（manifest）。"""
 

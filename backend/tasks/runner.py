@@ -36,6 +36,12 @@ def execute_task(task_id: str) -> None:
             db, task_id, TaskStatus.FAILED.value, error=str(exc), inc_retry=True
         )
     finally:
+        # V4 P0：回填工作流记录（不影响主任务流程）
+        try:
+            from services import reflow_service
+            reflow_service.finalize_for_task(db, task_id)
+        except Exception:  # noqa: BLE001
+            db.rollback()
         db.close()
 
 

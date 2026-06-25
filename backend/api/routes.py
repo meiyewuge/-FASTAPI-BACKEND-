@@ -24,12 +24,13 @@ from cost_engine import QuotaExceeded, get_or_create_tenant
 from intent import parse_intent
 from models import Store, Video
 from schemas.dto import (
-    AGenerateIn, BatchGenerateIn, BGenerateIn, BootstrapIn, ComposeIn, ExportIn, GrantIn,
-    IntentIn, InviteGenIn, InviteRevokeIn, LoginIn, Resp, UserRevokeIn,
+    AGenerateIn, BatchGenerateIn, BGenerateIn, BootstrapIn, CandidateReviewIn, ComposeIn,
+    ExportIn, FeedbackIn, GrantIn, IntentIn, InviteGenIn, InviteRevokeIn, LoginIn, Resp,
+    TrackIn, UserRevokeIn,
 )
 from services import (
-    admin_service, b_service, export_service, invite_service, orchestrator, storage_service,
-    store_service, subscription_service, upload_service,
+    admin_service, b_service, export_service, invite_service, orchestrator, reflow_service,
+    storage_service, store_service, subscription_service, upload_service,
 )
 from tasks import video_task
 from utils.upload_util import UploadError
@@ -178,11 +179,11 @@ def generate(
     body: IntentIn,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(get_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> Resp:
     """统一入口：一句话 → 解析 → 多门店拆单 → 自动创建并分派任务（仍属 1 个 tenant）。"""
     try:
-        result = orchestrator.plan_from_intent(db, tenant_id, body.text)
+        result = orchestrator.plan_from_intent(db, user["tenant_id"], body.text, phone=user.get("phone"))
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
     except ValueError as e:
@@ -228,14 +229,14 @@ def a_generate(
     body: AGenerateIn,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(get_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> Resp:
     """A台：一句话 → 母视频（异步，返回 task_id）。可带参考图 image_file_id。"""
     try:
         task = orchestrator.submit_a(
-            db, tenant_id, body.prompt, body.title,
+            db, user["tenant_id"], body.prompt, body.title,
             duration=body.duration, resolution=body.resolution,
-            image_file_id=body.image_file_id,
+            image_file_id=body.image_file_id, phone=user.get("phone"),
         )
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
@@ -249,12 +250,13 @@ def b_generate(
     body: BGenerateIn,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(get_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> Resp:
     """B台：母视频 → 批量裂变（异步，返回 task_id）。"""
     try:
         task = orchestrator.submit_b(
-            db, tenant_id, body.source_video_id, body.count, body.prompt, body.strategy
+            db, user["tenant_id"], body.source_video_id, body.count, body.prompt, body.strategy,
+            phone=user.get("phone"),
         )
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
@@ -267,12 +269,14 @@ def b_batch_generate(
     body: BatchGenerateIn,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(get_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> Resp:
     """B台批量裂变：多源 → 几十条（本地 ffmpeg，0 成本）。异步，返回 batch_id。"""
     sources = [s.model_dump() for s in body.sources]
     try:
-        result = orchestrator.submit_b_batch(db, tenant_id, sources, body.prompt, body.total_limit)
+        result = orchestrator.submit_b_batch(
+            db, user["tenant_id"], sources, body.prompt, body.total_limit, phone=user.get("phone")
+        )
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
     except ValueError as e:
@@ -427,6 +431,79 @@ def storage_status(
 ) -> Resp:
     """磁盘用量（全局）+ 本租户视频/上传数量。"""
     return Resp(data=storage_service.storage_status(db, tenant_id))
+
+
+# ---------------- 业务资产回流层（V4 P0）----------------
+@api_router.post("/events/track")
+def events_track(
+    body: TrackIn,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """行为埋点：play/select/send_to_b/download/export/favorite/dislike/delete。
+    tenant_id / phone 一律取自 JWT，不信任前端。"""
+    try:
+        sig = reflow_service.track_event(
+            db, user["tenant_id"], user.get("phone"), body.action, body.video_id, body.context
+        )
+    except ValueError as e:
+        return Resp(code=2001, message=str(e))
+    return Resp(data={"signal_id": sig.id, "action": body.action})
+
+
+@api_router.post("/videos/{video_id}/feedback")
+def video_feedback(
+    video_id: int,
+    body: FeedbackIn,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """视频反馈（good/bad + tags + note）→ 生成行为信号 + 一条知识候选（pending）。"""
+    try:
+        result = reflow_service.submit_feedback(
+            db, user["tenant_id"], user.get("phone"), video_id, body.rating, body.tags, body.note
+        )
+    except ValueError as e:
+        return Resp(code=2001, message=str(e))
+    return Resp(data=result)
+
+
+# ---------------- 候选池管理（仅 super_admin）----------------
+@api_router.get("/admin/knowledge-candidates")
+def admin_kc_list(
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _op: dict = Depends(require_super_admin),
+) -> Resp:
+    """候选池列表（平台级审核，super_admin）。可按 status 过滤。"""
+    items = reflow_service.list_candidates(db, status)
+    return Resp(data={"items": items, "total": len(items)})
+
+
+@api_router.post("/admin/knowledge-candidates/{candidate_id}/approve")
+def admin_kc_approve(
+    candidate_id: int,
+    body: CandidateReviewIn,
+    db: Session = Depends(get_db),
+    op: dict = Depends(require_super_admin),
+) -> Resp:
+    result = reflow_service.review_candidate(db, candidate_id, "approved", op["phone"], body.note)
+    if result is None:
+        return Resp(code=3001, message="候选不存在")
+    return Resp(data=result)
+
+
+@api_router.post("/admin/knowledge-candidates/{candidate_id}/reject")
+def admin_kc_reject(
+    candidate_id: int,
+    body: CandidateReviewIn,
+    db: Session = Depends(get_db),
+    op: dict = Depends(require_super_admin),
+) -> Resp:
+    result = reflow_service.review_candidate(db, candidate_id, "rejected", op["phone"], body.note)
+    if result is None:
+        return Resp(code=3001, message="候选不存在")
+    return Resp(data=result)
 
 
 @api_router.get("/videos/{video_id}/url")
