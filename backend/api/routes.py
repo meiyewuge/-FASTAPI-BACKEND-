@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -415,22 +415,26 @@ def list_videos(
 def delete_video(
     video_id: int,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(get_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> Resp:
-    """删除视频：删服务器文件，保留 DB 记录（storage_status=deleted）。tenant 隔离。"""
-    ok = storage_service.delete_video(db, tenant_id, video_id)
-    if not ok:
+    """删除视频：删服务器文件，保留 DB 记录（storage_status=deleted）。
+    user/invite_admin 仅删本租户；super_admin 可删任意租户；跨租户 → 403。"""
+    is_super = user.get("role") == admin_service.ROLE_SUPER
+    result = storage_service.delete_video(db, user["tenant_id"], video_id, is_super=is_super)
+    if result == "not_found":
         return Resp(code=3001, message="视频不存在")
+    if result == "forbidden":
+        raise HTTPException(status_code=403, detail="无权删除其他租户的视频")
     return Resp(data={"video_id": video_id, "storage_status": "deleted"})
 
 
 # ---------------- 存储状态 ----------------
 @api_router.get("/storage/status")
 def storage_status(
-    db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)
+    db: Session = Depends(get_db), user: dict = Depends(get_current_user)
 ) -> Resp:
-    """磁盘用量（全局）+ 本租户视频/上传数量。"""
-    return Resp(data=storage_service.storage_status(db, tenant_id))
+    """角色感知：user/invite_admin 看本租户(scope=tenant)；super_admin 看全局(scope=global)。"""
+    return Resp(data=storage_service.storage_status(db, user["tenant_id"], user.get("role", "user")))
 
 
 # ---------------- 业务资产回流层（V4 P0）----------------

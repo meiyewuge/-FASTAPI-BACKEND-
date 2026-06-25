@@ -174,18 +174,20 @@ def main():
     assert vis["total"] == 1, vis
     print("  ✔ 删除视频删服务器文件并标记 deleted（DB 记录保留）")
 
-    # 9) storage/status 正常
+    # 9) storage/status 正常（普通 user → scope=tenant，不暴露全局磁盘）
     ss = c.get("/api/storage/status", headers=A).json()["data"]
-    for k in ("disk_total_gb", "disk_used_gb", "disk_used_percent", "mother_count", "viral_count", "upload_count"):
+    assert ss["scope"] == "tenant", ss
+    assert "disk_total_gb" not in ss, ss
+    for k in ("mother_count", "viral_count", "upload_count", "estimated_used_mb"):
         assert k in ss, ss
     assert ss["mother_count"] == 3, ss
-    print(f"  ✔ /api/storage/status 正常：mother={ss['mother_count']} viral={ss['viral_count']} upload={ss['upload_count']}")
+    print(f"  ✔ /api/storage/status（user→tenant scope）：mother={ss['mother_count']} viral={ss['viral_count']} upload={ss['upload_count']}")
 
-    # 10) 租户隔离：B 看不到 A 的视频，删不了 A 的视频
+    # 10) 租户隔离：B 看不到 A 的视频，删不了 A 的视频（跨租户删 → 403）
     assert c.get("/api/videos", params={"type": "mother"}, headers=B).json()["data"]["total"] == 0
-    assert c.delete(f"/api/videos/{vid_ids[2]}", headers=B).json()["code"] == 3001
+    assert c.delete(f"/api/videos/{vid_ids[2]}", headers=B).status_code == 403
     assert c.get("/api/videos", params={"type": "mother"}, headers=A).json()["data"]["total"] == 3
-    print("  ✔ 租户隔离：B 看不到/删不掉 A 的文件")
+    print("  ✔ 租户隔离：B 看不到 A 的文件；跨租户删除 → 403")
 
     # 11) 自动清理：写一条已过期 viral，跑 cleanup → 文件删 + expired
     from services import storage_service
