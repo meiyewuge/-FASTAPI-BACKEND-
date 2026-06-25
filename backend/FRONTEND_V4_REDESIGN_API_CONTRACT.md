@@ -1,5 +1,11 @@
 # 前端联调接口合同（FRONTEND_V4_REDESIGN_API_CONTRACT）
 
+> ⛔ **已废弃 / DEPRECATED**：本文件已被 **`FRONTEND_V4_CURRENT_API_CONTRACT.md`** 取代。
+> P1（B台 `source_video_ids` / `duration_seconds`）与 P0-B（A台 `/api/compose/preview`、`4031` 锁态、`2002` 图片不可访问）**一律以 `FRONTEND_V4_CURRENT_API_CONTRACT.md` 为准**。
+> 下方内容仅作历史参考（B台仍写旧 `sources`、无 preview、无 4031），**请勿据此开发**。
+
+---
+
 > 面向 Qoder 前端「单操作框 + 母视频/源视频陈列面 + 裂变视频陈列面」工作流。
 > 后端分支 `claude/v4-staging`。**所有接口（除登录）都要带 `Authorization: Bearer <JWT>`**。
 > 统一返回壳：`{ "code": 0, "message": "ok", "data": {...} }`，`code==0` 成功；非 0 见各接口错误码。
