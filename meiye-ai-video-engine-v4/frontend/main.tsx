@@ -1,5 +1,6 @@
 /**
- * 前端入口 — Login + Workbench 两页路由 + 401 自动跳登录。
+ * 前端入口 — Login + Workbench + AdminPanel 三页路由 + 401 自动跳登录。
+ * /admin 路由守卫在 AdminPanel 内部（JWT role 检查，非 admin 跳工作台）。
  */
 import React from "react";
 import ReactDOM from "react-dom/client";

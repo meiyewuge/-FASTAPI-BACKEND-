@@ -10,8 +10,8 @@ import {
   costSummary, strategies as fetchStrategies, metricsOverview,
   retryTask, exportVideosCSV, exportVideosMp4,
   uploadFile, stableDownload,
-  getTenant, clearAuth,
-  ENABLE_ADMIN_KEY_FALLBACK,
+  getTenant, clearAuth, getToken,
+  isAdmin, getUserProfile, fetchMe,
   type TaskData, type VideoItem, type CostSummary,
   type StrategyItem, type MetricsOverview,
 } from "../api/client";
@@ -73,6 +73,13 @@ export default function Workbench() {
     window.addEventListener("offline", off);
     window.addEventListener("online", on);
     return () => { window.removeEventListener("offline", off); window.removeEventListener("online", on); };
+  }, []);
+
+  // ---- 获取用户角色（页面刷新后恢复） ----
+  useEffect(() => {
+    if (!getUserProfile() && getToken()) {
+      fetchMe(); // /api/me → 设置 _userProfile → isAdmin() 生效
+    }
   }, []);
 
   // ---- 加载 ----
@@ -287,8 +294,8 @@ export default function Workbench() {
               <span className="cost-sub">已用 ¥{cost.spend?.toFixed(2) ?? "0"} / 配额 ¥{cost.quota?.toFixed(2) ?? "0"}</span>
             </div>
           )}
-          {ENABLE_ADMIN_KEY_FALLBACK && (
-            <button className="btn btn-admin" onClick={() => navigate("/admin")} title="管理员邀约码管理（staging 临时模式）">管理员</button>
+          {isAdmin() && (
+            <button className="btn btn-admin" onClick={() => navigate("/admin")} title="管理员后台">管理员</button>
           )}
           <button className="btn-logout" onClick={() => { clearAuth(); navigate("/login", { replace: true }); }}>退出</button>
         </div>

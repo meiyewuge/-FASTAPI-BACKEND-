@@ -368,13 +368,11 @@ export async function stableDownload(
 }
 
 // ===========================================================================
-// 管理员权限 — 双模式架构
-// A. 临时模式（staging）：X-Admin-Key header，ADMIN_KEY 仅 sessionStorage
-// B. 正式模式（Patch6）：JWT role，从 GET /api/me 获取角色
-//
-// 开关：stable 版本发布前改为 false
+// 管理员权限 — JWT role 模式（Patch6 已上线）
+// A. 正式模式：JWT Bearer + GET /api/me role（当前默认）
+// B. 临时 fallback：X-Admin-Key（仅紧急回退用，默认关闭）
 // ===========================================================================
-export const ENABLE_ADMIN_KEY_FALLBACK = true; // ← staging only，stable 改 false
+export const ENABLE_ADMIN_KEY_FALLBACK = false; // ← Patch6 已上线，关闭临时模式
 
 const SS_ADMIN_KEY = "v4_admin_key";
 
@@ -404,10 +402,9 @@ let _userProfile: UserProfile | null = null;
 export function setUserProfile(p: UserProfile | null) { _userProfile = p; }
 export function getUserProfile(): UserProfile | null { return _userProfile; }
 
-/** 当前用户角色（优先 /api/me，fallback 到 ADMIN_KEY） */
+/** 当前用户角色（优先 _userProfile，fallback 到 ADMIN_KEY（仅当开关开启时）） */
 export function getCurrentUserRole(): UserRole {
   if (_userProfile) return _userProfile.role;
-  // 临时 fallback：有 ADMIN_KEY 视为 super_admin
   if (ENABLE_ADMIN_KEY_FALLBACK && getAdminKey()) return "super_admin";
   return "user";
 }
@@ -423,7 +420,7 @@ export function isSuperAdmin(): boolean {
   return getCurrentUserRole() === "super_admin";
 }
 
-// ---- /api/me（Patch6 上线后使用）----
+// ---- /api/me ----
 export async function fetchMe(): Promise<Resp<UserProfile>> {
   const r = await get<UserProfile>("/me");
   if (r.code === 0 && r.data) {
@@ -432,12 +429,11 @@ export async function fetchMe(): Promise<Resp<UserProfile>> {
   return r;
 }
 
-// ---- 管理员请求头（双模式）----
+// ---- 管理员请求头（纯 JWT，fallback 关闭时不带 X-Admin-Key）----
 function adminHeaders(): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  // 始终带 JWT（正式模式依赖此）
   if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-  // 临时模式额外带 X-Admin-Key
+  // 仅在 fallback 开启时才附加 X-Admin-Key
   if (ENABLE_ADMIN_KEY_FALLBACK && getAdminKey()) {
     headers["X-Admin-Key"] = getAdminKey();
   }
@@ -451,9 +447,9 @@ async function adminPost<T = unknown>(path: string, body: unknown): Promise<Resp
       headers: adminHeaders(),
       body: JSON.stringify(body),
     });
-    if (res.status === 401 || res.status === 403) {
-      clearAdminKey();
-      return { code: -1, message: "管理员权限不足或密钥已过期", data: null as unknown as T };
+    check401(res);
+    if (res.status === 403) {
+      return { code: -1, message: "权限不足，仅管理员可操作", data: null as unknown as T };
     }
     if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as unknown as T };
     return res.json();
@@ -465,9 +461,9 @@ async function adminPost<T = unknown>(path: string, body: unknown): Promise<Resp
 async function adminGet<T = unknown>(path: string): Promise<Resp<T>> {
   try {
     const res = await fetch(`${BASE}${path}`, { headers: adminHeaders() });
-    if (res.status === 401 || res.status === 403) {
-      clearAdminKey();
-      return { code: -1, message: "管理员权限不足或密钥已过期", data: null as unknown as T };
+    check401(res);
+    if (res.status === 403) {
+      return { code: -1, message: "权限不足，仅管理员可操作", data: null as unknown as T };
     }
     if (!res.ok) return { code: -1, message: `HTTP ${res.status}`, data: null as unknown as T };
     return res.json();
@@ -500,3 +496,24 @@ export const adminInviteList = () =>
 
 export const adminInviteRevoke = (code: string) =>
   adminPost<{ code: string; active: boolean }>("/admin/invite/revoke", { code });
+
+// ---- 管理员：用户授权管理（Patch6 新增）----
+export interface AdminUserItem {
+  phone: string;
+  tenant_id: string;
+  role: UserRole;
+  is_admin: boolean;
+  granted_at?: string;
+}
+
+/** 授权员工为 invite_admin */
+export const adminGrantUser = (phone: string, role: UserRole = "invite_admin") =>
+  adminPost<{ phone: string; role: UserRole }>("/admin/users/grant", { phone, role });
+
+/** 取消员工管理员权限 */
+export const adminRevokeUser = (phone: string) =>
+  adminPost<{ phone: string; role: string }>("/admin/users/revoke", { phone });
+
+/** 查看管理员列表 */
+export const adminListUsers = () =>
+  adminGet<{ items: AdminUserItem[]; total: number }>("/admin/users/list");
