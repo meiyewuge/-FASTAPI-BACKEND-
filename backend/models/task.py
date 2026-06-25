@@ -14,6 +14,7 @@ class Task(Base):
     type = Column(String(8), nullable=False)                # a | b
     batch_id = Column(String(40), nullable=True, index=True)  # V4 P0：批量裂变批次号
     run_id = Column(String(40), nullable=True, index=True)    # V4 P0：工作流记录 run_id
+    provider_job_id = Column(String(64), nullable=True, index=True)  # V4 P0-A：火山 job_id（恢复防重复 submit）
     status = Column(String(16), nullable=False, default="pending")  # pending|running|done|failed
     progress = Column(Float, nullable=False, default=0.0)
     payload = Column(Text, nullable=True)                   # JSON 输入

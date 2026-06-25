@@ -49,11 +49,14 @@ class _VolcanoBase(HTTPVideoProvider):
 
     def _submit(self, prompt: str, params: dict) -> str:
         url = f"{self.base}/api/v3/contents/generations/tasks"
-        content = [{"type": "text", "text": prompt}]
-        # B7：B台视频输入（video-to-video）——母视频 mp4 作为输入参考，含视频输入计费更省(0.57元/秒)。
-        # ⚠️ 字段名按火山「含视频输入」API 文档确认（image_url / video_url），ECS 联调时校准。
-        if params.get("source"):
-            content.append({"type": "image_url", "image_url": {"url": params["source"]}})
+        # V4 P0-B：导演引擎传入 content[]（text + image_url role）则直接使用（多模态）
+        if params.get("content"):
+            content = params["content"]
+        else:
+            content = [{"type": "text", "text": prompt}]
+            # B7：B台视频输入（video-to-video）——母视频 mp4 作为输入参考，含视频输入计费更省(0.57元/秒)。
+            if params.get("source"):
+                content.append({"type": "image_url", "image_url": {"url": params["source"]}})
         payload = {"model": self.model, "content": content}
         # Seedance 2.0 supports duration [4,15] and resolution 480p/720p/1080p
         if params.get("duration"):
@@ -62,6 +65,10 @@ class _VolcanoBase(HTTPVideoProvider):
             payload["resolution"] = params["resolution"]
         if params.get("ratio"):
             payload["ratio"] = params["ratio"]
+        # V4 P0-B：原生音频 / 无水印
+        if params.get("generate_audio") is not None:
+            payload["generate_audio"] = bool(params["generate_audio"])
+        payload["watermark"] = bool(params.get("watermark", settings.compose_watermark))
         body = json.dumps(payload).encode("utf-8")
         resp = httpx.post(url, headers=self._auth_headers("POST", url, body), content=body, timeout=30.0)
         resp.raise_for_status()

@@ -7,14 +7,34 @@
 from __future__ import annotations
 
 import json
+import threading
 
 from db import SessionLocal
 from services import orchestrator
 from tasks import video_task
 from tasks.video_task import TaskStatus
 
+# V4 P0-A（BUG-1）：同一 task_id 只能执行一次（防 recovery / 双触发重复执行火山）
+_inflight: set[str] = set()
+_inflight_lock = threading.Lock()
+
+
+def _acquire(task_id: str) -> bool:
+    with _inflight_lock:
+        if task_id in _inflight:
+            return False
+        _inflight.add(task_id)
+        return True
+
+
+def _release(task_id: str) -> None:
+    with _inflight_lock:
+        _inflight.discard(task_id)
+
 
 def execute_task(task_id: str) -> None:
+    if not _acquire(task_id):
+        return  # 已在执行中 → 跳过（幂等，防重复 submit）
     db = SessionLocal()
     try:
         task = video_task.get_task_any(db, task_id)
@@ -35,6 +55,13 @@ def execute_task(task_id: str) -> None:
         video_task.set_status(
             db, task_id, TaskStatus.FAILED.value, error=str(exc), inc_retry=True
         )
+        # BUG-2：任务失败 → 自动退回已预扣费用
+        try:
+            from cost_engine import cost_ledger
+            cost_ledger.refund(db, task_id, reason="failed")
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
     finally:
         # V4 P0：回填工作流记录（不影响主任务流程）
         try:
@@ -43,6 +70,13 @@ def execute_task(task_id: str) -> None:
         except Exception:  # noqa: BLE001
             db.rollback()
         db.close()
+        _release(task_id)
+
+
+def dispatch_compose(task_id: str) -> None:
+    """BUG-1：compose 用独立 daemon 线程执行，不占用 uvicorn 线程池（避免长轮询卡死）。"""
+    threading.Thread(target=execute_task, args=(task_id,), name=f"compose-{task_id}",
+                     daemon=True).start()
 
 
 def retry_task(task_id: str) -> None:

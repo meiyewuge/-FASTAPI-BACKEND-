@@ -24,17 +24,20 @@ def build_storyboard(script: str) -> list[str]:
     return parts or [script]
 
 
-def generate_mother_video(tenant_id: str, prompt: str, duration: int = 15, resolution: str = "720p") -> dict[str, Any]:
+def generate_mother_video(tenant_id: str, prompt: str, duration: int = 15, resolution: str = "720p",
+                          content: list | None = None, generate_audio: bool | None = None,
+                          ratio: str | None = None) -> dict[str, Any]:
     """生成 1 条母视频，返回 {title, url, cover, duration, cost, meta}。
 
-    Args:
-        duration: 视频时长（秒），Seedance 2.0 支持 [4, 15]，默认 15
-        resolution: 视频分辨率 480p/720p/1080p，默认 720p
+    V4 P0-B：content[] 非空时走多模态（导演引擎 text + image_url role）；否则纯文生兼容。
     """
     script = build_script(prompt)
     storyboard = build_storyboard(script)
-    # B4：把 duration/resolution 透传到 provider（火山按真实时长/分辨率生成与计费）
-    result = get_provider().generate_mother(tenant_id, prompt, storyboard, duration=duration, resolution=resolution)
+    # B4：duration/resolution 透传；P0-B：content[]/generate_audio/ratio 透传到 provider
+    result = get_provider().generate_mother(
+        tenant_id, prompt, storyboard, duration=duration, resolution=resolution,
+        content=content, generate_audio=generate_audio, ratio=ratio,
+    )
     return {
         "title": prompt[:50],
         "url": result["url"],

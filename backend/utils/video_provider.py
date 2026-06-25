@@ -35,7 +35,7 @@ class VideoProvider(ABC):
     name: str = "base"
 
     @abstractmethod
-    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p") -> dict[str, Any]:
+    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p", content: list | None = None, generate_audio: bool | None = None, ratio: str | None = None) -> dict[str, Any]:
         """A台：生成 1 条母视频。返回 {"url","duration","units","meta"}"""
 
     @abstractmethod
@@ -47,7 +47,7 @@ class VideoProvider(ABC):
 class MockVideoProvider(VideoProvider):
     name = "mock"
 
-    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p") -> dict[str, Any]:
+    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p", content: list | None = None, generate_audio: bool | None = None, ratio: str | None = None) -> dict[str, Any]:
         slug = abs(hash((tenant_id, prompt))) % 10_000_000
         return {
             "url": f"https://mock.cdn/{tenant_id}/mother/{slug}.mp4",
@@ -105,8 +105,16 @@ class HTTPVideoProvider(VideoProvider):
             time.sleep(self.poll_interval)
         raise ProviderError(f"{self.name} job {job_id} timeout")
 
-    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p") -> dict[str, Any]:
-        url, dur, job_id = self._run_job(prompt, {"type": "mother", "storyboard": storyboard, "duration": duration, "resolution": resolution})
+    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p", content: list | None = None, generate_audio: bool | None = None, ratio: str | None = None) -> dict[str, Any]:
+        # V4 P0-B：含 content[] 时走多模态（text + image_url role）；否则纯文生兼容
+        params = {"type": "mother", "storyboard": storyboard, "duration": duration, "resolution": resolution}
+        if content:
+            params["content"] = content
+        if generate_audio is not None:
+            params["generate_audio"] = generate_audio
+        if ratio:
+            params["ratio"] = ratio
+        url, dur, job_id = self._run_job(prompt, params)
         return {
             "url": url,
             "duration": dur,
@@ -147,8 +155,9 @@ class FallbackProvider(VideoProvider):
                 last = e
         raise ProviderError(f"all providers failed: {last}")
 
-    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p") -> dict[str, Any]:
-        return self._try("generate_mother", tenant_id, prompt, storyboard, duration, resolution)
+    def generate_mother(self, tenant_id: str, prompt: str, storyboard: list[str], duration: int = 15, resolution: str = "720p", content: list | None = None, generate_audio: bool | None = None, ratio: str | None = None) -> dict[str, Any]:
+        return self._try("generate_mother", tenant_id, prompt, storyboard, duration, resolution,
+                         content=content, generate_audio=generate_audio, ratio=ratio)
 
     def remix(self, tenant_id: str, source_url: str, index: int, changes: dict) -> dict[str, Any]:
         return self._try("remix", tenant_id, source_url, index, changes)

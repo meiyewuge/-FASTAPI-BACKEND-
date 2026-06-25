@@ -79,5 +79,16 @@ class Settings(BaseSettings):
     b_batch_total_limit: int = 50        # 单次批量裂变总产出硬上限（P0=50）
     max_a_batch: int = 10                # 一句话/单次最多生成母视频数（防火山误触）
 
+    # V4 P0-A：A台真实生成熔断锁（RISK-1）。默认锁住，仅 .env 设 true 才允许真生成。
+    enable_compose: bool = False         # false=生成通道维护中，preview 仍可用
+    # V4 P0-B：compose / Seedance 标准参数（导演引擎统一注入；不散落硬编码）
+    compose_ratio: str = "9:16"          # 竖版（美业默认）
+    compose_resolution: str = "1080p"    # 高清
+    compose_generate_audio: bool = True  # Seedance 原生音频
+    compose_watermark: bool = False
+    compose_max_images: int = 9          # 1 张首帧 + 最多 8 张参考图
+    compose_seg_seconds: int = 4         # 导演分镜每段约 4 秒（拆段用）
+    compose_seg_max_chars: int = 800     # 单段 Seedance text 上限（按单段控，非整条）
+
 
 settings = Settings()

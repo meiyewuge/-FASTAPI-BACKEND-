@@ -25,16 +25,18 @@ from intent import parse_intent
 from models import Store, Video
 from schemas.dto import (
     AGenerateIn, BatchGenerateIn, BGenerateIn, BootstrapIn, CandidateReviewIn, ComposeIn,
-    ExportIn, FeedbackIn, GrantIn, IntentIn, InviteGenIn, InviteRevokeIn, LoginIn, Resp,
-    TrackIn, UserRevokeIn,
+    ComposePreviewIn, ExportIn, FeedbackIn, GrantIn, IntentIn, InviteGenIn, InviteRevokeIn,
+    LoginIn, Resp, TrackIn, UserRevokeIn,
 )
 from services import (
-    admin_service, b_service, export_service, invite_service, orchestrator, reflow_service,
-    storage_service, store_service, subscription_service, upload_service,
+    admin_service, b_service, compose_preview_service, export_service, invite_service,
+    orchestrator, reflow_service, storage_service, store_service, subscription_service,
+    upload_service,
 )
 from tasks import video_task
 from utils.upload_util import UploadError
-from tasks.runner import execute_task, retry_task
+from utils.image_url_check import ImageAccessError
+from tasks.runner import execute_task, dispatch_compose, retry_task
 from utils import jwt_util, url_refresh
 
 api_router = APIRouter()
@@ -193,22 +195,69 @@ def generate(
     return Resp(data=result)
 
 
+@api_router.post("/compose/preview")
+def compose_preview(
+    body: ComposePreviewIn,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """A台预览（V4 P0-B）：导演稿 + 结构化提示词 + 图片角色 + 费用预估。
+    **不调用火山、不扣费**；结果落 director_plans 供正式 compose 复用。"""
+    try:
+        data = compose_preview_service.build_preview(
+            db, user["tenant_id"], user.get("phone"), body.prompt, body.image_file_ids,
+            body.style, body.ratio, body.duration, body.resolution,
+        )
+    except ImageAccessError as e:
+        return Resp(code=2002, message=str(e))
+    return Resp(data=data)
+
+
 @api_router.post("/compose")
 def compose(
     body: ComposeIn,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(get_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> Resp:
-    """B6：长视频一次成型——切多段→生成→FFmpeg拼接→输出完整成片（异步，返回 task_id）。"""
+    """A台一键成片（V4 P0-B 受控）：require_auth + ENABLE_COMPOSE + 费用确认 + 导演稿 + 预扣费 才真生成。"""
+    # RISK-1 熔断锁：未解锁 → 不提交火山
+    if not settings.enable_compose:
+        return Resp(code=4031, message="生成通道维护中，暂不可用。")
+    # 必须用户已确认费用
+    if not body.confirmed_cost:
+        return Resp(code=2001, message="请先确认生成费用后再提交。")
+
+    tenant_id = user["tenant_id"]
+    # 导演稿：优先用 preview 产出的 director_plan_id；否则需 prompt 现场生成
+    plan = None
+    if body.director_plan_id:
+        plan = compose_preview_service.get_plan(db, tenant_id, body.director_plan_id)
+        if plan is None:
+            return Resp(code=3001, message="导演稿不存在或不属于当前租户，请重新预览。")
+    elif not body.prompt:
+        return Resp(code=2001, message="缺少 director_plan_id 或 prompt，请先调用 /api/compose/preview。")
+    else:
+        # 现场生成导演稿（仍校验图片可访问）
+        try:
+            preview = compose_preview_service.build_preview(
+                db, tenant_id, user.get("phone"), body.prompt, body.image_file_ids,
+                body.style, body.ratio, body.total_seconds, body.resolution,
+            )
+        except ImageAccessError as e:
+            return Resp(code=2002, message=str(e))
+        plan = compose_preview_service.get_plan(db, tenant_id, preview["director_plan_id"])
+
     try:
         task = orchestrator.submit_compose(
-            db, tenant_id, body.prompt, body.total_seconds, body.resolution, body.title
+            db, tenant_id, plan.prompt or body.prompt, plan.duration_seconds,
+            plan.resolution, plan.prompt, director_plan_id=plan.id, phone=user.get("phone"),
         )
     except QuotaExceeded as e:
         return Resp(code=4029, message=str(e))
-    bg.add_task(execute_task, task.id)
-    return Resp(data={"task_id": task.id})
+    # BUG-1：compose 用独立线程派发（不阻塞 uvicorn 线程池）；runner 内有 task 锁防重复
+    dispatch_compose(task.id)
+    return Resp(data={"task_id": task.id, "director_plan_id": plan.id})
 
 
 @api_router.get("/stores")

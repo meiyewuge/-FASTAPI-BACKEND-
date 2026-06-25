@@ -215,15 +215,19 @@ def plan_from_intent(db: Session, tenant_id: str, text: str, phone: str | None =
 def submit_compose(
     db: Session, tenant_id: str, prompt: str, total_seconds: int = 30,
     resolution: str = "720p", title: str | None = None,
+    director_plan_id: str | None = None, phone: str | None = None,
 ) -> Task:
-    """B6：投递长视频「一次成型」任务（多段拼接）。"""
+    """A台一键成片：投递 compose 任务（多段拼接）。V4 P0-B 携带 director_plan_id。"""
     from a_engine.video_composer import plan_segments
 
     n = len(plan_segments(total_seconds))
     cost_engine.ensure_budget(db, tenant_id, "video.generate.a", n)
+    # Patch5：A台扣减试用额度
+    subscription_service.consume_trial(db, tenant_id)
     return video_task.create_task(
         db, tenant_id, "compose",
-        {"prompt": prompt, "total_seconds": total_seconds, "resolution": resolution, "title": title},
+        {"prompt": prompt, "total_seconds": total_seconds, "resolution": resolution,
+         "title": title, "director_plan_id": director_plan_id, "phone": phone},
     )
 
 

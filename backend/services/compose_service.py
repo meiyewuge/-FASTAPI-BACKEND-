@@ -18,21 +18,56 @@ import cost_engine
 from a_engine.generator import generate_mother_video
 from a_engine.video_composer import compose_long_video
 from config import settings
-from models import Video
+from models import DirectorPlan, Task, Video
 from utils import video_cover, video_storage
 
 
 def run(db: Session, tenant_id: str, task_id: str, payload: dict) -> dict:
+    # RISK-1 防御纵深：即便绕过路由，引擎层也拒绝未解锁的真生成
+    if not settings.enable_compose:
+        raise RuntimeError("生成通道维护中，暂不可用。")
+
     prompt = payload["prompt"]
     total_seconds = int(payload.get("total_seconds", 30))
     resolution = payload.get("resolution", "720p")
     store_id = payload.get("store_id")
+    phone = payload.get("phone")
+
+    # V4 P0-B：导演稿 → content[]（含图片 role）+ generate_audio
+    director_content = None
+    plan = None
+    if payload.get("director_plan_id"):
+        plan = db.get(DirectorPlan, payload["director_plan_id"])
+        if plan and plan.seedance_text_prompt:
+            director_content = json.loads(plan.image_roles_json or "[]")
 
     tmp = tempfile.mkdtemp()
     seg_meta: list[dict] = []
 
     def seg_gen(tid: str, seg_prompt: str, seconds: int, res: str) -> str:
-        data = generate_mother_video(tid, seg_prompt, duration=seconds, resolution=res)
+        # 同一套参考图锚定所有段：每段 content = 段文案 text + 导演稿图片 roles
+        content = None
+        if director_content:
+            content = [{"type": "text", "text": seg_prompt}] + [
+                {"type": "image_url", "image_url": {"url": r["url"]}, "role": r["role"]}
+                for r in director_content if r.get("url")
+            ]
+        data = generate_mother_video(
+            tid, seg_prompt, duration=seconds, resolution=res,
+            content=content, generate_audio=settings.compose_generate_audio,
+            ratio=settings.compose_ratio,
+        )
+        # BUG-2：拿到 provider_job_id 立即预扣费 + 持久化（恢复防重复 submit）
+        job_id = data["meta"].get("provider_task_id")
+        if job_id:
+            t = db.get(Task, task_id)
+            if t is not None and not t.provider_job_id:
+                t.provider_job_id = job_id
+            cost_engine.cost_ledger.precharge(
+                db, tenant_id, task_id, job_id, "compose", seconds, res,
+                model=settings.volc_model, user_phone=phone,
+            )
+            db.flush()
         path = os.path.join(tmp, f"seg_{len(seg_meta)}.mp4")
         video_storage.download_to(data["url"], path)
         seg_meta.append({

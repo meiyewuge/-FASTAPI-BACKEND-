@@ -12,9 +12,10 @@
 """
 
 from .policy import QuotaExceeded, ensure_budget, get_or_create_tenant
-from .pricing_model import price, unit_price
+from .pricing_model import price, unit_price, estimate_cost
 from .billing import record
 from .ledger import by_provider, by_store, get_spend, summary
+from . import cost_ledger
 
 __all__ = [
     "QuotaExceeded",
@@ -22,9 +23,11 @@ __all__ = [
     "get_or_create_tenant",
     "price",
     "unit_price",
+    "estimate_cost",
     "record",
     "get_spend",
     "summary",
     "by_store",
     "by_provider",
+    "cost_ledger",
 ]

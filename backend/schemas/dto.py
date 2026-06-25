@@ -93,13 +93,29 @@ class IntentIn(BaseModel):
     text: str = Field(..., min_length=1, description="自然语言需求，如：帮我做10个广州美容院抗衰视频")
 
 
-class ComposeIn(BaseModel):
-    """B6：长视频一次成型（多段拼接）。"""
+class ComposePreviewIn(BaseModel):
+    """A台 compose 预览（V4 P0-B）：不调火山、不扣费，产出导演稿。"""
 
-    prompt: str = Field(..., min_length=1)
-    total_seconds: int = Field(30, ge=5, le=180, description="总时长(秒)，内部切≤15s 多段拼接")
-    resolution: str = Field("720p", description="480p/720p/1080p")
+    prompt: str = Field(..., min_length=1, description="大白话文案")
+    image_file_ids: Optional[list[str]] = Field(None, description="1-9 张图片 file_id")
+    style: str = Field("premium", description="premium | fresh | chinese")
+    ratio: str = Field("9:16", description="画幅，默认竖版")
+    duration: int = Field(15, ge=4, le=60, description="总时长(秒)")
+    resolution: str = Field("1080p", description="480p/720p/1080p")
+
+
+class ComposeIn(BaseModel):
+    """A台一键成片（多段15s→拼接）。V4 P0-B：需先 preview 拿 director_plan_id + 费用确认。"""
+
+    prompt: Optional[str] = Field(None, description="大白话文案（无 director_plan_id 时必填）")
+    director_plan_id: Optional[str] = Field(None, description="来自 /compose/preview")
+    image_file_ids: Optional[list[str]] = None
+    style: str = Field("premium")
+    ratio: str = Field("9:16")
+    total_seconds: int = Field(15, ge=4, le=60, description="总时长(秒)，内部切≤15s 多段拼接")
+    resolution: str = Field("1080p", description="480p/720p/1080p")
     title: Optional[str] = None
+    confirmed_cost: bool = Field(False, description="必须 true（用户已确认费用）才真生成")
 
 
 class AGenerateIn(BaseModel):
