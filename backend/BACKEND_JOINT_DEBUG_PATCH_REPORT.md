@@ -12,7 +12,8 @@
 | Patch4 | `107185e` | 访问卡控第一阶段：邀约码 + JWT 鉴权 |
 | Patch4.1 | （已提交） | 邀约码可重复登录修正（专属登录码绑定手机号） |
 | Patch5 | `0017995` | 订阅/试用字段（暂不接支付） |
-| Patch6 | （本次新增） | 管理员身份与发码权限体系（super_admin / invite_admin / user） |
+| Patch6 | `553ea13` | 管理员身份与发码权限体系（super_admin / invite_admin / user） |
+| V4 P0 | `7184bbd` | 页面重构后端：批量上传 / 上传视频进陈列面 / 批量裂变 / 临时存储与自动清理（详见 `BACKEND_V4_PAGE_REDESIGN_P0_REPORT.md`） |
 
 合计：20 files changed, 826 insertions(+), 24 deletions(-)。
 
