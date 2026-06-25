@@ -1,26 +1,36 @@
 /**
- * 工作台 — V4 P1 单框工作流（Manus 风格）
- * 三区块：操作对话框 → 母视频/源视频陈列面 → 裂变视频陈列面
+ * 工作台 — V4 P0-B + P1 单框工作流
  *
- * P1 核心改动：
- *  - current_source_video_ids 会话源池（上传/A台产出自动加入）
- *  - B台按钮读 duration_seconds >= 30 硬门槛（≥3 合格源才可用）
- *  - A台主入口 POST /api/compose + 费用确认弹窗
- *  - B台 P1 标准请求体 source_video_ids + auto_ratio + max_outputs
- *  - 删除：文本入口、蓝色上传素材按钮、勾选确认流程
+ * 依据：FRONTEND_V4_CURRENT_API_CONTRACT.md（唯一接口真源）
+ *
+ * A台流程：prompt + 图片 + 风格 → POST /compose/preview → 展示导演稿 → 确认 → POST /compose
+ * B台流程：current_source_video_ids → duration_seconds >= 30 门槛 → POST /b/batch-generate → 轮询
+ *
+ * 核心特性：
+ *  - compose preview（不花钱、不调火山）→ 导演分镜 + image_roles + seedance_text_prompt + estimated_cost
+ *  - 图片 role 自动分配（第1张=首帧，2-9张=参考图）+ 拖拽排序
+ *  - localStorage 草稿恢复（debounce 500ms）
+ *  - 4031 熔断锁 → 按钮置灰 + 文案
+ *  - 2002 图片不可访问 → 明确提示
+ *  - current_source_video_ids 会话源池
+ *  - B台 duration_seconds >= 30 硬门槛（≥3 合格源才可用）
+ *  - Patch6 权限不破坏
  */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   listVideos, refreshVideoUrl, stableDownload, costSummary,
   strategies as fetchStrategies, batchUpload,
   batchGenerate, pollBatchStatus, deleteVideo, storageStatus,
-  trackEvent, videoFeedback, compose, pollTask,
+  trackEvent, videoFeedback, composePreview, compose, pollTask,
   getTenant, clearAuth, getToken,
   isAdmin, isSuperAdmin, getUserProfile, fetchMe,
   type VideoItem, type CostSummary, type StrategyItem,
   type BatchStatus, type StorageStatus, type TaskData,
+  type ComposePreviewResult, type StoryboardItem, type ImageRoleItem,
 } from "../api/client";
+
+const LS_DRAFT_KEY = "v4_compose_draft";
 
 function fmtDuration(s?: number | null) {
   if (s == null) return "时长未知";
@@ -33,7 +43,7 @@ function fmtSize(bytes?: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// ====================== 上传文件本地类型 ======================
+// ====================== 本地类型 ======================
 interface LocalFile {
   id: string;
   file: File;
@@ -46,6 +56,36 @@ interface LocalFile {
   error?: string;
 }
 
+interface UploadedImage {
+  fileId: number;
+  fileName: string;
+  previewUrl: string; // local blob URL for display
+}
+
+// ====================== 草稿序列化 ======================
+interface ComposeDraft {
+  prompt: string;
+  imageFileIds: number[];
+  style: string;
+  ratio: string;
+  duration: number;
+  resolution: string;
+}
+
+function saveDraft(d: ComposeDraft) {
+  try { localStorage.setItem(LS_DRAFT_KEY, JSON.stringify(d)); } catch { /* ignore */ }
+}
+function loadDraft(): ComposeDraft | null {
+  try {
+    const raw = localStorage.getItem(LS_DRAFT_KEY);
+    return raw ? JSON.parse(raw) as ComposeDraft : null;
+  } catch { return null; }
+}
+function clearDraft() {
+  try { localStorage.removeItem(LS_DRAFT_KEY); } catch { /* ignore */ }
+}
+
+// ====================== 组件 ======================
 export default function Workbench() {
   const navigate = useNavigate();
 
@@ -62,6 +102,26 @@ export default function Workbench() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
+  // ---- 图片管理（role 排序）----
+  const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
+  const [dragImageIdx, setDragImageIdx] = useState<number | null>(null);
+
+  // ---- A台配置 ----
+  const [aStyle, setAStyle] = useState("premium");
+  const [aRatio, setARatio] = useState("9:16");
+  const [aDuration, setADuration] = useState(15);
+  const [aResolution, setAResolution] = useState("1080p");
+
+  // ---- A台 Preview ----
+  const [previewResult, setPreviewResult] = useState<ComposePreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [promptExpanded, setPromptExpanded] = useState(false);
+
+  // ---- A台 Compose ----
+  const [composeRunning, setComposeRunning] = useState(false);
+  const [composeProgress, setComposeProgress] = useState("");
+  const [composeMaintenance, setComposeMaintenance] = useState(false); // 4031 维护态
+
   // ---- 母视频 / 源视频 ----
   const [motherVideos, setMotherVideos] = useState<VideoItem[]>([]);
   const [motherTotal, setMotherTotal] = useState(0);
@@ -72,35 +132,30 @@ export default function Workbench() {
   const [viralTotal, setViralTotal] = useState(0);
   const [viralPage, setViralPage] = useState(1);
 
-  // ---- P1: 本次会话源视频池 ----
+  // ---- B台会话源视频池 ----
   const [currentSourceVideoIds, setCurrentSourceVideoIds] = useState<number[]>([]);
-
-  // ---- P1: A台 compose 状态 ----
-  const [composeRunning, setComposeRunning] = useState(false);
-  const [composeProgress, setComposeProgress] = useState("");
-
-  // ---- P1: B台裂变状态 ----
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null);
   const [batchIgnored, setBatchIgnored] = useState<number[]>([]);
-  const batchPollRef = useRef(false);
 
-  // ---- 反馈弹出菜单 ----
+  // ---- 反馈 / 下载 ----
   const [feedbackOpen, setFeedbackOpen] = useState<number | null>(null);
-
-  // ---- 下载状态 ----
   type DLState = "waiting" | "downloading" | "done" | "error";
   const [dlStates, setDlStates] = useState<Record<number, DLState>>({});
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
   const PAGE_SIZE = 50;
   const viralRef = useRef<HTMLElement>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ---- P1: 合格源视频计算（duration_seconds >= 30） ----
-  const qualifiedSources = currentSourceVideoIds.filter(id => {
-    const v = motherVideos.find(m => m.video_id === id);
-    return v && v.duration_seconds != null && v.duration_seconds >= 30;
-  });
+  // ---- 合格源计算（duration_seconds >= 30） ----
+  const qualifiedSources = useMemo(() =>
+    currentSourceVideoIds.filter(id => {
+      const v = motherVideos.find(m => m.video_id === id);
+      return v && v.duration_seconds != null && v.duration_seconds >= 30;
+    }),
+    [currentSourceVideoIds, motherVideos],
+  );
   const qualifiedCount = qualifiedSources.length;
   const estimatedOutputs = qualifiedCount >= 5 ? 50 : qualifiedCount * 10;
   const bEnabled = qualifiedCount >= 3 && !batchRunning && !composeRunning;
@@ -117,6 +172,38 @@ export default function Workbench() {
   useEffect(() => {
     if (!getUserProfile() && getToken()) fetchMe();
   }, []);
+
+  // ---- 草稿恢复 ----
+  useEffect(() => {
+    const d = loadDraft();
+    if (d) {
+      setPrompt(d.prompt || "");
+      setAStyle(d.style || "premium");
+      setARatio(d.ratio || "9:16");
+      setADuration(d.duration || 15);
+      setAResolution(d.resolution || "1080p");
+      // imageFileIds 恢复：如果上传的图片还在 localStorage 里则恢复
+      // （注意：blob URL 失效，只显示 fileId）
+      if (d.imageFileIds?.length) {
+        setUploadedImages(d.imageFileIds.map(fid => ({
+          fileId: fid, fileName: `图片 #${fid}`, previewUrl: "",
+        })));
+      }
+    }
+  }, []);
+
+  // ---- 草稿自动保存（debounce 500ms）----
+  useEffect(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      saveDraft({
+        prompt,
+        imageFileIds: uploadedImages.map(i => i.fileId),
+        style: aStyle, ratio: aRatio, duration: aDuration, resolution: aResolution,
+      });
+    }, 500);
+    return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); };
+  }, [prompt, uploadedImages, aStyle, aRatio, aDuration, aResolution]);
 
   // ---- 加载仪表盘 ----
   const loadDashboard = useCallback(async () => {
@@ -140,7 +227,7 @@ export default function Workbench() {
   useEffect(() => { loadMother(motherPage); }, [motherPage, loadMother]);
   useEffect(() => { loadViral(viralPage); }, [viralPage, loadViral]);
 
-  // ===================== 上传处理（自动上传，无蓝色按钮）=====================
+  // ===================== 上传（自动上传，图片追踪 fileId）=====================
   const handleFilesSelected = async (files: FileList | null, type: "image" | "video" | "file") => {
     if (!files) return;
     const maxCounts = { image: 10, video: 10, file: 10 };
@@ -153,7 +240,6 @@ export default function Workbench() {
       id: `${Date.now()}-${i}`, file: f, type, status: "pending" as const,
     }));
     setLocalFiles(prev => [...prev, ...newFiles]);
-    // P1: 自动上传
     await doUpload([...newFiles], type);
   };
 
@@ -173,12 +259,26 @@ export default function Workbench() {
       const uploaded = r.data.uploaded || [];
       const failed = r.data.failed || [];
 
-      // P1: 上传视频成功 → 把 video_id 加入 current_source_video_ids
+      // 视频 → video_id 加入源池
       if (type === "video") {
         const newIds = uploaded.filter(u => u.video_id != null).map(u => u.video_id!);
-        if (newIds.length > 0) {
-          setCurrentSourceVideoIds(prev => [...prev, ...newIds]);
-        }
+        if (newIds.length > 0) setCurrentSourceVideoIds(prev => [...prev, ...newIds]);
+      }
+
+      // 图片 → 追踪 fileId + previewUrl（用于 A台 preview 的 image_file_ids）
+      if (type === "image") {
+        const newImages: UploadedImage[] = [];
+        files.forEach((f, idx) => {
+          const item = uploaded[idx];
+          if (item && item.status !== "failed" && item.file_id) {
+            newImages.push({
+              fileId: item.file_id,
+              fileName: f.file.name,
+              previewUrl: URL.createObjectURL(f.file),
+            });
+          }
+        });
+        if (newImages.length > 0) setUploadedImages(prev => [...prev, ...newImages]);
       }
 
       setLocalFiles(prev => prev.map(f => {
@@ -205,58 +305,115 @@ export default function Workbench() {
     loadDashboard();
   };
 
-  // ===================== A台 compose（P1 主入口）=====================
-  const handleAConfirm = async () => {
+  // ===================== 图片拖拽排序（role 自动更新）=====================
+  const handleImageDragStart = (idx: number) => setDragImageIdx(idx);
+  const handleImageDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    if (dragImageIdx === null || dragImageIdx === idx) return;
+    setUploadedImages(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(dragImageIdx, 1);
+      next.splice(idx, 0, moved);
+      return next;
+    });
+    setDragImageIdx(idx);
+  };
+  const handleImageDragEnd = () => setDragImageIdx(null);
+  const removeImage = (idx: number) => {
+    setUploadedImages(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  // ===================== A台 Preview =====================
+  const handlePreview = async () => {
     if (!prompt.trim()) { showToast("请先描述需求"); return; }
+    setPreviewLoading(true);
+    setPreviewResult(null);
+    trackEvent("preview", { prompt: prompt.slice(0, 50) });
+
+    const imageFileIds = uploadedImages.map(img => img.fileId);
+    const r = await composePreview(prompt, imageFileIds.length ? imageFileIds : undefined, aStyle, aRatio, aDuration, aResolution);
+
+    setPreviewLoading(false);
+    if (r.code === 0 && r.data) {
+      setPreviewResult(r.data);
+    } else if (r.code === 2002) {
+      showToast("图片无法被视频模型访问，请重新上传或等待处理完成。");
+    } else {
+      showToast(r.message || "预览失败");
+    }
+  };
+
+  // ===================== A台 Compose（确认后生成）=====================
+  const handleComposeConfirm = async () => {
+    if (!previewResult?.director_plan_id) { showToast("请先预览导演稿"); return; }
+    const est = previewResult.estimated_cost;
+    const ok = window.confirm(`本次生成预计消耗 ¥${est.toFixed(2)}（以实际扣费为准）。确认继续吗？`);
+    if (!ok) return;
+
     setComposeRunning(true);
     setComposeProgress("正在提交生成任务…");
-    trackEvent("send_to_a", { prompt: prompt.slice(0, 50) });
+    trackEvent("send_to_a", { prompt: prompt.slice(0, 50), plan_id: previewResult.director_plan_id });
 
-    const r = await compose(prompt, 60, "1080p");
+    const r = await compose(previewResult.director_plan_id, true, previewResult.duration);
+
     if (r.code === 0 && r.data?.task_id) {
+      clearDraft(); // 提交成功清除草稿
       setComposeProgress("正在生成母视频…");
       pollTask(r.data.task_id, (d: TaskData) => {
-        if (d.status === "running") setComposeProgress(`正在生成中… (${Math.round((d.progress || 0) * 100)}%)`);
-        if (d.status === "done") setComposeProgress("正在拼接…");
+        if (d.status === "running") setComposeProgress(`生成中… ${Math.round((d.progress || 0) * 100)}%`);
+        if (d.status === "done") setComposeProgress("拼接中…");
       }).then((final) => {
         setComposeRunning(false);
         setComposeProgress("");
         if (final.data?.status === "done") {
-          // P1: A台生成母视频后 → 把新 video_id 加入 current_source_video_ids
-          const resultVideos = final.data.result?.videos || [];
-          const newIds = resultVideos.filter(v => v.video_id).map(v => v.video_id);
+          const vids = final.data.result?.videos || [];
+          const newIds = vids.filter(v => v.video_id).map(v => v.video_id);
           if (newIds.length > 0) setCurrentSourceVideoIds(prev => [...prev, ...newIds]);
           showToast("母视频已生成");
+          setPreviewResult(null);
           loadMother(1);
           loadDashboard();
         } else {
-          const errMsg = final.data?.error || final.message || "生成失败";
-          if (final.code === 4029) showToast("余额不足，请联系管理员充值");
-          else showToast(errMsg);
+          const err = final.data?.error || final.message || "生成失败";
+          if (final.code === 4029) showToast("额度不足，请联系管理员充值或开通。");
+          else showToast(err);
         }
       });
+    } else if (r.code === 4031) {
+      setComposeRunning(false);
+      setComposeProgress("");
+      setComposeMaintenance(true);
+      showToast("生成通道维护中，暂不可用。");
+    } else if (r.code === 4029) {
+      setComposeRunning(false);
+      setComposeProgress("");
+      showToast("额度不足，请联系管理员充值或开通。");
+    } else if (r.code === 3001) {
+      setComposeRunning(false);
+      setComposeProgress("");
+      showToast("导演稿已过期，请重新预览。");
+      setPreviewResult(null);
+    } else if (r.code === 2002) {
+      setComposeRunning(false);
+      setComposeProgress("");
+      showToast("图片无法被视频模型访问，请重新上传或等待处理完成。");
     } else {
       setComposeRunning(false);
       setComposeProgress("");
-      if (r.code === 4029) showToast("余额不足，请联系管理员充值");
-      else showToast(r.message || "提交生成失败");
+      showToast(r.message || "提交生成失败");
     }
   };
 
-  // ===================== B台裂变（P1 自动选源 + 1:10）=====================
+  // ===================== B台裂变 =====================
   const handleBClick = async () => {
     if (qualifiedCount < 3) {
-      // 门槛不足弹窗
-      const maxDuration = motherVideos.reduce((max, v) => {
-        const d = v.duration_seconds;
-        return d != null && d > max ? d : max;
+      const maxD = motherVideos.reduce((m, v) => {
+        const d = v.duration_seconds; return d != null && d > m ? d : m;
       }, 0);
-      showToast(`暂无法裂变。请至少上传3个时长30秒以上的视频。当前：${currentSourceVideoIds.length}个视频，最长${Math.round(maxDuration)}秒`);
+      showToast(`请至少上传3个时长30秒以上的视频。当前：${currentSourceVideoIds.length}个视频，最长${Math.round(maxD)}秒`);
       return;
     }
-
-    const sourceIds = qualifiedSources.slice(0, 5); // 最多取前5个
-    const totalOutputs = sourceIds.length * 10;
+    const sourceIds = qualifiedSources.slice(0, 5);
     setBatchRunning(true);
     setBatchStatus(null);
     setBatchIgnored([]);
@@ -265,30 +422,21 @@ export default function Workbench() {
     const r = await batchGenerate(sourceIds, prompt || undefined);
     if (r.code === 0 && r.data) {
       const { batch_id, ignored_source_video_ids } = r.data;
-      if (ignored_source_video_ids && ignored_source_video_ids.length > 0) {
+      if (ignored_source_video_ids?.length) {
         setBatchIgnored(ignored_source_video_ids);
-        showToast(`本次仅使用前5个合格源视频，${ignored_source_video_ids.length}个未参与`);
+        showToast(`部分视频未参与本轮裂变，本轮最多使用5个合格源视频`);
       }
-      showToast(`裂变任务已提交，正在裂变…`);
-      batchPollRef.current = true;
-
-      pollBatchStatus(batch_id, (d) => {
-        setBatchStatus(d);
-      }).then((final) => {
-        batchPollRef.current = false;
+      showToast(`裂变任务已提交…`);
+      pollBatchStatus(batch_id, (d) => setBatchStatus(d)).then((final) => {
         setBatchRunning(false);
         if (final.data?.status === "done") {
-          const completed = final.data.completed || 0;
-          const failed = final.data.failed || 0;
-          showToast(failed > 0 ? `部分裂变失败，已成功 ${completed} 条` : `裂变完成！产出 ${completed} 条`);
-          // P1: 刷新裂变陈列面 + 自动滚动
+          const c = final.data.completed || 0, f = final.data.failed || 0;
+          showToast(f > 0 ? `部分失败，成功 ${c} 条` : `裂变完成！${c} 条`);
           loadViral(1, batch_id);
           loadDashboard();
-          setTimeout(() => {
-            viralRef.current?.scrollIntoView({ behavior: "smooth" });
-          }, 300);
+          setTimeout(() => viralRef.current?.scrollIntoView({ behavior: "smooth" }), 300);
         } else {
-          showToast(`裂变任务结束: ${final.data?.status || "未知状态"}`);
+          showToast(`裂变结束: ${final.data?.status || "未知"}`);
         }
       });
     } else {
@@ -300,10 +448,8 @@ export default function Workbench() {
   // ===================== 视频操作 =====================
   const handlePlay = (v: VideoItem) => {
     trackEvent("play", { video_id: v.video_id });
-    if (v.download_url) window.open(v.download_url, "_blank");
-    else if (v.share_url) window.open(v.share_url, "_blank");
+    window.open(v.download_url || v.share_url, "_blank");
   };
-
   const handleDownload = async (v: VideoItem) => {
     if (!v.download_url) { showToast("暂无下载链接"); return; }
     trackEvent("download", { video_id: v.video_id });
@@ -313,32 +459,28 @@ export default function Workbench() {
     if (!r.ok) showToast(r.error || "下载失败");
     setTimeout(() => setDlStates(p => { const n = { ...p }; delete n[v.video_id]; return n; }), 3000);
   };
-
   const handleDelete = async (v: VideoItem) => {
     if (!confirm(`确认删除视频 #${v.video_id}？此操作不可恢复。`)) return;
     const r = await deleteVideo(v.video_id);
     if (r.code === 0) {
       trackEvent("delete", { video_id: v.video_id });
       showToast(`视频 #${v.video_id} 已删除`);
-      if (v.type === "viral") loadViral(viralPage);
-      else loadMother(motherPage);
+      if (v.type === "viral") loadViral(viralPage); else loadMother(motherPage);
       loadDashboard();
-      // 从 current_source_video_ids 中移除
       setCurrentSourceVideoIds(prev => prev.filter(id => id !== v.video_id));
     } else {
       showToast(r.code === 403 ? "无权删除其他租户的视频" : (r.message || "删除失败"));
     }
   };
-
   const handleFeedback = async (videoId: number, rating: "good" | "bad") => {
     setFeedbackOpen(null);
     const note = rating === "bad" ? (window.prompt("输入备注（可选）:") || undefined) : undefined;
     const r = await videoFeedback(videoId, rating, undefined, note);
-    if (r.code === 0) showToast("加入候选池，待审核");
+    if (r.code === 0) showToast("已加入候选池，待审核");
     else showToast(r.message || "反馈提交失败，请重试");
   };
 
-  // ===================== 汇总统计 =====================
+  // ===================== 汇总 =====================
   const imageFiles = localFiles.filter(f => f.type === "image");
   const videoFiles = localFiles.filter(f => f.type === "video");
   const docFiles = localFiles.filter(f => f.type === "file");
@@ -395,13 +537,13 @@ export default function Workbench() {
         <h2>我能为你做什么？</h2>
         <textarea
           className="wf-prompt"
-          placeholder="描述你的需求，上传素材，开始创作…"
+          placeholder="描述你的需求，例如：达芙荻丽奢华油，夏季干皮上妆卡粉救星，99%天然植萃…"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
         />
 
-        {/* P1: 上传区（图片/文件/视频，无文本入口） */}
+        {/* 上传区 */}
         <div className="upload-zone">
           <label className="upload-btn">
             🖼️ 图片
@@ -426,18 +568,16 @@ export default function Workbench() {
             {imageFiles.length > 0 && <span className="upload-summary-item">🖼️ 图片 x{imageFiles.length}</span>}
             {docFiles.length > 0 && <><span className="upload-summary-sep">/</span><span className="upload-summary-item">📁 文件 x{docFiles.length}</span></>}
             {videoFiles.length > 0 && <><span className="upload-summary-sep">/</span><span className="upload-summary-item">🎬 视频 x{videoFiles.length}</span></>}
-            <span className="upload-summary-link" onClick={() => setLocalFiles([])}>清除全部</span>
+            <span className="upload-summary-link" onClick={() => { setLocalFiles([]); setUploadedImages([]); }}>清除全部</span>
           </div>
         )}
 
-        {/* 上传缩略图 */}
-        {localFiles.length > 0 && (
+        {/* 上传缩略图（非图片） */}
+        {localFiles.filter(f => f.type !== "image").length > 0 && (
           <div className="upload-thumbs">
-            {localFiles.map(f => (
+            {localFiles.filter(f => f.type !== "image").map(f => (
               <div key={f.id} className="upload-thumb">
-                {f.type === "image" ? (
-                  <img src={URL.createObjectURL(f.file)} alt={f.file.name} />
-                ) : f.type === "video" ? (
+                {f.type === "video" ? (
                   <video src={URL.createObjectURL(f.file)} muted />
                 ) : (
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 11, color: "#64748b", padding: 4, textAlign: "center" }}>
@@ -452,6 +592,40 @@ export default function Workbench() {
           </div>
         )}
 
+        {/* 图片角色排序区（拖拽调整顺序，role 自动更新） */}
+        {uploadedImages.length > 0 && (
+          <div className="image-role-section">
+            <div className="image-role-header">
+              <span>📸 已上传图片（拖拽调整顺序，第 1 张 = 首帧，其余 = 参考图）</span>
+              <span className="image-role-hint">角色自动分配</span>
+            </div>
+            <div className="image-role-list">
+              {uploadedImages.map((img, idx) => (
+                <div
+                  key={img.fileId}
+                  className={`image-role-card ${dragImageIdx === idx ? "dragging" : ""}`}
+                  draggable
+                  onDragStart={() => handleImageDragStart(idx)}
+                  onDragOver={(e) => handleImageDragOver(e, idx)}
+                  onDragEnd={handleImageDragEnd}
+                >
+                  <div className="image-role-thumb">
+                    {img.previewUrl ? <img src={img.previewUrl} alt={img.fileName} /> :
+                      <div className="image-role-placeholder">#{img.fileId}</div>}
+                  </div>
+                  <div className="image-role-info">
+                    <span className="image-role-name">{img.fileName}</span>
+                    <span className={`image-role-badge ${idx === 0 ? "role-first" : "role-ref"}`}>
+                      {idx === 0 ? "首帧" : "参考图"}
+                    </span>
+                  </div>
+                  <button className="image-role-remove" onClick={() => removeImage(idx)}>✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* 上传进度 */}
         {uploading && (
           <div className="upload-progress-bar">
@@ -459,12 +633,49 @@ export default function Workbench() {
           </div>
         )}
 
-        {/* P1: 操作按钮（仅 A台 + B台，无蓝色上传素材按钮） */}
+        {/* A台配置行 */}
+        <div className="compose-config">
+          <label>风格
+            <select value={aStyle} onChange={(e) => setAStyle(e.target.value)}>
+              <option value="premium">高端奢华</option>
+              <option value="fresh">清新自然</option>
+              <option value="chinese">东方美学</option>
+            </select>
+          </label>
+          <label>比例
+            <select value={aRatio} onChange={(e) => setARatio(e.target.value)}>
+              <option value="9:16">9:16 竖屏</option>
+              <option value="16:9">16:9 横屏</option>
+              <option value="1:1">1:1 方形</option>
+            </select>
+          </label>
+          <label>时长
+            <select value={aDuration} onChange={(e) => setADuration(Number(e.target.value))}>
+              <option value={15}>15 秒</option>
+              <option value={30}>30 秒</option>
+              <option value={60}>60 秒</option>
+            </select>
+          </label>
+          <label>分辨率
+            <select value={aResolution} onChange={(e) => setAResolution(e.target.value)}>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+            </select>
+          </label>
+        </div>
+
+        {/* 操作按钮 */}
         <div className="action-bar">
-          <button className="btn btn-a" onClick={handleAConfirm}
-            disabled={composeRunning || batchRunning || !online || !prompt.trim()}
-            title={prompt.trim() ? "A台母视频生成，会产生费用" : "请先描述需求"}>
-            🎬 A台·母视频（⚠️会产生费用）
+          <button className="btn btn-preview" onClick={handlePreview}
+            disabled={previewLoading || composeRunning || !online || !prompt.trim()}
+            title="预览导演稿（不花钱）">
+            {previewLoading ? "预览中…" : "🎬 预览导演稿"}
+          </button>
+          <button className={`btn btn-a ${composeMaintenance ? "btn-maintenance" : ""}`}
+            onClick={handleComposeConfirm}
+            disabled={!previewResult || composeRunning || batchRunning || !online || composeMaintenance}
+            title={composeMaintenance ? "生成通道维护中" : previewResult ? `确认生成（预计 ¥${previewResult.estimated_cost.toFixed(2)}）` : "请先预览导演稿"}>
+            {composeMaintenance ? "🔧 生成通道维护中" : "🎬 A台·生成母视频（⚠️ 会产生费用）"}
           </button>
           <button className="btn btn-b" onClick={handleBClick}
             disabled={!bEnabled || !online}
@@ -477,7 +688,107 @@ export default function Workbench() {
           </button>
         </div>
 
-        {/* P1: 裂变进度条 */}
+        {/* ===== Preview 展示面板 ===== */}
+        {previewResult && (
+          <div className="preview-panel">
+            <div className="preview-header">
+              <h3>🎬 导演稿预览</h3>
+              <span className="preview-plan-id">plan: {previewResult.director_plan_id}</span>
+            </div>
+
+            {/* Warnings */}
+            {previewResult.warnings?.length > 0 && (
+              <div className="preview-warnings">
+                {previewResult.warnings.map((w, i) => (
+                  <div key={i} className="preview-warning">⚠️ {w}</div>
+                ))}
+              </div>
+            )}
+
+            {/* 品牌上下文 */}
+            {previewResult.director_plan?.brand_context && (
+              <div className="preview-brand">
+                {previewResult.director_plan.brand_context.brand && (
+                  <span>品牌: <strong>{previewResult.director_plan.brand_context.brand}</strong></span>
+                )}
+                {previewResult.director_plan.brand_context.product && (
+                  <span>产品: {previewResult.director_plan.brand_context.product}</span>
+                )}
+                {previewResult.director_plan.brand_context.selling_points?.length ? (
+                  <span>卖点: {previewResult.director_plan.brand_context.selling_points.join("、")}</span>
+                ) : null}
+              </div>
+            )}
+
+            {/* 分镜卡片 */}
+            {previewResult.director_plan?.storyboard?.length > 0 && (
+              <div className="storyboard-section">
+                <h4>分镜</h4>
+                <div className="storyboard-list">
+                  {previewResult.director_plan.storyboard.map((shot: StoryboardItem) => (
+                    <div key={shot.index} className="storyboard-card">
+                      <div className="sb-header">
+                        <span className="sb-index">#{shot.index}</span>
+                        <span className="sb-timecode">{shot.timecode}</span>
+                      </div>
+                      <div className="sb-desc">{shot.description}</div>
+                      {shot.line && <div className="sb-line">🎙️ {shot.line}</div>}
+                      {shot.image_ref && <div className="sb-imgref">📷 {shot.image_ref}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 图片角色 */}
+            {previewResult.image_roles?.length > 0 && (
+              <div className="preview-image-roles">
+                <h4>图片角色</h4>
+                <div className="role-chips">
+                  {previewResult.image_roles.map((ir: ImageRoleItem, i: number) => (
+                    <span key={i} className={`role-chip ${ir.role === "first_frame" ? "role-first" : "role-ref"}`}>
+                      {ir.role === "first_frame" ? "首帧" : "参考图"} #{ir.file_id}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Seedance 提示词 */}
+            {previewResult.seedance_text_prompt && (
+              <div className="preview-seedance">
+                <h4 onClick={() => setPromptExpanded(!promptExpanded)} style={{ cursor: "pointer" }}>
+                  {promptExpanded ? "▼" : "▶"} Seedance 提示词（T1-T5）
+                </h4>
+                {promptExpanded && (
+                  <pre className="seedance-prompt">{previewResult.seedance_text_prompt}</pre>
+                )}
+              </div>
+            )}
+
+            {/* 费用预估 + 配置 */}
+            <div className="preview-footer">
+              <div className="preview-cost">
+                预估费用: <strong>¥{previewResult.estimated_cost.toFixed(2)}</strong>
+                <span className="preview-cost-hint">（以实际扣费为准）</span>
+              </div>
+              <div className="preview-config">
+                {previewResult.ratio} · {previewResult.resolution} · {previewResult.duration}s
+                {previewResult.generate_audio ? " · 含音频" : ""}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* A台生成进度 */}
+        {composeRunning && (
+          <div className="batch-progress">
+            <div className="batch-progress-header"><span>{composeProgress}</span></div>
+            <div className="progress-bar"><div className="progress-fill" style={{ width: "40%", animation: "load 1.4s infinite" }} /></div>
+          </div>
+        )}
+
+        {/* B台裂变进度 */}
         {batchRunning && batchStatus && (
           <div className="batch-progress">
             <div className="batch-progress-header">
@@ -498,20 +809,12 @@ export default function Workbench() {
           </div>
         )}
 
-        {/* P1: A台生成进度 */}
-        {composeRunning && (
-          <div className="batch-progress">
-            <div className="batch-progress-header"><span>{composeProgress}</span></div>
-            <div className="progress-bar"><div className="progress-fill" style={{ width: "40%", animation: "load 1.4s infinite" }} /></div>
-          </div>
-        )}
-
-        {/* P1: 源视频池状态（辅助信息） */}
+        {/* 源视频池状态 */}
         {currentSourceVideoIds.length > 0 && (
           <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
             会话源视频池: {currentSourceVideoIds.length} 个（合格 {qualifiedCount} 个）
             {qualifiedCount >= 5 && <span> · 本轮最多使用前5个合格视频，预计生成50条</span>}
-            {batchIgnored.length > 0 && <span style={{ color: "#f59e0b" }}> · 部分视频未参与本轮裂变，本轮最多使用5个合格源视频</span>}
+            {batchIgnored.length > 0 && <span style={{ color: "#f59e0b" }}> · 部分视频未参与本轮裂变</span>}
           </div>
         )}
       </section>
@@ -521,7 +824,6 @@ export default function Workbench() {
         <div className="gallery-header">
           <h3>母视频 / 源视频<span className="gallery-count">({motherTotal})</span></h3>
         </div>
-
         {motherVideos.length === 0 ? (
           <div className="empty-state">还没有母视频，上传视频或使用A台生成</div>
         ) : (
@@ -549,7 +851,7 @@ export default function Workbench() {
                 <div className="video-actions">
                   <button className="btn btn-sm" onClick={() => handlePlay(v)}>播放</button>
                   <button className="btn btn-sm" onClick={() => handleDownload(v)}
-                    title="浏览器将保存到你的电脑下载目录">{dlBtnText(v.video_id)}</button>
+                    title="浏览器将保存到下载目录">{dlBtnText(v.video_id)}</button>
                   <button className="btn btn-sm btn-error" onClick={() => handleDelete(v)}>删除</button>
                 </div>
               </div>
@@ -570,11 +872,9 @@ export default function Workbench() {
         <div className="gallery-header">
           <h3>裂变视频<span className="gallery-count">({viralTotal})</span></h3>
         </div>
-
         <div className="viral-notice">
           ⏰ 裂变视频服务器临时保留 5 天，请及时下载到本地。B台裂变 0 元。
         </div>
-
         {viralVideos.length === 0 ? (
           <div className="empty-state">还没有裂变视频，上传3个以上源视频后使用B台裂变</div>
         ) : (
@@ -604,7 +904,7 @@ export default function Workbench() {
                 <div className="video-actions">
                   <button className="btn btn-sm" onClick={() => handlePlay(v)}>播放</button>
                   <button className="btn btn-sm" onClick={() => handleDownload(v)}
-                    title="浏览器将保存到你的电脑下载目录">{dlBtnText(v.video_id)}</button>
+                    title="浏览器将保存到下载目录">{dlBtnText(v.video_id)}</button>
                   <button className="btn btn-sm btn-error" onClick={() => handleDelete(v)}>删除</button>
                   <div className="feedback-menu">
                     <button className="btn btn-sm" onClick={() => setFeedbackOpen(feedbackOpen === v.video_id ? null : v.video_id)}>反馈 ▾</button>

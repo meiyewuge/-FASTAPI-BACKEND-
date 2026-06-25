@@ -82,6 +82,44 @@ export interface TaskData {
   result: { videos: VideoItem[] } | null;
 }
 
+// ---- A台 Preview 类型（P0-B Director-Prompt Engine）----
+export interface StoryboardItem {
+  index: number;
+  timecode: string;
+  description: string;
+  line?: string;
+  image_ref?: string;
+}
+
+export interface ImageRoleItem {
+  file_id: number | string;
+  role: "first_frame" | "reference_image";
+  url: string;
+}
+
+export interface ComposePreviewResult {
+  director_plan_id: string;
+  director_plan: {
+    brand_context: {
+      brand?: string;
+      product?: string;
+      selling_points?: string[];
+      slogan?: string;
+    };
+    storyboard: StoryboardItem[];
+    versions?: Record<string, string>;
+  };
+  seedance_text_prompt: string;
+  seedance_content?: { type: string; text?: string; image_url?: { url: string }; role?: string }[];
+  image_roles: ImageRoleItem[];
+  estimated_cost: number;
+  ratio: string;
+  resolution: string;
+  duration: number;
+  generate_audio: boolean;
+  warnings: string[];
+}
+
 export interface CostSummary {
   tenant_id: string;
   quota: number;
@@ -196,9 +234,42 @@ export const bGenerate = (
     source_video_id: sourceVideoId, count, strategy, prompt,
   });
 
-export const compose = (prompt: string, totalSeconds = 30, resolution = "720p", title?: string) =>
-  post<{ task_id: string }>("/compose", {
-    prompt, total_seconds: totalSeconds, resolution, title,
+/**
+ * A台 Director-Prompt 预览 — POST /compose/preview
+ * 不调火山、不扣费。返回导演分镜 + 提示词 + 图片角色 + 费用预估。
+ */
+export const composePreview = (
+  prompt: string,
+  imageFileIds?: number[],
+  style = "premium",
+  ratio = "9:16",
+  duration = 15,
+  resolution = "1080p",
+) =>
+  post<ComposePreviewResult>("/compose/preview", {
+    prompt,
+    image_file_ids: imageFileIds?.length ? imageFileIds : undefined,
+    style,
+    ratio,
+    duration,
+    resolution,
+  });
+
+/**
+ * A台正式生成 — POST /compose
+ * 必须先 preview 拿 director_plan_id，带 confirmed_cost 确认。
+ * 返回 { task_id, director_plan_id }，轮询 GET /tasks/{task_id}。
+ * 错误码：4031 熔断锁 / 4029 余额不足 / 2002 图片不可访问 / 3001 plan过期
+ */
+export const compose = (
+  directorPlanId: string,
+  confirmedCost: true,
+  totalSeconds?: number,
+) =>
+  post<{ task_id: string; director_plan_id: string }>("/compose", {
+    director_plan_id: directorPlanId,
+    confirmed_cost: confirmedCost,
+    total_seconds: totalSeconds,
   });
 
 export const strategies = () =>
