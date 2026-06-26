@@ -90,5 +90,15 @@ class Settings(BaseSettings):
     compose_seg_seconds: int = 4         # 导演分镜每段约 4 秒（拆段用）
     compose_seg_max_chars: int = 800     # 单段 Seedance text 上限（按单段控，非整条）
 
+    # V4 P1.1：B台短视频裂变（Remixer 重编码 + QA）。生产默认短视频 [25,35]/1080x1920；
+    # 测试可调小以加速（不影响生产口径）。
+    b_remix_target_lo: float = 25.0      # 裂变输出目标时长下限（秒）
+    b_remix_target_hi: float = 35.0      # 裂变输出目标时长上限（秒）
+    b_remix_duration_tol: float = 0.5    # duration_check 容差
+    b_remix_width: int = 1080
+    b_remix_height: int = 1920
+    b_remix_fps: int = 30
+    b_remix_max_retry: int = 2           # QA 失败自动重试上限
+
 
 settings = Settings()

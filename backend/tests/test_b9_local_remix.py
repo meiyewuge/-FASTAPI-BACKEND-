@@ -25,6 +25,11 @@ def test_b9_local_ffmpeg_remix():
 
     import config
     config.settings.storage_dir = os.path.join(work, "storage", "videos")
+    # P1.1 提速：缩小裂变目标时长/分辨率（仅测试，不改生产口径）
+    config.settings.b_remix_target_lo = 2.0
+    config.settings.b_remix_target_hi = 4.0
+    config.settings.b_remix_width = 320
+    config.settings.b_remix_height = 240
     config.settings.storage_base_url = "https://video.beautypeaceai.com/static/videos"
     config.settings.video_provider = "mock"  # B台不应调用它
 
