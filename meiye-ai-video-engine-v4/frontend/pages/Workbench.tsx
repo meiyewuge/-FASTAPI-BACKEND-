@@ -435,6 +435,12 @@ export default function Workbench() {
           loadViral(1, batch_id);
           loadDashboard();
           setTimeout(() => viralRef.current?.scrollIntoView({ behavior: "smooth" }), 300);
+        } else if (final.data?.status === "partial_done") {
+          const c = final.data.completed || 0, f = final.data.failed || 0;
+          showToast(`部分视频生成成功（${c} 条），失败项已跳过（${f} 条），可先查看已生成视频。`);
+          loadViral(1, batch_id);
+          loadDashboard();
+          setTimeout(() => viralRef.current?.scrollIntoView({ behavior: "smooth" }), 300);
         } else {
           showToast(`裂变结束: ${final.data?.status || "未知"}`);
         }

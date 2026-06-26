@@ -681,7 +681,7 @@ export async function batchUpload(
 // ---- B台批量裂变（P1 标准）----
 export interface BatchGenerateResult {
   batch_id: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed" | "partial_done";
   source_count: number;
   total_outputs: number;
   ignored_source_video_ids?: number[];
@@ -697,7 +697,7 @@ export interface BatchStatusItem {
 
 export interface BatchStatus {
   batch_id: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed" | "partial_done";
   completed: number;
   total_outputs: number;
   failed: number;
@@ -731,7 +731,7 @@ export async function pollBatchStatus(
     const r = await getBatchStatus(batchId);
     const d = r.data;
     if (d) onTick?.(d);
-    if (d?.status === "done" || d?.status === "failed" || r.code !== 0) return r;
+    if (d?.status === "done" || d?.status === "failed" || d?.status === "partial_done" || r.code !== 0) return r;
     await new Promise((res) => setTimeout(res, intervalMs));
   }
 }
