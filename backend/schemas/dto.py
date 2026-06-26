@@ -2,7 +2,7 @@
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Resp(BaseModel):
@@ -65,9 +65,17 @@ class TrackIn(BaseModel):
 class FeedbackIn(BaseModel):
     """视频反馈 → 知识候选池（pending）。"""
 
-    rating: str = Field(..., description="good | bad")
+    rating: str | int = Field(..., description="good | bad | 1(good) | 0(bad) | 5(favorite)")
     tags: Optional[list[str]] = None
     note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def normalize_rating(self) -> "FeedbackIn":
+        """兼容 integer rating → 标准化 string。"""
+        if isinstance(self.rating, int):
+            int_map = {1: "good", 0: "bad", 5: "favorite"}
+            self.rating = int_map.get(self.rating, str(self.rating))
+        return self
 
 
 class CandidateReviewIn(BaseModel):
