@@ -108,13 +108,13 @@ def submit_feedback(db: Session, tenant_id: str, phone: str | None, video_id: in
     v = db.query(Video).filter(Video.id == video_id, Video.tenant_id == tenant_id).first()
     if v is None:
         raise ValueError("视频不存在或不属于该租户")
-    if rating not in ("good", "bad"):
-        raise ValueError("rating 必须为 good 或 bad")
+    if rating not in ("good", "bad", "favorite"):
+        raise ValueError("rating 必须为 good / bad / favorite")
 
     # 行为信号
     sig = VideoFeedbackSignal(
         tenant_id=tenant_id, phone=phone, video_id=video_id,
-        action="favorite" if rating == "good" else "dislike",
+        action="favorite" if rating in ("good", "favorite") else "dislike",
         context=json.dumps({"rating": rating, "tags": tags or []}, ensure_ascii=False),
     )
     db.add(sig)
