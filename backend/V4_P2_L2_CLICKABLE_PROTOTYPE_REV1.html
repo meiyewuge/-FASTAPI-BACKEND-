@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V4 P2 Rev1 · 美业 AI 视频生产中枢 · 可点击原型</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f5f7;color:#1f2329}
+  .top{background:#fff;border-bottom:1px solid #e5e6eb;padding:10px 22px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50}
+  .brand{font-weight:700;color:#165dff}.storage{margin-left:auto;font-size:12px;color:#4e5969}
+  .pill{background:#f2f3f5;border-radius:12px;padding:2px 9px;margin-left:6px}
+  .wrap{max-width:1080px;margin:0 auto;padding:20px}
+  .note{background:#f7f8fa;border-left:3px solid #165dff;padding:8px 12px;font-size:12px;color:#4e5969;border-radius:0 6px 6px 0;margin-bottom:14px}
+  .steps{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;font-size:12px}
+  .steps b{background:#e8f3ff;color:#165dff;border-radius:10px;padding:3px 9px}.steps b.done{background:#e8ffea;color:#00a32a}
+  .card{background:#fff;border:1px solid #e5e6eb;border-radius:12px;padding:16px;margin-bottom:16px}
+  h2{font-size:15px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .api{font-size:10px;color:#86909c;font-weight:400}
+  .scn{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .scn .s{border:1px solid #e5e6eb;border-radius:10px;padding:12px;cursor:pointer;text-align:center;font-size:14px}
+  .scn .s:hover,.scn .s.on{border-color:#165dff;background:#f3f8ff;color:#165dff}
+  .up{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+  .ub{border:1px dashed #c9cdd4;background:#fafbfc;border-radius:8px;padding:9px 13px;cursor:pointer;font-size:13px}
+  .ub:hover{border-color:#165dff;color:#165dff}
+  textarea{width:100%;min-height:64px;border:1px solid #e5e6eb;border-radius:8px;padding:10px;font-size:14px;resize:vertical}
+  .opt{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+  .opt .o{border:1px solid #e5e6eb;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
+  .opt .o.on{border-color:#00a32a;background:#f1fff5;color:#00a32a}
+  .btn{border:none;border-radius:9px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;color:#fff}
+  .b-a{background:#ff7d00}.b-b{background:#00b42a}.b-p{background:#165dff}.b-g{background:#f2f3f5;color:#1f2329}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .muted{color:#86909c;font-size:12px}
+  .ship{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .shot{border:1px solid #e5e6eb;border-radius:8px;padding:8px;font-size:12px}
+  .tag{font-size:11px;border-radius:8px;padding:1px 7px}
+  .t-pain{background:#fff1f0;color:#cf1322}.t-product{background:#e8f3ff;color:#165dff}.t-brand{background:#fff7e8;color:#d46b08}
+  .groups{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .grp{border:1px solid #e5e6eb;border-radius:8px;padding:10px;font-size:13px}.grp .gi{font-size:11px;color:#86909c;margin-top:4px}
+  .assetbox{background:#f7f8fa;border-radius:8px;padding:10px;font-size:13px;margin-top:8px}
+  .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .v{border:1px solid #e5e6eb;border-radius:8px;overflow:hidden}
+  .v .c{height:84px;background:linear-gradient(135deg,#d6ffe0,#eafff0);display:flex;align-items:center;justify-content:center;font-size:24px;color:#00a32a;position:relative}
+  .qa{position:absolute;top:6px;right:6px;width:10px;height:10px;border-radius:50%}
+  .qa.pass{background:#00b42a}.qa.warn{background:#ff7d00}.qa.fail{background:#f53f3f}
+  .v .m{padding:7px;font-size:12px}.v .ops{display:flex;gap:6px;padding:0 7px 7px;flex-wrap:wrap}
+  .op{font-size:11px;border:1px solid #e5e6eb;border-radius:6px;padding:2px 7px;cursor:pointer;color:#4e5969}
+  .op:hover{border-color:#165dff;color:#165dff}
+  .super{border:1px solid #ffd8bf;background:#fff8f3}.badge{font-size:11px;background:#ff7d00;color:#fff;border-radius:8px;padding:1px 8px}
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:100}
+  .mask.show{display:flex}.modal{background:#fff;border-radius:14px;padding:22px;width:460px;max-width:92vw}
+  .modal h3{font-size:16px;margin-bottom:8px}.modal p{font-size:13px;color:#4e5969;line-height:1.7}
+  .toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1f2329;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;display:none;z-index:200}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="top">
+  <span class="brand">美业 AI 视频生产中枢 · V4 P2 Rev1</span>
+  <span class="storage" id="storage"></span>
+  <span style="font-size:12px">身份 <select id="role" onchange="render()"><option value="user">user</option><option value="invite_admin">invite_admin</option><option value="super_admin">super_admin</option></select></span>
+</div>
+<div class="wrap">
+  <div class="note">Rev1 原型（mock）。要点：裂变=<b>短视频 25–35s</b>（非 90–120s）；新增「素材增强」区（免费优先/付费<b>外部跳转·不走平台账</b>）；裂变计划展示<b>素材构成+成本</b>；QA 支持<b>重做/partial</b>。母视频目标 27–30s，A台真实生成仍锁（4031）。</div>
+  <div class="steps" id="steps"></div>
+
+  <div class="card"><h2>① 选择用途</h2><div class="scn" id="scn"></div></div>
+
+  <div class="card">
+    <h2>② 上传素材 + 素材增强 + ③ 一句话 <span class="api">POST /api/uploads/batch</span></h2>
+    <div class="up">
+      <span class="ub" onclick="addMat('image')">📷 图片</span>
+      <span class="ub" onclick="addMat('video')">🎬 视频(≥30s 作源)</span>
+      <span class="ub" onclick="addMat('brand')">🏷️ 品牌素材</span>
+    </div>
+    <div class="muted">已上传：🎬×<b id="cv">0</b> 🖼️×<b id="ci">0</b> 🏷️×<b id="cb">0</b></div>
+    <div style="margin-top:8px"><b style="font-size:13px">素材增强</b> <span class="api">free_stock 优先 / paid 外部跳转</span></div>
+    <div class="opt" id="enh"></div>
+    <div id="paidBox" class="hide muted" style="background:#fff7e8;border-radius:8px;padding:8px;margin-top:6px">
+      付费素材由你直接向素材平台购买，费用不经过本平台。购买后请下载素材并上传到本次生产任务。
+      <div class="opt"><span class="o">单条预算 ¥10</span><span class="o">总预算 ¥100</span><span class="o on">每个付费素材人工确认</span></div>
+    </div>
+    <textarea id="need" placeholder="例如：达芙荻丽奢华油，夏季干皮上妆卡粉救星，99%天然植萃"></textarea>
+    <div class="row"><button class="btn b-a" onclick="preview()">④ 生成导演稿预览<span class="api"> · /production-orders/preview（不调火山/不扣费）</span></button></div>
+  </div>
+
+  <div class="card hide" id="poCard">
+    <h2>⑤ 生产单 + 导演稿 <span class="api">production_order + shot_map</span></h2>
+    <div class="muted" id="poMeta"></div>
+    <div class="ship" id="shots" style="margin-top:8px"></div>
+    <div class="row"><span class="muted">预计费用：<b>¥37.20</b>（A台·实际扣费为准）</span>
+      <button class="btn b-a" onclick="show('mEst')">确认生产单 → 生成母视频(27–30s)<span class="api"> · POST /api/production-orders</span></button></div>
+  </div>
+
+  <div class="card hide" id="fpCard">
+    <h2>⑦ 裂变计划预览（短视频） <span class="api">/fission-plans/preview</span></h2>
+    <div class="muted">将生成 <b>30</b> 条短视频(25–35s)，分 <b>6</b> 组：</div>
+    <div class="groups" id="groups" style="margin-top:8px"></div>
+    <div class="assetbox" id="assetSum"></div>
+    <div class="row"><button class="btn b-b" id="fbtn" onclick="execFiss()">⑧ 确认裂变（0 元/条）<span class="api"> · /fission-plans/{id}/execute</span></button>
+      <span class="muted" id="fmsg"></span></div>
+  </div>
+
+  <div class="card hide" id="resCard">
+    <h2>⑨ 裂变结果(30 条·25–35s) + QA <span class="api">GET /api/videos?type=viral · /videos/{id}/qa</span></h2>
+    <div class="muted">🟢 通过 / 🟠 警告 / 🔴 需重做(PTS/不可播放/重复/授权)。partial：部分失败不拖死整批。</div>
+    <div class="vgrid" id="vgrid" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card super hide" id="apCard"><h2>品牌素材包 + 素材源 <span class="badge">super_admin</span> <span class="api">GET/POST /api/asset-packs · /api/asset-sources</span></h2>
+    <div class="muted">brand_asset_pack（品牌长期，super_admin 管）≠ production_assets（用户本次上传）。素材源：production_assets / brand_pack / free_stock(Pexels/Pixabay/Unsplash) / paid_stock(Adobe/Shutterstock/Getty，外部跳转)。</div></div>
+  <div class="card super hide" id="skCard"><h2>技能库（只读） <span class="badge">super_admin</span> <span class="api">GET /api/skills</span></h2>
+    <div class="muted">12 技能 adapter 化；DB 不存可执行命令；用户永不见参数。</div></div>
+  <div class="card super hide" id="candCard"><h2>候选池（待审） <span class="badge">super_admin</span> <span class="api">/api/admin/knowledge-candidates</span></h2>
+    <div class="shot">video_v4 · user_feedback — “适合发小红书” <span class="tag t-product">适合获客</span>
+      <div class="ops"><span class="op" onclick="toast('approved（不进正式大库）')">✅ 通过</span><span class="op" onclick="toast('rejected')">✕ 驳回</span></div></div></div>
+</div>
+
+<div class="mask" id="mEst"><div class="modal"><h3>生成母视频（A台·27–30s）</h3>
+  <p>A台会调用火山 API 生成母视频，具体费用以实际扣费为准。确认继续吗？</p>
+  <div class="row" style="justify-content:flex-end"><button class="b-g btn" onclick="hide('mEst')">取消</button><button class="b-p btn" onclick="hide('mEst');afterPO()">确认生成</button></div>
+  <div class="api" style="margin-top:8px">受 ENABLE_COMPOSE 锁；锁态 4031「生成通道维护中，暂不可用。」</div></div></div>
+<div class="mask" id="mLock"><div class="modal"><h3>生成通道维护中</h3>
+  <p>生成通道维护中，暂不可用。（ENABLE_COMPOSE=false）你仍可使用 B台 裂变（0 成本）。</p>
+  <div class="row" style="justify-content:flex-end"><button class="b-p btn" onclick="hide('mLock')">知道了</button></div></div></div>
+<div class="mask" id="mFiss"><div class="modal"><h3>正在裂变（短视频）</h3><p id="fissText">已生成 0 / 共 30 条</p>
+  <div class="row" style="justify-content:flex-end"><button class="b-g btn" onclick="hide('mFiss')">后台运行</button></div></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const SCEN=[["product_seeding","产品种草"],["store_event","门店活动"],["customer_case","客户案例"],["expert_science","专家科普"],["live_clip","直播切片"],["investment","招商说明"]];
+const SHOTS=[["pain","0-4秒","夏季干皮卡粉困扰"],["product","4-8秒","奢华油瓶身定格"],["brand","8-12秒","达芙荻丽 以油养肤"]];
+const GROUPS=[["痛点前置","pain_first"],["卖点前置","selling_first"],["效果收束","result_close"],["品牌双定","brand_double"],["同源前后","same_source"],["倒叙","reverse"]];
+const ENH=[["仅使用我上传的素材","only"],["优先使用免费素材","free"],["允许推荐付费素材","paid"]];
+const st={scn:"product_seeding",mat:{image:0,video:0,brand:0},enh:"free"};
+function show(i){document.getElementById(i).classList.add('show')} function hide(i){document.getElementById(i).classList.remove('show')}
+function toast(t){const e=document.getElementById('toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',2400)}
+function render(){
+  const role=document.getElementById('role').value;
+  document.getElementById('storage').innerHTML=role==='super_admin'?'<span class="pill">scope=global</span> 磁盘 12/40GB':'<span class="pill">scope=tenant</span> 母3 裂变30 上传8';
+  document.getElementById('scn').innerHTML=SCEN.map(s=>`<div class="s ${st.scn===s[0]?'on':''}" onclick="st.scn='${s[0]}';render()">${s[1]}</div>`).join('');
+  document.getElementById('enh').innerHTML=ENH.map(e=>`<span class="o ${st.enh===e[1]?'on':''}" onclick="setEnh('${e[1]}')">${e[0]}</span>`).join('');
+  document.getElementById('paidBox').classList.toggle('hide',st.enh!=='paid');
+  document.getElementById('cv').textContent=st.mat.video;document.getElementById('ci').textContent=st.mat.image;document.getElementById('cb').textContent=st.mat.brand;
+  const sup=role==='super_admin';['apCard','skCard','candCard'].forEach(id=>document.getElementById(id).classList.toggle('hide',!sup));
+  steps(1);
+}
+function steps(n){document.getElementById('steps').innerHTML=['①用途','②素材','③需求','④preview','⑤生产单','⑥母视频','⑦裂变计划','⑧确认','⑨30条','⑩筛选','⑪候选池'].map((s,i)=>`<b class="${i<n?'done':''}">${s}</b>`).join('')}
+function setEnh(v){st.enh=v;render();toast(v==='paid'?'付费素材外部跳转·不走平台账':'素材增强='+v)}
+function addMat(t){st.mat[t]++;render();toast('上传 '+t)}
+function preview(){
+  if(!document.getElementById('need').value.trim()){toast('请先输入一句话需求');return}
+  document.getElementById('poCard').classList.remove('hide');
+  document.getElementById('poMeta').textContent=`场景=${st.scn} · 9:16 · 母视频 27–30s · 素材增强=${st.enh} · 不调火山/不扣费`;
+  document.getElementById('shots').innerHTML=SHOTS.map(s=>`<div class="shot"><span class="tag t-${s[0]}">${s[0]}</span> ${s[1]}<br>${s[2]}</div>`).join('');
+  steps(5);document.getElementById('poCard').scrollIntoView({behavior:'smooth'});toast('production_order(preview)+shot_map 已生成');
+}
+function afterPO(){
+  show('mLock');steps(6);
+  document.getElementById('fpCard').classList.remove('hide');
+  document.getElementById('groups').innerHTML=GROUPS.map(g=>`<div class="grp"><b>${g[0]}</b><div class="gi">${g[1]} · 5 条 · 25–35s</div></div>`).join('');
+  const paid=st.enh==='paid';
+  document.getElementById('assetSum').innerHTML=`<b>素材构成</b>：上传 ${st.mat.image+st.mat.video} · 品牌 5 · 免费 ${st.enh==='only'?0:8} · 付费 ${paid?2:0}<br>
+    预计素材成本：<b>${paid?'¥38（由你向素材平台支付，不经本平台）':'¥0'}</b>${paid?' · 含 2 个待确认付费素材':''}`;
+  steps(7);
+}
+function execFiss(){
+  if(st.enh==='paid'){toast('请先确认/上传付费素材（演示：已确认）')}
+  show('mFiss');let n=0;const t=setInterval(()=>{n+=4;if(n>=30)n=30;document.getElementById('fissText').textContent=`已生成 ${n} / 共 30 条`;
+    if(n>=30){clearInterval(t);build();setTimeout(()=>hide('mFiss'),700)}},200);
+}
+function build(){
+  document.getElementById('resCard').classList.remove('hide');steps(9);
+  let html='',fail=0;for(let i=1;i<=30;i++){const q=i%13===0?'fail':(i%5===0?'warn':'pass');if(q==='fail')fail++;
+    html+=`<div class="v"><div class="c">✨<span class="qa ${q}"></span></div><div class="m">裂变_${1300+i}.mp4<br><span class="muted">25–35s · 0元</span></div>
+    <div class="ops"><span class="op" onclick="toast('track play（失败不阻断）')">▶</span><span class="op" onclick="toast('下载')">⬇</span>
+    <span class="op" onclick="toast('feedback→候选池 pending')">💬</span>${q==='fail'?'<span class="op" onclick="toast(\'自动重做≤2次，仍失败标 failed\')">↻重做</span>':''}</div></div>`}
+  document.getElementById('vgrid').innerHTML=html;
+  document.getElementById('fmsg').textContent=`partial_done：${30-fail} 条可用，${fail} 条需重做`;
+  document.getElementById('resCard').scrollIntoView({behavior:'smooth'});
+}
+render();
+</script>
+</body>
+</html>
