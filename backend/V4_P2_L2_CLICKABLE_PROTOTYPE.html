@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V4 P2 · 美业 AI 视频生产中枢 · 可点击原型 (L2)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f5f7;color:#1f2329}
+  .top{background:#fff;border-bottom:1px solid #e5e6eb;padding:10px 22px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50}
+  .brand{font-weight:700;color:#165dff}
+  .storage{margin-left:auto;font-size:12px;color:#4e5969}
+  .pill{background:#f2f3f5;border-radius:12px;padding:2px 9px;margin-left:6px}
+  select{font-family:inherit}
+  .wrap{max-width:1080px;margin:0 auto;padding:20px}
+  .steps{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;font-size:12px}
+  .steps b{background:#e8f3ff;color:#165dff;border-radius:10px;padding:3px 10px}
+  .steps b.done{background:#e8ffea;color:#00a32a}
+  .card{background:#fff;border:1px solid #e5e6eb;border-radius:12px;padding:16px;margin-bottom:16px}
+  h2{font-size:15px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .api{font-size:10px;color:#86909c;font-weight:400}
+  .scn{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .scn .s{border:1px solid #e5e6eb;border-radius:10px;padding:12px;cursor:pointer;text-align:center;font-size:14px}
+  .scn .s:hover,.scn .s.on{border-color:#165dff;background:#f3f8ff;color:#165dff}
+  .up{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+  .ub{border:1px dashed #c9cdd4;background:#fafbfc;border-radius:8px;padding:10px 14px;cursor:pointer;font-size:13px}
+  .ub:hover{border-color:#165dff;color:#165dff}
+  textarea{width:100%;min-height:70px;border:1px solid #e5e6eb;border-radius:8px;padding:10px;font-size:14px;resize:vertical}
+  .btn{border:none;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:600;cursor:pointer;color:#fff}
+  .b-a{background:#ff7d00}.b-b{background:#00b42a}.b-p{background:#165dff}.b-g{background:#f2f3f5;color:#1f2329}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+  .muted{color:#86909c;font-size:12px}
+  .ship{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .shot{border:1px solid #e5e6eb;border-radius:8px;padding:8px;font-size:12px}
+  .tag{font-size:11px;border-radius:8px;padding:1px 7px}
+  .t-pain{background:#fff1f0;color:#cf1322}.t-product{background:#e8f3ff;color:#165dff}
+  .t-solution{background:#f0f5ff;color:#2f54eb}.t-result{background:#e8ffea;color:#00a32a}
+  .t-brand{background:#fff7e8;color:#d46b08}.t-cta{background:#f9f0ff;color:#722ed1}
+  .groups{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .grp{border:1px solid #e5e6eb;border-radius:8px;padding:10px;font-size:13px}
+  .grp .gi{font-size:11px;color:#86909c;margin-top:4px}
+  .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .v{border:1px solid #e5e6eb;border-radius:8px;overflow:hidden}
+  .v .c{height:90px;background:linear-gradient(135deg,#d6ffe0,#eafff0);display:flex;align-items:center;justify-content:center;font-size:24px;color:#00a32a;position:relative}
+  .qa{position:absolute;top:6px;right:6px;width:10px;height:10px;border-radius:50%}
+  .qa.pass{background:#00b42a}.qa.warn{background:#ff7d00}.qa.fail{background:#f53f3f}
+  .v .m{padding:7px;font-size:12px}
+  .v .ops{display:flex;gap:6px;padding:0 7px 7px;flex-wrap:wrap}
+  .op{font-size:11px;border:1px solid #e5e6eb;border-radius:6px;padding:2px 7px;cursor:pointer;color:#4e5969}
+  .op:hover{border-color:#165dff;color:#165dff}
+  .super{border:1px solid #ffd8bf;background:#fff8f3}
+  .badge{font-size:11px;background:#ff7d00;color:#fff;border-radius:8px;padding:1px 8px}
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:100}
+  .mask.show{display:flex}
+  .modal{background:#fff;border-radius:14px;padding:22px;width:440px;max-width:92vw}
+  .modal h3{font-size:16px;margin-bottom:8px}.modal p{font-size:13px;color:#4e5969;line-height:1.7}
+  .toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1f2329;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;display:none;z-index:200}
+  .note{background:#f7f8fa;border-left:3px solid #165dff;padding:8px 12px;font-size:12px;color:#4e5969;border-radius:0 6px 6px 0;margin-bottom:14px}
+  .hide{display:none}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  td,th{border:1px solid #eee;padding:5px 8px;text-align:left}
+</style>
+</head>
+<body>
+<div class="top">
+  <span class="brand">美业 AI 视频生产中枢 · V4 P2</span>
+  <span class="storage" id="storage"></span>
+  <span style="font-size:12px">身份
+    <select id="role" onchange="render()">
+      <option value="user">user</option>
+      <option value="invite_admin">invite_admin</option>
+      <option value="super_admin">super_admin（吴哥）</option>
+    </select>
+  </span>
+</div>
+
+<div class="wrap">
+  <div class="note">L2 可点击原型（mock data，不接真实后端）。演示：选用途→上传→一句话→A台 preview→确认生产单→裂变计划 preview→生成 30 条→QA/反馈→候选池。按钮旁灰字为草案 API。切身份看 super_admin 的技能库/素材包/候选池。</div>
+
+  <div class="steps" id="steps"></div>
+
+  <!-- B. 场景选择 -->
+  <div class="card">
+    <h2>① 选择用途</h2>
+    <div class="scn" id="scn"></div>
+  </div>
+
+  <!-- C. 上传 + 一句话 -->
+  <div class="card">
+    <h2>② 上传素材 + ③ 一句话需求 <span class="api">POST /api/uploads/batch</span></h2>
+    <div class="up">
+      <span class="ub" onclick="addMat('image')">📷 图片<br><span class="muted">image_file_id</span></span>
+      <span class="ub" onclick="addMat('video')">🎬 视频<br><span class="muted">video_id</span></span>
+      <span class="ub" onclick="addMat('brand')">🏷️ 品牌素材<br><span class="muted">asset_pack</span></span>
+    </div>
+    <div class="muted">已上传：🎬×<b id="cv">0</b> 🖼️×<b id="ci">0</b> 🏷️×<b id="cb">0</b></div>
+    <textarea id="need" placeholder="例如：达芙荻丽奢华油，夏季干皮上妆卡粉救星，99%天然植萃"></textarea>
+    <div class="row">
+      <button class="btn b-a" onclick="preview()">④ 生成导演稿预览<span class="api"> · /production-orders/preview</span></button>
+    </div>
+  </div>
+
+  <!-- E. 生产单 / 导演稿 -->
+  <div class="card hide" id="poCard">
+    <h2>⑤ 生产单 + 导演稿（shot_map） <span class="api">production_order + shot_map</span></h2>
+    <div class="muted" id="poMeta"></div>
+    <div class="ship" id="shots" style="margin-top:8px"></div>
+    <div class="row">
+      <span class="muted">预计费用：<b id="est">¥0.00</b>（A台·实际扣费为准）</span>
+      <button class="btn b-a" onclick="confirmPO()">确认生产单 → 生成母视频<span class="api"> · POST /api/production-orders</span></button>
+    </div>
+  </div>
+
+  <!-- F. 裂变计划 preview -->
+  <div class="card hide" id="fpCard">
+    <h2>⑦ 裂变计划预览（fission_plan） <span class="api">/fission-plans/preview</span></h2>
+    <div class="muted">将生成 <b>30</b> 条，分 <b>6</b> 组（让你看清「为什么 30 条」）：</div>
+    <div class="groups" id="groups" style="margin-top:8px"></div>
+    <div class="row">
+      <button class="btn b-b" id="fbtn" onclick="execFission()">⑧ 确认裂变（0 元/条）<span class="api"> · /fission-plans/{id}/execute</span></button>
+      <span class="muted" id="fmsg"></span>
+    </div>
+  </div>
+
+  <!-- G/H. 30 条结果 + QA -->
+  <div class="card hide" id="resCard">
+    <h2>⑨ 裂变结果（30 条）+ QA 质检 <span class="api">GET /api/videos?type=viral · /videos/{id}/qa</span></h2>
+    <div class="muted">🟢 通过 / 🟠 警告(相似/品牌/字幕) / 🔴 需重做(PTS/不可播放/重复)</div>
+    <div class="vgrid" id="vgrid" style="margin-top:8px"></div>
+  </div>
+
+  <!-- J. 素材包（super_admin）-->
+  <div class="card super hide" id="apCard">
+    <h2>素材包管理（Asset Pack） <span class="badge">super_admin</span> <span class="api">GET/POST /api/asset-packs</span></h2>
+    <div class="muted">DFD_ASSET_PACK_V1：logo + 产品图×3 + 文字卡×2 + BGM×1 + 品牌色（驱动 12 技能产出带品牌 30 条）。</div>
+  </div>
+
+  <!-- K. 技能库（super_admin 只读）-->
+  <div class="card super hide" id="skCard">
+    <h2>技能库（Skill Library · 仅后台只读） <span class="badge">super_admin</span> <span class="api">GET /api/skills</span></h2>
+    <table><thead><tr><th>skill_id</th><th>类别</th><th>引擎</th><th>用途</th></tr></thead><tbody id="skBody"></tbody></table>
+    <div class="muted" style="margin-top:6px">普通用户永不看到技能/参数/ffmpeg。</div>
+  </div>
+
+  <!-- 候选池（super_admin）-->
+  <div class="card super hide" id="candCard">
+    <h2>回流候选池（待审） <span class="badge">super_admin</span> <span class="api">GET /api/admin/knowledge-candidates</span></h2>
+    <div id="cand"></div>
+  </div>
+</div>
+
+<!-- A台 preview/费用确认 -->
+<div class="mask" id="mEst"><div class="modal">
+  <h3>生成母视频（A台）</h3>
+  <p>A台会调用火山 API 生成母视频，具体费用以实际扣费为准。<br>预计 <b id="estM">¥37.20</b>。确认继续吗？</p>
+  <div class="row" style="justify-content:flex-end">
+    <button class="b-g btn" onclick="hide('mEst')">取消</button>
+    <button class="b-p btn" onclick="hide('mEst');afterPO()">确认生成</button>
+  </div>
+  <div class="api" style="margin-top:8px">确认 → 受 ENABLE_COMPOSE 锁；锁态返回 4031「生成通道维护中，暂不可用。」</div>
+</div></div>
+
+<!-- 4031 锁态 -->
+<div class="mask" id="mLock"><div class="modal">
+  <h3>生成通道维护中</h3>
+  <p>生成通道维护中，暂不可用。（ENABLE_COMPOSE=false）<br>你仍可使用 B台 裂变（0 成本）。</p>
+  <div class="row" style="justify-content:flex-end"><button class="b-p btn" onclick="hide('mLock')">知道了</button></div>
+</div></div>
+
+<!-- 裂变进行中 -->
+<div class="mask" id="mFiss"><div class="modal">
+  <h3>正在裂变</h3>
+  <p id="fissText">已生成 0 / 共 30 条</p>
+  <div class="row" style="justify-content:flex-end"><button class="b-g btn" onclick="hide('mFiss')">后台运行</button></div>
+  <div class="api" style="margin-top:8px">/fission-plans/{id}/execute → 轮询 GET /fission-plans/{id}（0 元）</div>
+</div></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SCENARIOS=[["product_seeding","产品种草"],["store_event","门店活动"],["customer_case","客户案例"],["expert_science","专家科普"],["live_clip","直播切片"],["investment","招商说明"]];
+const SHOTS=[["pain","0-4秒","夏季干皮上妆卡粉的困扰"],["product","4-8秒","蓝绿瓶身奢华油定格特写"],["solution","8-12秒","掌心滴油触肤即融"],["brand","12-15秒","达芙荻丽奢华油 以油养肤"]];
+const GROUPS=[["痛点前置","pain_first"],["卖点前置","selling_first"],["效果收束","result_close"],["品牌双定","brand_double"],["同源前后","same_source"],["倒叙","reverse"]];
+const SKILLS=[["probe_video_v1","probe","ffprobe","探测时长/帧/关键帧"],["safe_trim_setpts_v1","video_edit","ffmpeg","精确切片+setpts重编码"],["safe_concat_v1","video_edit","ffmpeg","规范化重编码拼接(PTS单调)"],["playback_validate_v1","qa","ffmpeg","解码到结尾校验"],["shot_role_labeler_v1","label","rule","镜头打角色"],["fission_strategy_planner_v1","plan","rule","6组排比→30 variants"],["text_card_insert_v1","overlay","ffmpeg","插文字卡"],["md5_duplicate_check_v1","qa","internal","同批去重"]];
+const st={scn:"product_seeding",mat:{image:0,video:0,brand:0},virals:[]};
+function show(i){document.getElementById(i).classList.add('show')}
+function hide(i){document.getElementById(i).classList.remove('show')}
+function toast(t){const e=document.getElementById('toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',2200)}
+
+function render(){
+  const role=document.getElementById('role').value;
+  document.getElementById('storage').innerHTML = role==='super_admin'
+    ? '<span class="pill">scope=global</span> 磁盘 12/40GB · 母40 裂变120 上传18'
+    : '<span class="pill">scope=tenant</span> 母3 裂变30 上传8';
+  document.getElementById('scn').innerHTML=SCENARIOS.map(s=>`<div class="s ${st.scn===s[0]?'on':''}" onclick="st.scn='${s[0]}';render()">${s[1]}</div>`).join('');
+  document.getElementById('cv').textContent=st.mat.video;
+  document.getElementById('ci').textContent=st.mat.image;
+  document.getElementById('cb').textContent=st.mat.brand;
+  const sup=role==='super_admin';
+  ['apCard','skCard','candCard'].forEach(id=>document.getElementById(id).classList.toggle('hide',!sup));
+  if(sup){
+    document.getElementById('skBody').innerHTML=SKILLS.map(s=>`<tr><td>${s[0]}</td><td>${s[1]}</td><td>${s[2]}</td><td>${s[3]}</td></tr>`).join('');
+    document.getElementById('cand').innerHTML=`<div class="shot">video_v4 · user_feedback — “适合发小红书” <span class="tag t-result">适合获客</span>
+      <div class="ops"><span class="op" onclick="toast('approved（仅置状态，不进正式大库）')">✅ 通过</span><span class="op" onclick="toast('rejected')">✕ 驳回</span></div></div>`;
+  }
+  steps(1);
+}
+function steps(n){document.getElementById('steps').innerHTML=['①用途','②素材','③需求','④preview','⑤生产单','⑥母视频','⑦裂变计划','⑧确认','⑨30条','⑩筛选','⑪候选池'].map((s,i)=>`<b class="${i<n?'done':''}">${s}</b>`).join('')}
+function addMat(t){st.mat[t]++;render();toast(`上传 ${t} → POST /api/uploads/batch`)}
+
+function preview(){
+  if(!document.getElementById('need').value.trim()){toast('请先输入一句话需求');return}
+  document.getElementById('poCard').classList.remove('hide');
+  document.getElementById('poMeta').textContent=`场景=${st.scn} · 平台=douyin · 9:16 · 15s · director_plan 已生成 · 不调火山/不扣费`;
+  document.getElementById('shots').innerHTML=SHOTS.map((s,i)=>`<div class="shot"><span class="tag t-${s[0]}">${s[0]}</span> ${s[1]}<br>${s[2]}</div>`).join('');
+  document.getElementById('est').textContent='¥37.20';document.getElementById('estM').textContent='¥37.20';
+  steps(5);toast('production_order(preview) + shot_map 已生成');
+  document.getElementById('poCard').scrollIntoView({behavior:'smooth'});
+}
+function confirmPO(){show('mEst')}
+function afterPO(){
+  // ENABLE_COMPOSE=false → 锁态演示
+  show('mLock');steps(6);
+  // 同时展示裂变计划（B台 0 成本，不受 compose 锁影响）
+  document.getElementById('fpCard').classList.remove('hide');
+  document.getElementById('groups').innerHTML=GROUPS.map(g=>`<div class="grp"><b>${g[0]}</b><div class="gi">${g[1]} · 5 条</div></div>`).join('');
+  steps(7);
+}
+function execFission(){
+  show('mFiss');let n=0;const t=setInterval(()=>{n+=4;if(n>=30)n=30;document.getElementById('fissText').textContent=`已生成 ${n} / 共 30 条`;
+    if(n>=30){clearInterval(t);buildResults();setTimeout(()=>hide('mFiss'),700)}},220);
+}
+function buildResults(){
+  document.getElementById('resCard').classList.remove('hide');steps(9);
+  st.virals=[];for(let i=1;i<=30;i++){const q=i%13===0?'fail':(i%5===0?'warn':'pass');st.virals.push({id:1300+i,qa:q})}
+  document.getElementById('vgrid').innerHTML=st.virals.map(v=>`<div class="v"><div class="c">✨<span class="qa ${v.qa}"></span></div>
+    <div class="m">裂变_${v.id}.mp4<br><span class="muted">90-120s · 0元</span></div>
+    <div class="ops"><span class="op" onclick="toast('events/track play（失败不阻断）')">▶</span><span class="op" onclick="toast('下载')">⬇</span>
+    <span class="op" onclick="fb(${v.id})">💬</span>${v.qa==='fail'?'<span class="op" onclick="toast(\'需重做：PTS/不可播放/重复\')">↻重做</span>':''}</div></div>`).join('');
+  const fail=st.virals.filter(v=>v.qa==='fail').length;document.getElementById('fmsg').textContent=`完成 30 条，${fail} 条需重做`;
+  document.getElementById('resCard').scrollIntoView({behavior:'smooth'});
+}
+function fb(id){toast('POST /api/videos/'+id+'/feedback → 候选池 pending（待审核，非入库）');steps(11)}
+
+render();
+</script>
+</body>
+</html>
