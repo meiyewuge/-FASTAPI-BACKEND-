@@ -21,6 +21,7 @@ import {
   type ProductionOrder as PO,
   type FissionPlanPreview as FPPreview,
   type Variant, type ShotMap, type SkillItem, type SegmentPlan,
+  type SkillSequenceItem,
 } from "../api/client";
 
 // ---- 测试导演稿 ID ----
@@ -134,7 +135,7 @@ export default function P2APreviewWorkbench() {
 
     // API 2: 创建生产单
     const r2 = await createProductionOrder(
-      poPreview.director_plan_id, poPreview.scenario, poPreview.platform,
+      poPreview.director_plan_id, poPreview.scenario || "default", poPreview.platform || "douyin",
     );
     if (r2.code !== 0 || !r2.data) {
       setStep2Loading(false);
@@ -209,12 +210,15 @@ export default function P2APreviewWorkbench() {
       <div className="p2a-detail-section">
         <h5>skill_sequence ({v.skill_sequence?.length || 0})</h5>
         <div className="p2a-skill-steps">
-          {v.skill_sequence?.map((sid, i) => (
-            <div key={i} className="p2a-skill-step">
-              <span className="p2a-skill-num">{i + 1}</span>
-              <span className="p2a-skill-name">{skillMap[sid] || sid}</span>
-            </div>
-          ))}
+          {v.skill_sequence?.map((step, i) => {
+            const skillId = typeof step === "string" ? step : step?.skill_id;
+            return (
+              <div key={i} className="p2a-skill-step">
+                <span className="p2a-skill-num">{i + 1}</span>
+                <span className="p2a-skill-name">{skillMap[skillId] || skillId}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -237,7 +241,10 @@ export default function P2APreviewWorkbench() {
   );
 
   const renderFissionPlan = (fp: FPPreview) => {
-    const allVariants = fp.groups?.flatMap(g => g.variants) || [];
+    const allVariants =
+      Array.isArray(fp.variants) && fp.variants.length > 0
+        ? fp.variants
+        : fp.groups?.flatMap(g => g.variants || []) || [];
     return (
       <div className="p2a-fission-plan">
         {/* 概要 */}
@@ -287,8 +294,8 @@ export default function P2APreviewWorkbench() {
                     <td className="p2a-cell-text">{v.center_idea}</td>
                     <td>{v.segment_plan?.length || 0}</td>
                     <td>{v.skill_sequence?.length || 0}</td>
-                    <td>{v.target_seconds}</td>
-                    <td><CostBadge cost={v.cost} /></td>
+                    <td>{String(v.output_requirements?.target_seconds ?? v.target_seconds ?? "-")}</td>
+                    <td><CostBadge cost={(v.output_requirements?.cost as number | string) ?? v.cost ?? 0} /></td>
                     <td><span className={`p2a-qa-tag qa-${v.qa_status}`}>{v.qa_status}</span></td>
                   </tr>
                   {expandedVariant === v.variant_id && (
@@ -376,15 +383,19 @@ export default function P2APreviewWorkbench() {
               placeholder="输入导演稿 ID" />
           </label>
           <label>scenario
-            <input type="text" className="p2a-input p2a-input-sm" value={scenario}
-              onChange={e => setScenario(e.target.value)} />
+            <select className="p2a-select" value={scenario} onChange={e => setScenario(e.target.value)}>
+              <option value="default">默认</option>
+              <option value="viral">病毒裂变</option>
+              <option value="brand">品牌种草</option>
+              <option value="tutorial">教程类</option>
+            </select>
           </label>
           <label>platform
             <select className="p2a-select" value={platform} onChange={e => setPlatform(e.target.value)}>
               <option value="douyin">抖音</option>
               <option value="xiaohongshu">小红书</option>
               <option value="kuaishou">快手</option>
-              <option value="wechat">微信视频号</option>
+              <option value="shipinhao">微信视频号</option>
             </select>
           </label>
         </div>
@@ -408,9 +419,9 @@ export default function P2APreviewWorkbench() {
             <div className="p2a-po-row"><span>status</span><span className="p2a-status-tag">{poPreview.status}</span></div>
             <div className="p2a-po-row"><span>director_plan_id</span><span className="p2a-mono">{poPreview.director_plan_id}</span></div>
             <div className="p2a-po-row"><span>tenant_id</span><span className="p2a-mono">{poPreview.tenant_id}</span></div>
-            <div className="p2a-po-row"><span>scenario / platform</span><span>{poPreview.scenario} / {poPreview.platform}</span></div>
+            <div className="p2a-po-row"><span>scenario / platform</span><span>{poPreview.scenario || "-"} / {poPreview.platform || "-"}</span></div>
             <div className="p2a-po-row"><span>ratio / duration</span><span>{poPreview.ratio} · {poPreview.duration}s</span></div>
-            <div className="p2a-po-row"><span>fission_goal</span><strong>{poPreview.fission_goal}</strong></div>
+            <div className="p2a-po-row"><span>fission_goal</span><span>{typeof poPreview.fission_goal === "object" ? JSON.stringify(poPreview.fission_goal) : poPreview.fission_goal}</span></div>
             <div className="p2a-po-row"><span>cost</span><CostBadge cost={0} /></div>
             <JsonBlock data={poPreview.qa_gates} label="qa_gates" />
             <JsonBlock data={poPreview.asset_policy} label="asset_policy" />

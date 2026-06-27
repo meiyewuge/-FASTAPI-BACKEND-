@@ -812,12 +812,17 @@ export const adminRejectCandidate = (id: number) =>
 
 export interface ShotMap {
   shot_id: string;
+  tenant_id?: string;
+  source_video_id?: number | string | null;
+  source_kind?: string;
   role: string;
-  start_time: string;
-  end_time: string;
+  start_time: number | string;
+  end_time: number | string;
   text_content: string;
   visual_description: string;
+  image_refs?: unknown[];
   confidence: number;
+  sort_order?: number;
 }
 
 export interface ProductionOrderPreview {
@@ -825,12 +830,17 @@ export interface ProductionOrderPreview {
   status: string;
   director_plan_id: string;
   tenant_id: string;
-  scenario: string;
-  platform: string;
+  scenario: string | null;
+  platform: string | null;
   ratio: string;
   duration: number;
-  fission_goal: number;
-  qa_gates: Record<string, unknown>;
+  fission_goal: {
+    target_count: number;
+    ratio_per_source: number;
+    max_outputs: number;
+    output_seconds: [number, number];
+  } | number | Record<string, unknown>;
+  qa_gates: string[] | Record<string, unknown>;
   asset_policy: Record<string, unknown>;
   shot_maps: ShotMap[];
   source_video_id?: number | string | null;
@@ -853,12 +863,17 @@ export interface SegmentPlan {
   [key: string]: unknown;
 }
 
+export interface SkillSequenceItem {
+  skill_id: string;
+  params: Record<string, unknown>;
+}
+
 export interface Variant {
   variant_id: string;
   group_type: string;
   center_idea: string;
   segment_plan: SegmentPlan[];
-  skill_sequence: string[];
+  skill_sequence: (SkillSequenceItem | string)[];
   target_seconds: number;
   cost: number | string;
   qa_status: string;
@@ -870,11 +885,14 @@ export interface FissionPlanPreview {
   fission_plan_id: string;
   production_order_id: string;
   tenant_id: string;
+  source_video_ids?: (number | string)[];
   target_count: number;
   status: string;
-  qa_gates: Record<string, unknown>;
+  contract_version?: string;
+  qa_gates: string[] | Record<string, unknown>;
   required_skills: string[];
-  groups: { group_type: string; count: number; variants: Variant[] }[];
+  groups: { group_type: string; center_idea?: string; count: number; variants?: Variant[] }[];
+  variants?: Variant[];
 }
 
 export interface SkillItem {
