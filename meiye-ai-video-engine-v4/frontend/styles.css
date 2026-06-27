@@ -1401,3 +1401,386 @@ body {
     align-items: flex-start;
   }
 }
+
+/* ===========================================================================
+   P2A Preview Workbench 样式
+   =========================================================================== */
+
+.p2a-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px 40px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* 黄色 Preview Only 横幅 */
+.p2a-preview-banner {
+  background: #fef3c7;
+  border: 2px solid #f59e0b;
+  color: #92400e;
+  padding: 12px 20px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 8px;
+  margin: 16px 0;
+}
+
+.p2a-subtitle {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: 8px;
+}
+
+/* Step 区块 */
+.p2a-step {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 20px 24px;
+  margin-bottom: 16px;
+}
+.p2a-step h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: #1e293b;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 8px;
+}
+
+/* 表单行 */
+.p2a-form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.p2a-form-row label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #64748b;
+  gap: 4px;
+  flex: 1;
+  min-width: 180px;
+}
+.p2a-input, .p2a-select {
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #f8fafc;
+  color: #1e293b;
+}
+.p2a-input:focus, .p2a-select:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
+}
+.p2a-input-sm { max-width: 140px; }
+
+/* 操作按钮 */
+.p2a-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.p2a-btn-primary {
+  background: #6366f1 !important;
+  color: #fff !important;
+  border: none !important;
+  padding: 8px 20px !important;
+  border-radius: 6px !important;
+  font-weight: 600;
+  cursor: pointer;
+}
+.p2a-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.p2a-btn-quick {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #cbd5e1 !important;
+  padding: 8px 16px !important;
+  border-radius: 6px !important;
+  cursor: pointer;
+}
+
+/* 生产单卡片 */
+.p2a-po-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+.p2a-po-confirmed {
+  border-color: #22c55e;
+  background: #f0fdf4;
+}
+.p2a-po-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.p2a-po-row:last-child { border-bottom: none; }
+.p2a-po-row span:first-child {
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* Mono 字体 */
+.p2a-mono {
+  font-family: "SF Mono", "Fira Code", Consolas, monospace;
+  font-size: 12px;
+  color: #7c3aed;
+  word-break: break-all;
+}
+
+/* 状态标签 */
+.p2a-status-tag {
+  background: #dbeafe;
+  color: #1d4ed8;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.p2a-status-confirmed {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+/* Cost Badge */
+.p2a-cost-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.p2a-cost-badge.cost-zero {
+  background: #dcfce7;
+  color: #15803d;
+}
+.p2a-cost-badge.cost-paid {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+/* 表格 */
+.p2a-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.p2a-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.p2a-table th {
+  background: #f1f5f9;
+  color: #475569;
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid #e2e8f0;
+  white-space: nowrap;
+}
+.p2a-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+}
+.p2a-table tr:hover { background: #f8fafc; }
+.p2a-cell-text {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Role 标签 */
+.p2a-role-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.p2a-role-tag.role-hook { background: #dbeafe; color: #1d4ed8; }
+.p2a-role-tag.role-body { background: #fef3c7; color: #92400e; }
+.p2a-role-tag.role-cta { background: #fce7f3; color: #be185d; }
+.p2a-role-tag.role-brand { background: #e0e7ff; color: #4338ca; }
+.p2a-role-tag.role-transition { background: #f0fdf4; color: #15803d; }
+
+/* JSON 折叠块 */
+.p2a-json-block { margin: 6px 0; }
+.p2a-json-toggle {
+  cursor: pointer;
+  color: #6366f1;
+  font-size: 12px;
+  font-weight: 500;
+}
+.p2a-json-pre {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 11px;
+  max-height: 300px;
+  overflow: auto;
+  margin-top: 4px;
+}
+
+/* 6 组策略卡片 */
+.p2a-group-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.p2a-group-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+.p2a-group-type {
+  font-weight: 700;
+  font-size: 14px;
+  color: #1e293b;
+}
+.p2a-group-count {
+  font-size: 20px;
+  font-weight: 800;
+  color: #6366f1;
+  margin: 4px 0;
+}
+.p2a-group-key {
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+/* Variant 表格特化 */
+.p2a-variant-table tr {
+  cursor: pointer;
+}
+.p2a-variant-table tr.expanded {
+  background: #eef2ff;
+}
+.p2a-expand-icon {
+  width: 20px;
+  text-align: center;
+  color: #6366f1;
+  font-size: 10px;
+}
+.p2a-group-tag {
+  background: #e0e7ff;
+  color: #4338ca;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.p2a-qa-tag {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.p2a-qa-tag.qa-pass { background: #dcfce7; color: #15803d; }
+.p2a-qa-tag.qa-pending { background: #fef3c7; color: #92400e; }
+.p2a-qa-tag.qa-fail { background: #fee2e2; color: #dc2626; }
+
+/* Variant 详情 */
+.p2a-variant-detail-row td {
+  background: #f8fafc;
+  padding: 12px 16px !important;
+}
+.p2a-variant-detail {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.p2a-detail-section h5 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #475569;
+}
+
+/* skill_sequence 横向步骤条 */
+.p2a-skill-steps {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.p2a-skill-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #e0e7ff;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.p2a-skill-num {
+  background: #6366f1;
+  color: #fff;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+}
+.p2a-skill-name {
+  color: #4338ca;
+  font-weight: 500;
+}
+
+/* Risk 标签 */
+.p2a-risk-tag {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.p2a-risk-tag.risk-low { background: #dcfce7; color: #15803d; }
+.p2a-risk-tag.risk-medium { background: #fef3c7; color: #92400e; }
+.p2a-risk-tag.risk-high { background: #fee2e2; color: #dc2626; }
+
+/* Skills 面板 */
+.p2a-skills-panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 16px 24px;
+  margin-bottom: 16px;
+}
+.p2a-skills-panel h4 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #1e293b;
+}
+.p2a-loading {
+  text-align: center;
+  padding: 20px;
+  color: #94a3b8;
+}
+
+/* 底部说明 */
+.p2a-footer-note {
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 20px 0;
+  border-top: 1px solid #f1f5f9;
+  margin-top: 20px;
+}

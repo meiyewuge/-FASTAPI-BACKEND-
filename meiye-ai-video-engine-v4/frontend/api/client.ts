@@ -803,3 +803,122 @@ export const adminApproveCandidate = (id: number) =>
 /** POST /admin/knowledge-candidates/{id}/reject */
 export const adminRejectCandidate = (id: number) =>
   adminPost<{ id: number; status: string }>(`/admin/knowledge-candidates/${id}/reject`, {});
+
+// ===========================================================================
+// P2A Preview Workbench — 生产单 + 裂变计划预览（Preview Only，不执行裂变）
+// ===========================================================================
+
+// ---- P2A 类型定义 ----
+
+export interface ShotMap {
+  shot_id: string;
+  role: string;
+  start_time: string;
+  end_time: string;
+  text_content: string;
+  visual_description: string;
+  confidence: number;
+}
+
+export interface ProductionOrderPreview {
+  production_order_id?: string;
+  status: string;
+  director_plan_id: string;
+  tenant_id: string;
+  scenario: string;
+  platform: string;
+  ratio: string;
+  duration: number;
+  fission_goal: number;
+  qa_gates: Record<string, unknown>;
+  asset_policy: Record<string, unknown>;
+  shot_maps: ShotMap[];
+  source_video_id?: number | string | null;
+  src_video_id?: number | string | null;
+  image_refs?: unknown[];
+}
+
+export interface ProductionOrder extends ProductionOrderPreview {
+  production_order_id: string;
+  status: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SegmentPlan {
+  segment_id?: string;
+  type?: string;
+  duration?: number;
+  description?: string;
+  [key: string]: unknown;
+}
+
+export interface Variant {
+  variant_id: string;
+  group_type: string;
+  center_idea: string;
+  segment_plan: SegmentPlan[];
+  skill_sequence: string[];
+  target_seconds: number;
+  cost: number | string;
+  qa_status: string;
+  output_requirements?: Record<string, unknown>;
+  qa_expected?: Record<string, unknown>;
+}
+
+export interface FissionPlanPreview {
+  fission_plan_id: string;
+  production_order_id: string;
+  tenant_id: string;
+  target_count: number;
+  status: string;
+  qa_gates: Record<string, unknown>;
+  required_skills: string[];
+  groups: { group_type: string; count: number; variants: Variant[] }[];
+}
+
+export interface SkillItem {
+  skill_id: string;
+  name: string;
+  category: string;
+  engine: string;
+  adapter: string;
+  risk_level: string;
+  enabled: boolean;
+}
+
+// ---- P2A API 函数（Preview Only，不执行裂变）----
+
+/** API 1: POST /production-orders/preview */
+export const productionOrderPreview = (
+  directorPlanId: string, scenario = "default", platform = "douyin",
+) =>
+  post<ProductionOrderPreview>("/production-orders/preview", {
+    director_plan_id: directorPlanId,
+    scenario,
+    platform,
+  });
+
+/** API 2: POST /production-orders（确认创建生产单） */
+export const createProductionOrder = (
+  directorPlanId: string, scenario = "default", platform = "douyin",
+) =>
+  post<{ production_order_id: string; status: string }>("/production-orders", {
+    director_plan_id: directorPlanId,
+    scenario,
+    platform,
+  });
+
+/** API 3: GET /production-orders/{id}（查询正式生产单，用于二次确认） */
+export const getProductionOrder = (id: string) =>
+  get<ProductionOrder>(`/production-orders/${id}`);
+
+/** API 4: POST /fission-plans/preview */
+export const fissionPlanPreview = (productionOrderId: string) =>
+  post<FissionPlanPreview>("/fission-plans/preview", {
+    production_order_id: productionOrderId,
+  });
+
+/** API 5: GET /skills（只读技能列表） */
+export const listSkills = () =>
+  get<{ items: SkillItem[]; total: number }>("/skills");

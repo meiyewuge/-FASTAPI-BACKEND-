@@ -14,6 +14,7 @@ import { getToken, register401 } from "./api/client";
 import Login from "./pages/Login";
 import Workbench from "./pages/Workbench";
 import AdminPanel from "./pages/AdminPanel";
+import P2APreviewWorkbench from "./pages/P2APreviewWorkbench";
 import "./styles.css";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -46,6 +47,15 @@ const router = createHashRouter([
     element: (
       <>
         <RequireAuth><AdminPanel /></RequireAuth>
+        <App />
+      </>
+    ),
+  },
+  {
+    path: "/p2a-preview",
+    element: (
+      <>
+        <RequireAuth><P2APreviewWorkbench /></RequireAuth>
         <App />
       </>
     ),
