@@ -909,7 +909,7 @@ export interface SkillItem {
 
 /** API 1: POST /production-orders/preview */
 export const productionOrderPreview = (
-  directorPlanId: string, scenario = "product_seeding", platform = "douyin",
+  directorPlanId: string, scenario = "default", platform = "douyin",
 ) =>
   post<ProductionOrderPreview>("/production-orders/preview", {
     director_plan_id: directorPlanId,
@@ -919,7 +919,7 @@ export const productionOrderPreview = (
 
 /** API 2: POST /production-orders（确认创建生产单） */
 export const createProductionOrder = (
-  directorPlanId: string, scenario = "product_seeding", platform = "douyin",
+  directorPlanId: string, scenario = "default", platform = "douyin",
 ) =>
   post<{ production_order_id: string; status: string }>("/production-orders", {
     director_plan_id: directorPlanId,

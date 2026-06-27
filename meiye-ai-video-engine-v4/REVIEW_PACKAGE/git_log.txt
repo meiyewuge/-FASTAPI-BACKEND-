@@ -1,0 +1,8 @@
+﻿=== Branch ===
+qoder/v4-frontend-workbench
+
+=== git log --oneline -5 ===
+fe2ea24 fix: add partial_done support to pollBatchStatus and B鍙?completion handler b0e0741 V4 P0-B + P1 frontend: compose preview flow + image roles + localStorage draft + 4031/2002 handling d3cbb96 feat(frontend): V4 P1 B鍙拌鍙樼湡瀹炲伐浣滄祦 - current_source_video_ids session pool (upload/compose auto-join) - duration_seconds >= 30s hard gate (3+ qualified sources required) - B-platform P1 body: source_video_ids/auto_ratio/max_outputs - 3->30/4->40/5->50 estimated outputs - A-platform main entry: POST /api/compose + fee confirmation - Removed: text upload, blue upload button, manual selection flow - Auto-refresh viral gallery + scroll after batch done - Feedback: rating good/bad -> candidate pool pending - Patch6 JWT auth preserved - Report: FRONTEND_V4_P1_REMIX_CODE_REPORT.md 282b571 feat(frontend): V4 single-frame workflow P0 redesign - Three-block Manus-style layout (dialog/mother gallery/viral gallery) - Unified upload (image/file/video/text, batch upload with progress) - B-platform batch fission with polling - Event tracking (play/select/download/delete) - Video feedback (favorite/useful/useless/note) - Admin candidate pool tab (super_admin only) - Storage status bar - Patch6 JWT auth preserved - Report: FRONTEND_V4_PAGE_REDESIGN_P0_REPORT.md 9f83a00 docs: FRONTEND_PATCH6_ROLE_SWITCH_REPORT
+
+=== git status ===
+On branch qoder/v4-frontend-workbench Untracked files:   (use "git add <file>..." to include in what will be committed) 	FRONTEND_V4_P0B_P1_CODE_REPORT.md 	QODER_V4_P1_1_FRONTEND_STAGING_SMOKE_TEST_REPORT.md 	QODER_V4_P1_1_PARTIAL_DONE_FRONTEND_FIX_REPORT.md 	REVIEW_PACKAGE/  nothing added to commit but untracked files present (use "git add" to track)

@@ -1,0 +1,9 @@
+﻿[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m鉁?[39m 38 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                 [39m[1m[2m  0.41 kB[22m[1m[22m[2m 鈹?gzip:  0.32 kB[22m
+[2mdist/[22m[35massets/index-MFcYu10-.css  [39m[1m[2m 26.69 kB[22m[1m[22m[2m 鈹?gzip:  5.44 kB[22m
+[2mdist/[22m[36massets/index-Cbjp_EWh.js   [39m[1m[2m257.65 kB[22m[1m[22m[2m 鈹?gzip: 82.52 kB[22m
+[32m鉁?built in 672ms[39m

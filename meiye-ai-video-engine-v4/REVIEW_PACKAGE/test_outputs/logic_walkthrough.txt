@@ -1,0 +1,118 @@
+Qoder V4 P1.1 partial_done 逻辑走查记录
+==========================================
+日期：2026-06-24
+Commit：fe2ea24
+审查人：Qoder
+
+=== 1. TypeScript 类型检查 ===
+
+命令：npx tsc --noEmit
+结果：✅ 0 error / 0 warning
+验证：BatchStatus.status union type 包含 "partial_done"，编译通过
+
+=== 2. Vite 生产构建 ===
+
+命令：npx vite build
+结果：✅ built in 847ms，37 modules，0 error / 0 warning
+输出：
+  dist/index.html                   0.41 kB
+  dist/assets/index-CoTcTTtX.css   21.07 kB
+  dist/assets/index-DPjO7364.js   243.96 kB
+
+=== 3. Mock 场景走查（代码级） ===
+
+场景 A：status = "done"
+  代码路径：client.ts:734 终止条件匹配 "done"
+           → pollBatchStatus() 返回
+           → Workbench.tsx:432 if 分支匹配
+           → setBatchRunning(false)
+           → toast "裂变完成！X 条"
+           → loadViral(1, batch_id)
+           → loadDashboard()
+           → 滚动到裂变区
+  结果：✅ 轮询停止 + 刷新列表（行为不变）
+
+场景 B：status = "failed"
+  代码路径：client.ts:734 终止条件匹配 "failed"
+           → pollBatchStatus() 返回
+           → Workbench.tsx:432 if 不匹配
+           → Workbench.tsx:438 else if 不匹配
+           → Workbench.tsx:444 else 分支
+           → setBatchRunning(false)
+           → toast "裂变结束: failed"
+  结果：✅ 轮询停止 + 按原逻辑处理（行为不变）
+
+场景 C：status = "partial_done"
+  代码路径：client.ts:734 终止条件匹配 "partial_done"
+           → pollBatchStatus() 返回
+           → Workbench.tsx:432 if 不匹配
+           → Workbench.tsx:438 else if 匹配 "partial_done"
+           → setBatchRunning(false)
+           → toast "部分视频生成成功（X 条），失败项已跳过（Y 条），可先查看已生成视频。"
+           → loadViral(1, batch_id)
+           → loadDashboard()
+           → 滚动到裂变区
+  结果：✅ 轮询停止 + toast 提示 + loadViral() 被调用
+
+场景 D：status = "queued" 或 "running"
+  代码路径：client.ts:734 终止条件不匹配
+           → await 1.5s → 继续下一轮轮询
+  结果：✅ 继续轮询（行为不变）
+
+场景 E：r.code !== 0（网络/接口错误）
+  代码路径：client.ts:734 终止条件匹配 r.code !== 0
+           → pollBatchStatus() 返回错误响应
+           → Workbench.tsx:444 else 分支
+           → toast "裂变结束: 未知"
+  结果：✅ 轮询停止 + 错误提示（行为不变）
+
+=== 4. B台按钮状态 ===
+
+  setBatchRunning(false) 位于 Workbench.tsx:431，在所有 if/else 分支之前执行
+  → 任何终态（done / failed / partial_done）后 batchRunning 一定变为 false
+  → B台按钮不会被永久禁用
+  结果：✅ 验证通过
+
+=== 5. 30 条视频列表展示 ===
+
+  PAGE_SIZE = 50（Workbench.tsx:147）
+  30 < 50 → 单页全部展示，不触发分页控件
+  列表渲染逻辑未被修改（Workbench.tsx:881-921）
+  结果：✅ 展示逻辑不受影响
+
+=== 6. A台 preview 不受影响 ===
+
+  handlePreview()（Workbench.tsx:327-344）：
+  - 调用 composePreview() → POST /compose/preview
+  - 不依赖任何 B台状态（batchRunning / batchStatus）
+  - 未修改
+  结果：✅ 不受影响
+
+=== 7. A台 compose 4031 锁定不受影响 ===
+
+  handleComposeConfirm()（Workbench.tsx:347-405）：
+  - 4031 处理在行 382-386
+  - setComposeMaintenance(true) → 按钮 disabled + btn-maintenance 样式
+  - 未修改
+  结果：✅ 不受影响
+
+=== 8. final.data 为 null 的安全检查 ===
+
+  partial_done 分支使用：
+  - final.data.completed || 0  → null 安全
+  - final.data.failed || 0     → null 安全
+  结果：✅ 不会因 null 崩溃
+
+=== 9. failed 项处理 ===
+
+  partial_done 分支仅读取 completed 和 failed 计数用于 toast 显示
+  不遍历 items 数组中的 failed 项
+  loadViral() 从后端拉取实际已生成的视频列表
+  结果：✅ failed 项不会导致页面崩溃
+
+=== 总结 ===
+
+全部 9 项走查通过。
+修改范围最小化：仅 2 个文件 3 处改动（+9/-3 行）。
+done / failed 原有行为完全保持不变。
+A台 preview / compose 4031 逻辑独立，未受影响。

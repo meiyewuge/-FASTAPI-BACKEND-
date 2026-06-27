@@ -1,0 +1,50 @@
+===== P2A V1.1 Hotfix 自测结果 =====
+日期: 2026-06-27
+Commit: fe40e93
+分支: qoder/v4-frontend-workbench
+
+[1] tsc --noEmit: PASS (exit code 0, 0 errors)
+[2] vite build: PASS (664ms, 38 modules, dist generated)
+[3] 禁止项检查 (execute/remixer/火山/batch-generate/开始生成/真实生成): 0 matches in P2APreviewWorkbench.tsx
+[4] partial_done 不退化: confirmed in client.ts line 700 (BatchStatus.status union) + line 734 (pollBatchStatus termination)
+
+===== V1.1 Critical Fixes =====
+[A] variants 结构兼容
+  BEFORE: fp.groups?.flatMap(g => g.variants) || []  → 0 variants if top-level
+  AFTER:  Array.isArray(fp.variants) && fp.variants.length > 0
+            ? fp.variants
+            : fp.groups?.flatMap(g => g.variants || []) || []
+  → 优先读顶层 variants，兼容 groups[].variants 嵌套结构
+
+[B] skill_sequence 类型修正
+  BEFORE: skill_sequence: string[]  → React render error on objects
+  AFTER:  skill_sequence: (SkillSequenceItem | string)[]
+          render: typeof step === "string" ? step : step?.skill_id
+  → 兼容对象和纯字符串两种形式
+
+[C] target_seconds / cost 字段 fallback
+  BEFORE: v.target_seconds / v.cost (直接读，可能 undefined)
+  AFTER:  v.output_requirements?.target_seconds ?? v.target_seconds ?? "-"
+          v.output_requirements?.cost ?? v.cost ?? 0
+  → 优先读 output_requirements 内嵌字段
+
+[D] ShotMap 类型扩展
+  + tenant_id, source_video_id, source_kind, image_refs, sort_order
+  + start_time/end_time: number | string (兼容秒和毫秒)
+
+[E] ProductionOrderPreview 类型修正
+  + fission_goal: object | number | Record (兼容多种后端返回)
+  + qa_gates: string[] | Record (兼容数组和对象)
+  + scenario/platform: string | null (兼容 null)
+  + fission_goal 展示: JSON.stringify for object type
+
+[F] FissionPlanPreview 类型扩展
+  + source_video_ids: (number | string)[]
+  + contract_version: string
+  + groups[].center_idea: string
+  + groups[].variants: optional (variants 可为顶层)
+
+[G] UI 修正
+  + scenario: 文本框 → 下拉选择 (default/viral/brand/tutorial)
+  + platform: wechat → shipinhao
+  + scenario/platform 展示: null-safe with fallback "-"

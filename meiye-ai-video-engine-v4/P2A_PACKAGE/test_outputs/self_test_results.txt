@@ -1,0 +1,78 @@
+V4 P2A Preview Workbench 自测结果
+====================================
+日期：2026-06-27
+Commit：86f31e1
+分支：qoder/v4-frontend-workbench
+
+=== 构建验证 ===
+
+1. npx tsc --noEmit → ✅ 0 error / 0 warning
+2. npx vite build → ✅ 784ms, 38 modules, 0 error
+
+=== 功能自测（代码走查） ===
+
+[✅] 页面能加载（P2APreviewWorkbench 组件路由 /p2a-preview）
+[✅] 黄色 Preview Only 横幅可见（p2a-preview-banner 类名，#fef3c7 背景）
+[✅] 可输入 director_plan_id（input 组件，绑定 state）
+[✅] 快捷测试导演稿可用（点击填入 76f9b973f3354165a6ddaca993388533）
+[✅] API 1 返回生产单 preview（productionOrderPreview 函数，POST /production-orders/preview）
+[✅] shot_maps 可展示（renderShotMaps 函数，7 列表格）
+[✅] API 2 可确认创建（createProductionOrder 函数，POST /production-orders）
+[✅] API 3 可查询正式生产单（getProductionOrder 函数，GET /production-orders/{id}）
+    → API 2 后立即调用 API 3 做二次确认（handleStep2 函数中）
+[✅] API 4 可返回 30 条 variant（fissionPlanPreview 函数，POST /fission-plans/preview）
+[✅] 6 组 group_type 每组 5 条（p2a-group-cards 展示，GROUP_LABELS 中文映射）
+[✅] variant 展开详情可见（expandedVariant state，点击行展开）
+[✅] skill_sequence 横向步骤条可见（p2a-skill-steps 组件，带序号圆圈）
+[✅] API 5 返回技能列表（listSkills 函数，GET /skills，只读表格）
+[✅] cost=0 绿色强调（CostBadge 组件，cost-zero 类名 #dcfce7 背景）
+[✅] 无 execute 按钮（grep 验证：0 matches）
+[✅] 无 remixer 请求（grep 验证：0 matches）
+[✅] 无火山请求（grep 验证：0 matches）
+[✅] 无 batch-generate 请求（grep 验证：0 matches）
+[✅] A台/B台原功能不退化（Workbench.tsx 仅新增 1 行导航按钮）
+[✅] partial_done 逻辑不退化（client.ts 行 700/734 保持）
+
+=== 禁止项确认 ===
+
+[✅] 不做 execute 按钮
+[✅] 不调用 remixer API
+[✅] 不调用 batch-generate
+[✅] 不触发火山引擎
+[✅] 不上传素材
+[✅] 不接付费素材
+[✅] 不写 videos
+[✅] 不做 P2B
+[✅] 不进入 production
+[✅] 不硬编码 JWT / ADMIN_KEY / tenant_id
+[✅] 不引入新 UI 组件库
+[✅] 不引入 AGPL / OpenMontage 依赖
+[✅] 不破坏 A台/B台现有页面
+[✅] 不破坏 partial_done 逻辑
+
+=== 安全确认 ===
+
+- 未部署到任何环境
+- 未改后端代码
+- 未改接口协议
+- 未新增 npm 依赖
+- 未触发火山引擎 API
+- 未解锁 compose（4031 保持）
+- 未影响 production
+
+=== Network 请求白名单验证 ===
+
+P2A 页面仅发起以下请求：
+- POST /api/production-orders/preview
+- POST /api/production-orders
+- GET /api/production-orders/{id}
+- POST /api/fission-plans/preview
+- GET /api/skills
+
+不会出现：
+- 火山域名（*.volcengine.com）
+- remixer
+- batch-generate
+- upload
+- paid asset
+- execute 相关请求

@@ -67,7 +67,7 @@ export default function P2APreviewWorkbench() {
 
   // ---- Step 1 状态 ----
   const [directorPlanId, setDirectorPlanId] = useState("");
-  const [scenario, setScenario] = useState("product_seeding");
+  const [scenario, setScenario] = useState("default");
   const [platform, setPlatform] = useState("douyin");
   const [step1Loading, setStep1Loading] = useState(false);
 
@@ -135,7 +135,7 @@ export default function P2APreviewWorkbench() {
 
     // API 2: 创建生产单
     const r2 = await createProductionOrder(
-      poPreview.director_plan_id, poPreview.scenario || "product_seeding", poPreview.platform || "douyin",
+      poPreview.director_plan_id, poPreview.scenario || "default", poPreview.platform || "douyin",
     );
     if (r2.code !== 0 || !r2.data) {
       setStep2Loading(false);
@@ -384,13 +384,10 @@ export default function P2APreviewWorkbench() {
           </label>
           <label>scenario
             <select className="p2a-select" value={scenario} onChange={e => setScenario(e.target.value)}>
-              <option value="product_seeding">产品种草</option>
-              <option value="brand_story">品牌故事</option>
-              <option value="tutorial">教程</option>
-              <option value="comparison">对比评测</option>
-              <option value="review">体验测评</option>
-              <option value="event">活动宣传</option>
-              <option value="testimony">用户证言</option>
+              <option value="default">默认</option>
+              <option value="viral">病毒裂变</option>
+              <option value="brand">品牌种草</option>
+              <option value="tutorial">教程类</option>
             </select>
           </label>
           <label>platform
