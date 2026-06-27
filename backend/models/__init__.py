@@ -11,8 +11,13 @@ from .admin_user import AdminUser
 from .reflow import WorkflowRun, VideoFeedbackSignal, KnowledgeCandidate
 from .director_plan import DirectorPlan
 from .cost_ledger import CostLedger
+from .production_order import ProductionOrder, ShotMap
+from .fission_plan import FissionPlan, FissionVariant
+from .qa_result import QaResult
+from .skill_registry import SkillRegistry
 
 __all__ = [
     "Tenant", "Store", "Video", "Task", "CostRecord", "Upload", "InviteCode", "AdminUser",
     "WorkflowRun", "VideoFeedbackSignal", "KnowledgeCandidate", "DirectorPlan", "CostLedger",
+    "ProductionOrder", "ShotMap", "FissionPlan", "FissionVariant", "QaResult", "SkillRegistry",
 ]

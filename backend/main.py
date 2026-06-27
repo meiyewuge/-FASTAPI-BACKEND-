@@ -17,6 +17,15 @@ from db import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # P2A：幂等播种 skill_registry 12 条 canonical 技能（只读种子，重复启动不重复插入）
+    from db import SessionLocal
+    from services.skill_registry_service import seed_skills
+
+    _db = SessionLocal()
+    try:
+        seed_skills(_db)
+    finally:
+        _db.close()
     # B3：启动时后台恢复未完成任务（防 systemd 重启丢任务），不阻塞启动
     from tasks.recovery import recover_in_background
 

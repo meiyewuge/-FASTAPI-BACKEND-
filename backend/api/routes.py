@@ -28,10 +28,13 @@ from schemas.dto import (
     ComposePreviewIn, ExportIn, FeedbackIn, GrantIn, IntentIn, InviteGenIn, InviteRevokeIn,
     LoginIn, Resp, TrackIn, UserRevokeIn,
 )
+from schemas.p2_dto import (
+    FissionPlanPreviewIn, ProductionOrderCreateIn, ProductionOrderPreviewIn,
+)
 from services import (
-    admin_service, b_service, compose_preview_service, export_service, invite_service,
-    orchestrator, reflow_service, storage_service, store_service, subscription_service,
-    upload_service,
+    admin_service, b_service, compose_preview_service, export_service, fission_plan_service,
+    invite_service, orchestrator, production_order_service, reflow_service, skill_registry_service,
+    storage_service, store_service, subscription_service, upload_service,
 )
 from tasks import video_task
 from utils.upload_util import UploadError
@@ -258,6 +261,75 @@ def compose(
     # BUG-1：compose 用独立线程派发（不阻塞 uvicorn 线程池）；runner 内有 task 锁防重复
     dispatch_compose(task.id)
     return Resp(data={"task_id": task.id, "director_plan_id": plan.id})
+
+
+# ---------------- V4 P2A：生产单 + 裂变计划 preview（0 成本、不触发火山、不写 videos）----------------
+@api_router.post("/production-orders/preview")
+def production_order_preview(
+    body: ProductionOrderPreviewIn,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """从 director_plan 生成生产单 preview（含 shot_maps）。不入库、0 成本、不触发火山。"""
+    data = production_order_service.build_preview(
+        db, user["tenant_id"], user.get("phone"),
+        body.director_plan_id, body.scenario, body.platform,
+    )
+    if data is None:
+        return Resp(code=3001, message="导演稿不存在或不属于当前租户，请先调用 /api/compose/preview。")
+    return Resp(data=data)
+
+
+@api_router.post("/production-orders")
+def production_order_create(
+    body: ProductionOrderCreateIn,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """确认创建生产单（落库 production_order + shot_maps，必填 tenant_id）。"""
+    data = production_order_service.create(
+        db, user["tenant_id"], user.get("phone"),
+        body.director_plan_id, body.scenario, body.platform, body.shot_maps_override,
+    )
+    if data is None:
+        return Resp(code=3001, message="导演稿不存在或不属于当前租户。")
+    return Resp(data=data)
+
+
+@api_router.get("/production-orders/{order_id}")
+def production_order_get(
+    order_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """查生产单 + shot_maps（含 tenant_id，租户隔离）。"""
+    data = production_order_service.get(db, user["tenant_id"], order_id)
+    if data is None:
+        return Resp(code=3001, message="生产单不存在或不属于当前租户。")
+    return Resp(data=data)
+
+
+@api_router.post("/fission-plans/preview")
+def fission_plan_preview(
+    body: FissionPlanPreviewIn,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """生产单 → 裂变计划 preview（30 条 variant，每条含 tenant_id）。不入库、0 成本、不执行裂变。"""
+    data = fission_plan_service.build_preview(db, user["tenant_id"], body.production_order_id)
+    if data is None:
+        return Resp(code=3001, message="生产单不存在或不属于当前租户。")
+    return Resp(data=data)
+
+
+@api_router.get("/skills")
+def list_skills(
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> Resp:
+    """技能注册表（只读，12 条 canonical 技能）。"""
+    items = skill_registry_service.list_skills(db)
+    return Resp(data={"items": items, "total": len(items)})
 
 
 @api_router.get("/stores")
