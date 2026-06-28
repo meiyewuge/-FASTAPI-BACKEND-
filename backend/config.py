@@ -120,5 +120,12 @@ class Settings(BaseSettings):
     # 不影响 subtitle/highlight/CTA 可见、不影响 B2 收口能力、不放宽任何安全闸门。
     enable_p2b_visible_variation: bool = True
 
+    # V4 P2B-B2.5：音频/编码合规差异化（响度规范化 + 逐 variant 轻 EQ + metadata 清理 + 诚实溯源）。
+    # 默认开；production 永不触发（runs 403）；关=回 B2.1 音频/编码口径，不影响 B1/B2/B2.1。
+    enable_p2b_audio_encoding_diff: bool = True
+    p2b_loudness_target_lufs: float = -14.0   # EBU R128 目标响度
+    p2b_true_peak_dbtp: float = -1.0          # True Peak 上限
+    p2b_build_commit: str = ""                # 诚实溯源用：本次部署 commit（ECS 部署时注入；空=unknown）
+
 
 settings = Settings()

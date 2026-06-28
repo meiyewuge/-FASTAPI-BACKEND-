@@ -173,7 +173,7 @@ def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_
         try:
             res = plan_executor.execute_plan(
                 src["path"], src["duration"], src["audio"], tmp_out, e.variant_plan_json,
-                W, H, FPS, lo, hi, tol, batch_md5, variant_id=e.variant_id,
+                W, H, FPS, lo, hi, tol, batch_md5, variant_id=e.variant_id, run_id=run_id,
             )
         except Exception as ex:  # noqa: BLE001  执行器异常不拖死整批
             item.status = "failed"; item.error_message = f"executor error: {ex}"[:480]
@@ -199,7 +199,8 @@ def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_
             strategy=e.group_type, source_video_id=source_video_id, parent_video_id=source_video_id,
             batch_id=run_id, duration_seconds=qa_checks.probe_duration(tmp_out),
             meta=json.dumps({"p2b_b1": True, "execution_plan_id": e.execution_plan_id,
-                             "applied": res["applied"], "fallbacks": res["fallbacks"]},
+                             "applied": res["applied"], "fallbacks": res["fallbacks"],
+                             "audio_encoding": res.get("audio_encoding", {})},  # B2.5
                             ensure_ascii=False),
         )
         db.add(v); db.flush()

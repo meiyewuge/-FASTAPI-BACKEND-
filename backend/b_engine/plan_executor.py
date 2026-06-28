@@ -404,9 +404,69 @@ def _build_overlays(vp: dict, font_path: str, target: float, text_dir: str, styl
     return layers, applied
 
 
+# ============================================================
+# P2B-B2.5：音频/编码合规差异化（响度规范化 + 逐 variant 轻 EQ + metadata 清理 + 诚实溯源）
+# 合规口径：授权范围内自然差异 + 诚实溯源；禁止防搬运/破检测/伪造来源/伪造设备。
+# ============================================================
+# 逐 variant 轻 EQ profile（幅度 ≤ ±1.5 dB，不改时长/音高，不破音）
+_EQ_PROFILES = [
+    ("neutral", "anull"),                                   # 中性（不改音色）
+    ("warm_low_shelf", "bass=g=1.5:f=110"),                 # 暖：低频 shelf +1.5 dB
+    ("clear_presence", "equalizer=f=3000:t=q:w=1.5:g=1.5"), # 清晰：中高频 presence +1.5 dB
+    ("soft_high_shelf", "treble=g=-1.5:f=8000"),            # 柔和：高频 shelf -1.5 dB
+]
+# B 级变速 / C 级变调：本阶段禁止启用，仅预留常量（不得在命令中实际使用）
+_TEMPO_RESERVED = 1.0      # atempo 预留（B2.5 不启用）
+_PITCH_RESERVED = 1.0      # 变调预留（B2.5 禁止）
+_ENC_PROFILE = "libx264:veryfast:yuv420p:aac:44100:stereo:+faststart"
+
+
+def _audio_eq_profile(variant_id: str) -> tuple[int, str, str]:
+    """逐 variant 确定性选 EQ profile。返回 (idx, name, filter)。"""
+    idx = _variation_seed({}, variant_id) % len(_EQ_PROFILES)
+    name, flt = _EQ_PROFILES[idx]
+    return idx, name, flt
+
+
+def _provenance(run_id: str) -> str:
+    """诚实溯源串（不伪造设备/不冒充第三方/标注 AI 生成）。"""
+    commit = (settings.p2b_build_commit or "unknown")
+    return (f"generated_by=meiye_v4_p2b;module=p2b_b2_5;run_id={run_id or 'na'};"
+            f"source=authorized_material;ai_generated=true;commit={commit}")
+
+
+def audio_encoding_info(variant_id: str, run_id: str = "") -> dict:
+    """计算本条音频/编码合规差异化信息 + audio_encoding_signature（确定性、可复算）。"""
+    if not settings.enable_p2b_audio_encoding_diff:
+        return {"applied": False, "audio_encoding_signature": "off"}
+    eq_idx, eq_name, eq_flt = _audio_eq_profile(variant_id)
+    prov = _provenance(run_id)
+    prov_hash = hashlib.md5(prov.encode("utf-8")).hexdigest()[:8]
+    var_hash = hashlib.md5((variant_id or "").encode("utf-8")).hexdigest()[:6]
+    # signature 仅由「处理口径 + variant 身份」决定（不含 run_id），保证同 variant 跨 run 一致；
+    # provenance_hash（含 run_id）单独记录在 info 中，不进 signature。
+    sig = (f"lufs{settings.p2b_loudness_target_lufs:g}tp{settings.p2b_true_peak_dbtp:g}"
+           f"eq{eq_idx}:{eq_name}|enc:{_ENC_PROFILE}|mc1|var{var_hash}")
+    return {
+        "applied": True,
+        "target_lufs": settings.p2b_loudness_target_lufs,
+        "true_peak_target_dbtp": settings.p2b_true_peak_dbtp,
+        "loudnorm_pass": "single",          # 一阶段单 pass；B3/后续精修可升 two-pass
+        "eq_profile": eq_name, "eq_index": eq_idx, "eq_filter": eq_flt,
+        "tempo_factor": _TEMPO_RESERVED,    # 1.0：B2.5 不变速
+        "encoding_profile": _ENC_PROFILE,
+        "metadata_cleaned": True,
+        "provenance": prov, "provenance_hash": prov_hash,
+        "audio_encoding_signature": sig,
+    }
+
+
 def _build_cmd(src: str, out: str, plan: dict, audio: bool, W: int, H: int, FPS: int,
                overlays: list[str]) -> list[str]:
-    """组装单条 ffmpeg 命令（视频 xfade/concat + 音频 acrossfade/concat + 叠加层）。"""
+    """组装单条 ffmpeg 命令（视频 xfade/concat + 音频 acrossfade/concat + 叠加层）。
+
+    B2.5 的音频/编码后处理不在此（见 _apply_audio_encoding 第二趟），保持拼接 filter_complex 干净。
+    """
     windows = plan["windows"]
     trans = plan["transitions"]
     target = plan["target_output"]
@@ -472,6 +532,27 @@ def _build_cmd(src: str, out: str, plan: dict, audio: bool, W: int, H: int, FPS:
             "-c:a", "aac", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", out]
 
 
+def _apply_audio_encoding(path: str, audio_enc: dict) -> None:
+    """B2.5 第二趟（audio-only，-c:v copy）：响度规范化 + 轻 EQ + metadata 清理 + 诚实溯源。
+
+    单独一趟在成片上做，不进 _build_cmd 的 filter_complex（loudnorm 与 acrossfade 同图会偶发卡死）；
+    `-c:v copy` 不重编码视频、不改时长/不变速/不变调；只重编码音频。
+    """
+    if not (audio_enc and audio_enc.get("applied")):
+        return
+    lufs = audio_enc["target_lufs"]; tp = audio_enc["true_peak_target_dbtp"]
+    eq = audio_enc.get("eq_filter") or "anull"
+    tmp = path + ".aenc.mp4"
+    cmd = ["ffmpeg", "-y", "-i", path, "-map", "0:v", "-map", "0:a", "-c:v", "copy",
+           "-af", f"loudnorm=I={lufs:g}:TP={tp:g}:LRA=11,{eq},"
+                  f"aformat=sample_rates=44100:channel_layouts=stereo",
+           "-c:a", "aac", "-ar", "44100", "-ac", "2",
+           "-map_metadata", "-1", "-metadata", f"comment={audio_enc['provenance']}",
+           "-movflags", "+faststart", tmp]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=180)
+    os.replace(tmp, path)
+
+
 def _write_srt(path: str, vp: dict) -> None:
     """字幕降级：drawtext 不可用时输出 sidecar .srt。"""
     entries = (vp.get("subtitle_plan") or {}).get("subtitle_entries") or []
@@ -494,17 +575,18 @@ def _render(src, out, plan, audio, W, H, FPS, overlays) -> None:
 
 def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: Any,
                  W: int, H: int, FPS: int, lo: float, hi: float, tol: float,
-                 batch_md5: set[str], variant_id: str = "") -> dict:
-    """执行单条计划 → 真实 mp4 + QA。返回 {ok, qa, plan, applied, fallbacks}。
+                 batch_md5: set[str], variant_id: str = "", run_id: str = "") -> dict:
+    """执行单条计划 → 真实 mp4 + QA。返回 {ok, qa, plan, applied, fallbacks, audio_encoding}。
 
-    可见层（P2B-B2）：字体三级解析 + textfile drawtext + 分层 fallback（全叠加→仅字幕→无叠加）；
-    SRT sidecar 只要有字幕就输出。底座（取窗/转场/音频/QA）一律不变。
-    variant_id：派生窗口偏移种子，保证同批取窗差异化、MD5 唯一。
+    可见层（B2/B2.1）：ASS 差异化 + 分层 fallback + SRT；音频/编码（B2.5）：响度规范化 + 轻 EQ +
+    metadata 清理 + 诚实溯源（叠加在拼接之后，不改 acrossfade/取窗/转场/QA）。
+    variant_id：派生取窗/可见层/EQ 种子；run_id：诚实溯源 provenance。
     """
     vp = _as_obj(variant_plan)
     plan = derive_windows(vp, src_dur, lo, hi, seed=_seed_of(variant_id))
     target = plan["target_output"]
     font = resolve_font()
+    audio_enc = audio_encoding_info(variant_id, run_id)   # B2.5（flag 关 → applied=False）
 
     # SRT sidecar：只要 subtitle_plan 有内容就输出（烧录成功也输出）
     has_sub = bool((vp.get("subtitle_plan") or {}).get("subtitle_entries"))
@@ -575,6 +657,11 @@ def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: 
             applied = applied_all
             break
 
+    # B2.5：音频/编码合规差异化（第二趟，audio-only，-c:v copy，不改时长/不变速/不变调）
+    if os.path.exists(out):
+        _apply_audio_encoding(out, audio_enc)
+
     qa = qa_checks.run_gates(out, batch_md5, lo, hi, tol)
+    qa["audio_encoding"] = audio_enc          # 记录到 run_items.qa_json.audio_encoding（service 写 qa_json）
     return {"ok": qa["final_status"] == "pass", "qa": qa, "plan": plan,
-            "applied": applied, "fallbacks": fallbacks}
+            "applied": applied, "fallbacks": fallbacks, "audio_encoding": audio_enc}
