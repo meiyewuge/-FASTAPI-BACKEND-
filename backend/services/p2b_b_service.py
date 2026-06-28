@@ -109,7 +109,8 @@ def preview_run(db: Session, tenant_id: str, production_order_id: str,
     items = []
     for e in selected:
         vp = plan_executor._as_obj(e.variant_plan_json)
-        plan = plan_executor.derive_windows(vp, src["duration"], lo, hi)
+        plan = plan_executor.derive_windows(vp, src["duration"], lo, hi,
+                                            seed=plan_executor._seed_of(e.variant_id))
         items.append({
             "execution_plan_id": e.execution_plan_id, "variant_id": e.variant_id,
             "group_type": e.group_type,
@@ -168,7 +169,7 @@ def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_
         try:
             res = plan_executor.execute_plan(
                 src["path"], src["duration"], src["audio"], tmp_out, e.variant_plan_json,
-                W, H, FPS, lo, hi, tol, batch_md5,
+                W, H, FPS, lo, hi, tol, batch_md5, variant_id=e.variant_id,
             )
         except Exception as ex:  # noqa: BLE001  执行器异常不拖死整批
             item.status = "failed"; item.error_message = f"executor error: {ex}"[:480]

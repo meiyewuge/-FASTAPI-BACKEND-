@@ -59,8 +59,16 @@ def _exec_transition(cn_type: str, plan_d: float) -> tuple[str | None, str, floa
     return xname, label, float(d)
 
 
-def derive_windows(vp: dict, src_dur: float, lo: float, hi: float) -> dict:
-    """从 rhythm_plan + transition_plan 推导：源取窗 + 转场 + 目标时长（含补偿）。"""
+def _seed_of(variant_id: str) -> int:
+    """从 variant_id 稳定派生窗口偏移种子（无外部依赖，确定性）。"""
+    return sum((i + 1) * ord(ch) for i, ch in enumerate(variant_id or "")) % 997
+
+
+def derive_windows(vp: dict, src_dur: float, lo: float, hi: float, seed: int = 0) -> dict:
+    """从 rhythm_plan + transition_plan 推导：源取窗 + 转场 + 目标时长（含补偿）。
+
+    seed：按 variant 派生的窗口偏移种子，避免同角色窗口重叠 / 不同 variant 取窗雷同（MD5 去重）。
+    """
     rhythm = vp.get("rhythm_plan") or {}
     shots = rhythm.get("shot_durations") or []
     if not shots:
@@ -91,12 +99,15 @@ def derive_windows(vp: dict, src_dur: float, lo: float, hi: float) -> dict:
     dsum = sum(plan_durs) or 1.0
     seg_lens = [max(plan_durs[i] / dsum * raw_total, 0.4) for i in range(n)]
 
-    # 源取窗：按角色 zone 居中
+    # 源取窗：按角色 zone 居中 + variant_seed/段序 偏移（同角色不重叠、跨 variant 不雷同）
     windows = []
     for i in range(n):
         seg = min(seg_lens[i], max(src_dur, 0.5))
-        center = _ROLE_ZONE.get(roles[i], _DEFAULT_ZONE) * src_dur
-        start = min(max(center - seg / 2, 0.0), max(src_dur - seg, 0.0))
+        avail = max(src_dur - seg, 0.0)
+        base = _ROLE_ZONE.get(roles[i], _DEFAULT_ZONE) * src_dur - seg / 2
+        # 偏移量：由 seed 与段序决定，落在 [-0.5,0.5)，幅度不超过片段与可用范围
+        jitter = (((seed * 31 + i * 17) % 23) / 23.0 - 0.5) * min(seg, avail)
+        start = min(max(base + jitter, 0.0), avail)
         windows.append({"role": roles[i], "start": round(start, 3),
                         "end": round(start + seg, 3), "seg": round(seg, 3)})
 
@@ -230,10 +241,13 @@ def _write_srt(path: str, vp: dict) -> None:
 
 def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: Any,
                  W: int, H: int, FPS: int, lo: float, hi: float, tol: float,
-                 batch_md5: set[str]) -> dict:
-    """执行单条计划 → 真实 mp4 + QA。返回 {ok, qa, plan, applied, fallbacks}。"""
+                 batch_md5: set[str], variant_id: str = "") -> dict:
+    """执行单条计划 → 真实 mp4 + QA。返回 {ok, qa, plan, applied, fallbacks}。
+
+    variant_id：用于派生窗口偏移种子，保证同批多条（含同角色/同结构）取窗差异化、MD5 唯一。
+    """
     vp = _as_obj(variant_plan)
-    plan = derive_windows(vp, src_dur, lo, hi)
+    plan = derive_windows(vp, src_dur, lo, hi, seed=_seed_of(variant_id))
     font = _font()
     fallbacks = {"subtitle": False, "highlight": False, "cta": False, "overlay_render": False}
 
