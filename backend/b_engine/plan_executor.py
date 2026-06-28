@@ -99,16 +99,32 @@ def derive_windows(vp: dict, src_dur: float, lo: float, hi: float, seed: int = 0
     dsum = sum(plan_durs) or 1.0
     seg_lens = [max(plan_durs[i] / dsum * raw_total, 0.4) for i in range(n)]
 
-    # 源取窗：按角色 zone 居中 + variant_seed/段序 偏移（同角色不重叠、跨 variant 不雷同）
+    # 源取窗：同角色均分源时长 + jitter微调（避免同角色窗口重叠 + 跨variant不雷同）
     windows = []
+    # 统计每个角色出现次数及段序
+    role_indices = {}
+    for i, r in enumerate(roles):
+        role_indices.setdefault(r, []).append(i)
+    role_ordinal = [0] * n
+    for r, idxs in role_indices.items():
+        for seq, idx in enumerate(idxs):
+            role_ordinal[idx] = seq
+
     for i in range(n):
         seg = min(seg_lens[i], max(src_dur, 0.5))
         avail = max(src_dur - seg, 0.0)
-        base = _ROLE_ZONE.get(roles[i], _DEFAULT_ZONE) * src_dur - seg / 2
-        # 偏移量：由 seed 与段序决定，落在 [-0.5,0.5)，幅度不超过片段与可用范围
-        jitter = (((seed * 31 + i * 17) % 23) / 23.0 - 0.5) * min(seg, avail)
+        r = roles[i]
+        same_count = len(role_indices[r])
+        if same_count > 1:
+            # 同角色多段：按序均分源时长居中，jitter微调
+            slot = src_dur / same_count
+            base = slot * (role_ordinal[i] + 0.5) - seg / 2
+        else:
+            base = _ROLE_ZONE.get(r, _DEFAULT_ZONE) * src_dur - seg / 2
+        # 偏移量：由 seed 与段序决定，幅度不超过可用范围
+        jitter = (((seed * 31 + i * 17) % 23) / 23.0 - 0.5) * min(seg * 0.3, avail * 0.3)
         start = min(max(base + jitter, 0.0), avail)
-        windows.append({"role": roles[i], "start": round(start, 3),
+        windows.append({"role": r, "start": round(start, 3),
                         "end": round(start + seg, 3), "seg": round(seg, 3)})
 
     return {"windows": windows, "transitions": exec_trans,
