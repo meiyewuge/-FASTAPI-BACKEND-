@@ -29,6 +29,12 @@ from config import settings
 # ECS 需装中文字体：apt install -y fonts-wqy-zenhei
 _FONT = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
 
+# V4 P1.1 Audio Click/Pop Hotfix：音频切割点微淡入淡出，消除波形硬跳变产生的 click/pop。
+# 默认 30ms（人耳几乎不可感知，可有效消除 click）；极短片段（<120ms）跳过 fade，
+# 且 fade 时长不超过片段的 1/4，防止 in/out fade 重叠。测试可 monkeypatch 这两个常量取 20/50ms 样片。
+_AUDIO_FADE = 0.03           # 默认微淡时长（秒）= 30ms
+_AUDIO_FADE_MIN_SEG = 0.12   # 短于此（120ms）的片段跳过 fade
+
 
 def _store_version(store: dict | None) -> str:
     if not store:
@@ -91,9 +97,21 @@ def _build_variant(src: str, out: str, seed: int, dur: float, audio: bool,
             fc_parts.append(f"[0:v]trim=start={s:.3f}:end={e:.3f},{norm}[v{k}]")
             v_labels.append(f"[v{k}]")
             if audio:
-                fc_parts.append(
-                    f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
-                    f"aresample=async=1:first_pts=0[a{k}]")
+                # 音频微淡入淡出（hotfix）：消除切割点 click/pop。
+                seg_dur = max(e - s, 0.0)
+                fade_d = min(_AUDIO_FADE, seg_dur / 4)
+                if seg_dur >= _AUDIO_FADE_MIN_SEG and fade_d > 0:
+                    out_st = max(seg_dur - fade_d, 0.0)
+                    fc_parts.append(
+                        f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
+                        f"aresample=async=1:first_pts=0,"
+                        f"afade=t=in:st=0:d={fade_d:.3f},"
+                        f"afade=t=out:st={out_st:.3f}:d={fade_d:.3f}[a{k}]")
+                else:
+                    # 极短片段：不加 fade，避免 fade 时长超过片段本身
+                    fc_parts.append(
+                        f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
+                        f"aresample=async=1:first_pts=0[a{k}]")
                 a_labels.append(f"[a{k}]")
         n = len(windows)
         fc_parts.append("".join(v_labels) + f"concat=n={n}:v=1:a=0[vc]")
@@ -105,7 +123,16 @@ def _build_variant(src: str, out: str, seed: int, dur: float, audio: bool,
         inputs = ["-stream_loop", str(loops), "-i", src]
         fc_parts.append(f"[0:v]{norm}[vc]")
         if audio:
-            fc_parts.append("[0:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[ac]")
+            # SHORT 为整段 stream_loop，不做 segment 级 fade；首尾加全局微 fade，
+            # 防止循环接缝处 click（out fade 起点用 f-string 正确注入 target）。
+            if _AUDIO_FADE > 0:
+                out_st = max(target - _AUDIO_FADE, 0.0)
+                fc_parts.append(
+                    f"[0:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0,"
+                    f"afade=t=in:st=0:d={_AUDIO_FADE:.3f},"
+                    f"afade=t=out:st={out_st:.3f}:d={_AUDIO_FADE:.3f}[ac]")
+            else:
+                fc_parts.append("[0:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[ac]")
 
     # 无音轨 → 用 anullsrc 补静音（保证可拼/可播放）
     if not audio:
