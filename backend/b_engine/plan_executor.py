@@ -15,10 +15,48 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from typing import Any
 
 from b_engine import qa_checks
-from b_engine.remixer import _esc, _font
+from config import settings
+
+# 中文字体候选路径（wqy 首选，Noto CJK 作 fallback）。不复用 remixer 的单路径 _font。
+_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/arphic/uming.ttc",
+]
+
+
+def resolve_font() -> dict:
+    """三级解析中文字体：settings → 候选路径 → fc-match。返回 {available, font_path, source}。"""
+    p = (settings.p2b_subtitle_font_path or "").strip()
+    if p and os.path.exists(p):
+        return {"available": True, "font_path": p, "source": "settings"}
+    for c in _FONT_CANDIDATES:
+        if os.path.exists(c):
+            return {"available": True, "font_path": c, "source": "candidate"}
+    try:
+        r = subprocess.run(["fc-match", "-f", "%{file}", "sans:lang=zh"],
+                           capture_output=True, text=True, timeout=10)
+        fp = (r.stdout or "").strip()
+        if fp and os.path.exists(fp):
+            return {"available": True, "font_path": fp, "source": "fc-match"}
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {"available": False, "font_path": None, "source": "none"}
+
+
+def font_health() -> dict:
+    """字体健康（供 runs/preview 返回 visible_layer_ready 使用）。"""
+    f = resolve_font()
+    return {"visible_layer_ready": bool(f["available"] and settings.enable_p2b_visible_layer),
+            "font_available": f["available"], "font_path": f["font_path"],
+            "font_source": f["source"], "visible_layer_enabled": settings.enable_p2b_visible_layer}
 
 # 中文转场 → (xfade transition 名 | None 表示 hard_cut)
 _TRANSITION_EXEC = {
@@ -137,26 +175,39 @@ def _norm(W: int, H: int, FPS: int) -> str:
             f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1")
 
 
-def _overlay_filters(vp: dict, font: str, target: float) -> tuple[list[str], dict]:
-    """字幕(1-3) + 高光卡(1) + CTA → drawtext 列表。返回 (filters, applied)。"""
-    applied = {"subtitles": [], "highlight": None, "cta": None}
-    parts = []
+def _build_overlays(vp: dict, font_path: str, target: float, text_dir: str) -> tuple[dict, dict]:
+    """构建分层叠加层（每条文案单独 textfile，规避中文/特殊字符转义炸 ffmpeg）。
 
-    def _dt(text, color, size, y, st, en):
+    返回 (layers, applied)：layers = {subtitle:[...], highlight:[...], cta:[...]}（各为 drawtext 列表），
+    供分层 fallback 组合（全叠加 → 仅字幕 → 无叠加）。
+    """
+    layers = {"subtitle": [], "highlight": [], "cta": []}
+    applied = {"subtitles": [], "highlight": None, "cta": None}
+    counter = {"i": 0}
+
+    def _tf(text: str) -> str:
+        counter["i"] += 1
+        path = os.path.join(text_dir, f"ov_{counter['i']:02d}.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write((text or "").strip())     # 不写换行，避免 drawtext 渲染出空行
+        return path
+
+    def _dt(text: str, color: str, size: int, y: str, st: float, en: float) -> str:
         st = max(0.0, min(st, target)); en = max(st + 0.3, min(en, target))
-        return (f"drawtext=fontfile='{font}':text='{_esc(text)}':fontcolor={color}:"
+        tf = _tf(text).replace("\\", "/")
+        return (f"drawtext=fontfile='{font_path}':textfile='{tf}':fontcolor={color}:"
                 f"fontsize={size}:box=1:boxcolor=black@0.5:x=(w-text_w)/2:y={y}:"
                 f"enable='between(t,{st:.2f},{en:.2f})'")
 
-    # 字幕：按优先级取前 2（钩子 + 关键），品牌字幕单列
-    sub = (vp.get("subtitle_plan") or {})
-    entries = sorted((sub.get("subtitle_entries") or []),
+    # 字幕：按优先级取前 2（钩子 + 关键）
+    entries = sorted(((vp.get("subtitle_plan") or {}).get("subtitle_entries") or []),
                      key=lambda e: str(e.get("priority", "P9")))[:2]
     for e in entries:
         txt = (e.get("text") or "")[:18]
         if not txt:
             continue
-        parts.append(_dt(txt, "white", 36, "h*0.12", float(e.get("start", 0.3)), float(e.get("end", 2.5))))
+        layers["subtitle"].append(
+            _dt(txt, "white", 36, "h*0.12", float(e.get("start", 0.3)), float(e.get("end", 2.5))))
         applied["subtitles"].append({"text": txt, "start": e.get("start"), "end": e.get("end")})
 
     # 高光卡（1 张）：叙事转折点附近
@@ -167,17 +218,16 @@ def _overlay_filters(vp: dict, font: str, target: float) -> tuple[list[str], dic
         cdur = float(c.get("duration", 1.0) or 1.0)
         st = max(0.5, target * 0.33)
         if txt:
-            parts.append(_dt(txt, "yellow", 54, "(h-text_h)/2", st, st + cdur))
+            layers["highlight"].append(_dt(txt, "yellow", 54, "(h-text_h)/2", st, st + cdur))
             applied["highlight"] = {"content": txt, "start": round(st, 2), "duration": cdur}
 
     # CTA：结尾 2.5s
-    cta = vp.get("cta_plan") or {}
-    cta_txt = (cta.get("text") or "")[:18]
+    cta_txt = (vp.get("cta_plan") or {}).get("text", "")[:18]
     if cta_txt:
-        parts.append(_dt(cta_txt, "yellow", 40, "h-text_h-60", max(0.0, target - 2.5), target))
+        layers["cta"].append(_dt(cta_txt, "yellow", 40, "h-text_h-60", max(0.0, target - 2.5), target))
         applied["cta"] = {"text": cta_txt}
 
-    return parts, applied
+    return layers, applied
 
 
 def _build_cmd(src: str, out: str, plan: dict, audio: bool, W: int, H: int, FPS: int,
@@ -255,39 +305,73 @@ def _write_srt(path: str, vp: dict) -> None:
         f.write("\n".join(lines))
 
 
+def _render(src, out, plan, audio, W, H, FPS, overlays) -> None:
+    if os.path.exists(out):
+        os.remove(out)
+    subprocess.run(_build_cmd(src, out, plan, audio, W, H, FPS, overlays),
+                   check=True, capture_output=True, timeout=300)
+
+
 def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: Any,
                  W: int, H: int, FPS: int, lo: float, hi: float, tol: float,
                  batch_md5: set[str], variant_id: str = "") -> dict:
     """执行单条计划 → 真实 mp4 + QA。返回 {ok, qa, plan, applied, fallbacks}。
 
-    variant_id：用于派生窗口偏移种子，保证同批多条（含同角色/同结构）取窗差异化、MD5 唯一。
+    可见层（P2B-B2）：字体三级解析 + textfile drawtext + 分层 fallback（全叠加→仅字幕→无叠加）；
+    SRT sidecar 只要有字幕就输出。底座（取窗/转场/音频/QA）一律不变。
+    variant_id：派生窗口偏移种子，保证同批取窗差异化、MD5 唯一。
     """
     vp = _as_obj(variant_plan)
     plan = derive_windows(vp, src_dur, lo, hi, seed=_seed_of(variant_id))
-    font = _font()
-    fallbacks = {"subtitle": False, "highlight": False, "cta": False, "overlay_render": False}
+    target = plan["target_output"]
+    font = resolve_font()
 
-    # 字体缺失 → 全部叠加层降级（字幕走 sidecar srt）
-    if font:
-        overlays, applied = _overlay_filters(vp, font, plan["target_output"])
-    else:
-        overlays, applied = [], {"subtitles": [], "highlight": None, "cta": None}
-        fallbacks.update(subtitle=True, highlight=True, cta=True)
+    # SRT sidecar：只要 subtitle_plan 有内容就输出（烧录成功也输出）
+    has_sub = bool((vp.get("subtitle_plan") or {}).get("subtitle_entries"))
+    srt_written = False
+    if has_sub:
         _write_srt(os.path.splitext(out)[0] + ".srt", vp)
+        srt_written = True
 
-    # 主路径：带叠加层；失败 → 去叠加层重试（主视频不被轻量视觉层卡死）
-    try:
-        subprocess.run(_build_cmd(src, out, plan, audio, W, H, FPS, overlays),
-                       check=True, capture_output=True, timeout=300)
-    except subprocess.CalledProcessError:
-        if os.path.exists(out):
-            os.remove(out)
-        fallbacks.update(overlay_render=True, subtitle=True, highlight=True, cta=True)
-        if not os.path.splitext(out)[0].endswith(".srt"):
-            _write_srt(os.path.splitext(out)[0] + ".srt", vp)
-        applied = {"subtitles": [], "highlight": None, "cta": None}
-        subprocess.run(_build_cmd(src, out, plan, audio, W, H, FPS, []),
-                       check=True, capture_output=True, timeout=300)
+    applied = {"subtitles": [], "highlight": None, "cta": None}
+    fallbacks = {"subtitle_burned": False, "highlight_burned": False, "cta_burned": False,
+                 "font_path": font["font_path"], "font_source": font["source"],
+                 "visible_layer_enabled": bool(settings.enable_p2b_visible_layer),
+                 "srt": srt_written, "fallback_reason": ""}
+
+    if not settings.enable_p2b_visible_layer:
+        fallbacks["fallback_reason"] = "visible_layer_disabled"
+        _render(src, out, plan, audio, W, H, FPS, [])
+    elif not font["available"]:
+        fallbacks["fallback_reason"] = "no_font"
+        _render(src, out, plan, audio, W, H, FPS, [])
+    else:
+        text_dir = tempfile.mkdtemp()
+        layers, applied_all = _build_overlays(vp, font["font_path"], target, text_dir)
+        # 分层降级：全叠加 → 仅字幕 → 无叠加（逐级回退，不一失败就全跳过）
+        tiers = [
+            ("full", layers["subtitle"] + layers["highlight"] + layers["cta"],
+             {"subtitle": bool(layers["subtitle"]), "highlight": bool(layers["highlight"]), "cta": bool(layers["cta"])}),
+            ("subtitle_only", layers["subtitle"],
+             {"subtitle": bool(layers["subtitle"]), "highlight": False, "cta": False}),
+            ("none", [], {"subtitle": False, "highlight": False, "cta": False}),
+        ]
+        for name, ov, burned in tiers:
+            try:
+                _render(src, out, plan, audio, W, H, FPS, ov)
+            except subprocess.CalledProcessError:
+                continue
+            fallbacks["subtitle_burned"] = burned["subtitle"]
+            fallbacks["highlight_burned"] = burned["highlight"]
+            fallbacks["cta_burned"] = burned["cta"]
+            if name != "full":
+                fallbacks["fallback_reason"] = f"degraded_to_{name}"
+            applied = {
+                "subtitles": applied_all["subtitles"] if burned["subtitle"] else [],
+                "highlight": applied_all["highlight"] if burned["highlight"] else None,
+                "cta": applied_all["cta"] if burned["cta"] else None,
+            }
+            break
 
     qa = qa_checks.run_gates(out, batch_md5, lo, hi, tol)
     return {"ok": qa["final_status"] == "pass", "qa": qa, "plan": plan,

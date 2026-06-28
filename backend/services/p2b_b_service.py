@@ -120,11 +120,15 @@ def preview_run(db: Session, tenant_id: str, production_order_id: str,
             "transitions": [{"type_cn": t["type_cn"], "exec": t["exec"], "duration": t["duration"]}
                             for t in plan["transitions"]],
         })
+    # P2B-B2：附带可见层字体健康（additive，不改既有字段语义）
+    fh = plan_executor.font_health()
     return {"ok": True, "data": {
         "production_order_id": production_order_id, "source_video_id": source_video_id,
         "source_duration": round(src["duration"], 2), "selected": items,
         "expected_outputs": len(items), "expected_cost": 0,
         "execution_mode": "staging_only",
+        "visible_layer_ready": fh["visible_layer_ready"],
+        "visible_layer": fh,
     }}
 
 

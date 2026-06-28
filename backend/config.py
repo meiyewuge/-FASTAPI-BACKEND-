@@ -111,5 +111,10 @@ class Settings(BaseSettings):
     p2b_b1_max_items: int = 6            # 单 run 最多执行条数（B1 上限）
     p2b_b1_defect_source_ids: list[int] = [60]  # 已知缺陷源（禁用作为执行源），如 60 号
 
+    # V4 P2B-B2：业务可见层（字幕/高光卡/CTA）。默认开；可临时关做 A/B 对照（不放宽任何安全闸门）。
+    # 仅控制叠加层是否尝试渲染，关闭=回到 B1 纯底座成片。字体缺失时自动降级（不崩主流程）。
+    enable_p2b_visible_layer: bool = True
+    p2b_subtitle_font_path: str = ""    # 中文字体绝对路径（最高优先；空则走候选路径 + fc-match）
+
 
 settings = Settings()
