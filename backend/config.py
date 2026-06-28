@@ -100,5 +100,10 @@ class Settings(BaseSettings):
     b_remix_fps: int = 30
     b_remix_max_retry: int = 2           # QA 失败自动重试上限
 
+    # V4 P2B-A：主题驱动 L2 执行计划（Dry-run）。默认关闭，不影响现有系统；
+    # staging 验证时临时置 true；production 禁止开启。开启后才暴露 /api/p2b/*。
+    enable_l2_skills: bool = False
+    p2b_plan_version: str = "p2b_a_v1"   # 执行计划版本（幂等唯一键的一部分）
+
 
 settings = Settings()

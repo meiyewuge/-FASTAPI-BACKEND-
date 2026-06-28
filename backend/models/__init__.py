@@ -15,9 +15,11 @@ from .production_order import ProductionOrder, ShotMap
 from .fission_plan import FissionPlan, FissionVariant
 from .qa_result import QaResult
 from .skill_registry import SkillRegistry
+from .execution_plan import ExecutionPlan, SkillExecution
 
 __all__ = [
     "Tenant", "Store", "Video", "Task", "CostRecord", "Upload", "InviteCode", "AdminUser",
     "WorkflowRun", "VideoFeedbackSignal", "KnowledgeCandidate", "DirectorPlan", "CostLedger",
     "ProductionOrder", "ShotMap", "FissionPlan", "FissionVariant", "QaResult", "SkillRegistry",
+    "ExecutionPlan", "SkillExecution",
 ]

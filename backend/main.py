@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.routes import api_router
+from api.p2b_routes import p2b_router
 from db import init_db
 
 
@@ -69,6 +70,8 @@ async def _on_unhandled_error(request: Request, exc: Exception):
 
 # 统一 API 出口：所有请求走 /api/*
 app.include_router(api_router, prefix="/api")
+# V4 P2B-A：主题驱动 L2 执行计划（/api/p2b/*，受 ENABLE_L2_SKILLS 控制）
+app.include_router(p2b_router, prefix="/api")
 
 
 @app.get("/health")
