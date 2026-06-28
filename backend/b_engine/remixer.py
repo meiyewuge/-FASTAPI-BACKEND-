@@ -32,8 +32,17 @@ _FONT = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
 # V4 P1.1 Audio Click/Pop Hotfix：音频切割点微淡入淡出，消除波形硬跳变产生的 click/pop。
 # 默认 30ms（人耳几乎不可感知，可有效消除 click）；极短片段（<120ms）跳过 fade，
 # 且 fade 时长不超过片段的 1/4，防止 in/out fade 重叠。测试可 monkeypatch 这两个常量取 20/50ms 样片。
-_AUDIO_FADE = 0.03           # 默认微淡时长（秒）= 30ms
+_AUDIO_FADE = 0.03           # 默认微淡时长（秒）= 30ms（V1 兜底用）
 _AUDIO_FADE_MIN_SEG = 0.12   # 短于此（120ms）的片段跳过 fade
+
+# V4 P1.1 Audio Hotfix V2：用 acrossfade 重叠混合替代「单段 afade + 硬 concat」，
+# 从根上消除拼接点相位/斜率不连续残留的「呲」声。LONG 逐对 acrossfade 串联（方案A：
+# 每段不再叠加单段 afade）。极短片段（任一 < _AUDIO_XFADE_MIN_SEG）降级回 V1(afade+concat)。
+# 测试可 monkeypatch 这些常量产出 80ms tri / 80ms qsin / 120ms tri 对照样片。
+_AUDIO_XFADE_D = 0.08        # acrossfade 重叠时长（秒）= 80ms
+_AUDIO_XFADE_C1 = "tri"      # 淡出曲线（tri 线性最稳；qsin 等功率更柔）
+_AUDIO_XFADE_C2 = "tri"      # 淡入曲线
+_AUDIO_XFADE_MIN_SEG = 0.32  # 参与 acrossfade 的片段最短时长；过短则降级回 V1
 
 
 def _store_version(store: dict | None) -> str:
@@ -92,31 +101,52 @@ def _build_variant(src: str, out: str, seed: int, dur: float, audio: bool,
             total += (w[1] - w[0])
             idx += 1
         inputs = ["-i", src]
+        n = len(windows)
+        seg_durs = [max(e - s, 0.0) for (s, e) in windows]
+        # V2：默认走 acrossfade（方案A）；任一段过短则降级回 V1(afade+concat)
+        use_xfade = audio and n >= 2 and min(seg_durs) >= _AUDIO_XFADE_MIN_SEG
+        xfade_d = min(_AUDIO_XFADE_D, (min(seg_durs) / 4) if seg_durs else 0.0)
+
         v_labels, a_labels = [], []
         for k, (s, e) in enumerate(windows):
             fc_parts.append(f"[0:v]trim=start={s:.3f}:end={e:.3f},{norm}[v{k}]")
             v_labels.append(f"[v{k}]")
             if audio:
-                # 音频微淡入淡出（hotfix）：消除切割点 click/pop。
-                seg_dur = max(e - s, 0.0)
-                fade_d = min(_AUDIO_FADE, seg_dur / 4)
-                if seg_dur >= _AUDIO_FADE_MIN_SEG and fade_d > 0:
-                    out_st = max(seg_dur - fade_d, 0.0)
-                    fc_parts.append(
-                        f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
-                        f"aresample=async=1:first_pts=0,"
-                        f"afade=t=in:st=0:d={fade_d:.3f},"
-                        f"afade=t=out:st={out_st:.3f}:d={fade_d:.3f}[a{k}]")
-                else:
-                    # 极短片段：不加 fade，避免 fade 时长超过片段本身
+                if use_xfade:
+                    # 方案A：每段只 atrim/asetpts/aresample，不叠加单段 afade，
+                    # 衔接交给 acrossfade 重叠混合（避免双重压低重叠区音量）。
                     fc_parts.append(
                         f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
                         f"aresample=async=1:first_pts=0[a{k}]")
+                else:
+                    # 兜底（V1）：极短片段用单段 afade，避免 acrossfade 超过片段长度。
+                    seg_dur = seg_durs[k]
+                    fade_d = min(_AUDIO_FADE, seg_dur / 4)
+                    if seg_dur >= _AUDIO_FADE_MIN_SEG and fade_d > 0:
+                        out_st = max(seg_dur - fade_d, 0.0)
+                        fc_parts.append(
+                            f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
+                            f"aresample=async=1:first_pts=0,"
+                            f"afade=t=in:st=0:d={fade_d:.3f},"
+                            f"afade=t=out:st={out_st:.3f}:d={fade_d:.3f}[a{k}]")
+                    else:
+                        fc_parts.append(
+                            f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
+                            f"aresample=async=1:first_pts=0[a{k}]")
                 a_labels.append(f"[a{k}]")
-        n = len(windows)
         fc_parts.append("".join(v_labels) + f"concat=n={n}:v=1:a=0[vc]")
         if audio:
-            fc_parts.append("".join(a_labels) + f"concat=n={n}:v=0:a=1[ac]")
+            if use_xfade:
+                # 逐对 acrossfade 串联：A×B → 结果×C → ...（不一次性 concat 再 fade）
+                prev = "a0"
+                for i in range(1, n):
+                    lbl = "ac" if i == n - 1 else f"acx{i}"
+                    fc_parts.append(
+                        f"[{prev}][a{i}]acrossfade=d={xfade_d:.3f}:"
+                        f"c1={_AUDIO_XFADE_C1}:c2={_AUDIO_XFADE_C2}[{lbl}]")
+                    prev = lbl
+            else:
+                fc_parts.append("".join(a_labels) + f"concat=n={n}:v=0:a=1[ac]")
     else:
         # SHORT：stream_loop 整段补足，单流规范化（差异化靠叠加层 + 时长）
         loops = max(0, math.ceil((target + 1.0) / max(dur, 0.3)) - 1)
