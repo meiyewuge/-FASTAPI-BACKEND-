@@ -1,0 +1,6 @@
+vite v5.4.21 building for production...
+✓ 38 modules transformed.
+dist/index.html                   0.41 kB │ gzip:  0.31 kB
+dist/assets/index-MFcYu10-.css   26.69 kB │ gzip:  5.44 kB
+dist/assets/index-BgaqAeB3.js   258.39 kB │ gzip: 82.76 kB
+✓ built in 689ms

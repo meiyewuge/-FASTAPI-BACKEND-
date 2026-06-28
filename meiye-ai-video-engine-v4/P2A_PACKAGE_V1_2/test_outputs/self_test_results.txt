@@ -1,0 +1,77 @@
+===== P2A V1.2 完整自测结果 =====
+日期: 2026-06-27
+Commit: c3c30ab
+分支: qoder/v4-frontend-workbench
+基线: b0e0741 (V4 P0-B + P1) → fe2ea24 (P1.1 partial_done) → 86f31e1 (P2A V1.0) → fe40e93 (P2A V1.1) → c3c30ab (P2A V1.2)
+
+===== 构建验证 =====
+[1] tsc --noEmit: PASS (exit code 0, 0 errors)
+[2] vite build: PASS (689ms, 38 modules, dist generated)
+    - dist/index.html: 0.41 kB
+    - dist/assets/index-MFcYu10-.css: 26.69 kB
+    - dist/assets/index-BgaqAeB3.js: 258.39 kB
+
+===== 禁止项检查 =====
+[3] grep "execute|执行裂变|开始生成|真实生成|remixer|火山|batch-generate" in P2APreviewWorkbench.tsx: 0 matches ✅
+[4] grep "upload|paid asset" in P2A page: 0 matches ✅
+
+===== 功能验收项 =====
+[5] 页面入口可见:
+    - Workbench.tsx header 新增按钮「📋 P2A 预览」→ navigate("/p2a-preview")
+    - 按钮颜色 #6366f1，与原有 A/B 台按钮并列
+[6] 路由注册:
+    - main.tsx 注册 /p2a-preview → P2APreviewWorkbench
+    - RequireAuth 包裹，需登录才能访问
+[7] 黄色 Preview Only 横幅:
+    - 页面顶部固定横幅，文案 "⚠️ Preview Only — 仅预览生产单与裂变计划，不执行真实裂变"
+    - 背景 #fef3c7，边框 #f59e0b
+[8] 生产单 Preview (API 1):
+    - 输入 director_plan_id + scenario(下拉 7 项) + platform(下拉 4 项)
+    - 调用 POST /api/production-orders/preview
+    - 展示 production_order 详情 + shot_maps 表格
+[9] 创建生产单 + 二次确认 (API 2 + 3):
+    - API 2 调用 POST /production-orders 创建
+    - API 2 后立即调用 API 3 GET /production-orders/{id} 验证落库
+    - tenant 隔离验证
+[10] 裂变计划 Preview (API 4):
+    - variants 优先读顶层 fp.variants，fallback fp.groups[].variants
+    - 支持 30 条 variant 表格展示
+    - variant 可展开: segment_plan JSON + skill_sequence 步骤条 + output_requirements
+[11] skill_sequence 对象数组:
+    - typeof step === "string" ? step : step.skill_id
+    - skillMap 映射中文名称
+    - 不会触发 React object render error
+[12] scenario 下拉标准 7 项:
+    - product_seeding (产品种草) ← 默认
+    - brand_story (品牌故事)
+    - tutorial (教程)
+    - comparison (对比评测)
+    - review (体验测评)
+    - event (活动宣传)
+    - testimony (用户证言)
+[13] platform 下拉 4 项:
+    - douyin (抖音) ← 默认
+    - xiaohongshu (小红书)
+    - kuaishou (快手)
+    - shipinhao (微信视频号)
+[14] code !== 0 处理:
+    - 所有 5 个 API 均检查 r.code !== 0 || !r.data
+    - 失败时 showToast(r.message)，不空白不崩溃
+[15] Network 白名单:
+    - 仅 /api/production-orders/preview, /api/production-orders, /api/production-orders/{id}, /api/fission-plans/preview, /api/skills
+    - 无火山域名、remixer、batch-generate、upload、paid asset
+
+===== 不退化验证 =====
+[16] A 台/B 台:
+    - Workbench.tsx 仅新增 1 行导航按钮，不影响原有 A 台/B 台功能
+    - 原 handleBClick 逻辑完整保留
+[17] partial_done:
+    - client.ts 行 700: BatchStatus.status union 含 "partial_done"
+    - client.ts 行 734: pollBatchStatus 终止条件含 d?.status === "partial_done"
+    - Workbench.tsx 行 438: handleBClick 含 partial_done 分支 (loadViral + loadDashboard + scroll)
+    - V1.2 修改不涉及这些代码区域
+
+===== 安全确认 =====
+[18] 无硬编码密钥/token
+[19] JWT Bearer 鉴权 (Patch6 模式)
+[20] Preview Only — 无写入/执行/生成操作

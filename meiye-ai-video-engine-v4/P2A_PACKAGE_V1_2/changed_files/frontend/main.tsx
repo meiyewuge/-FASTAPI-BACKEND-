@@ -15,7 +15,6 @@ import Login from "./pages/Login";
 import Workbench from "./pages/Workbench";
 import AdminPanel from "./pages/AdminPanel";
 import P2APreviewWorkbench from "./pages/P2APreviewWorkbench";
-import P2BPreviewWorkbench from "./pages/P2BPreviewWorkbench";
 import "./styles.css";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -57,15 +56,6 @@ const router = createHashRouter([
     element: (
       <>
         <RequireAuth><P2APreviewWorkbench /></RequireAuth>
-        <App />
-      </>
-    ),
-  },
-  {
-    path: "/p2b-preview",
-    element: (
-      <>
-        <RequireAuth><P2BPreviewWorkbench /></RequireAuth>
         <App />
       </>
     ),

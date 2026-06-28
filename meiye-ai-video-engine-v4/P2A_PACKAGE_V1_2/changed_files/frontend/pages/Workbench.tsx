@@ -521,7 +521,6 @@ export default function Workbench() {
             <button className="btn btn-admin" onClick={() => navigate("/admin")} title="管理员后台">管理员</button>
           )}
           <button className="btn btn-admin" onClick={() => navigate("/p2a-preview")} title="P2A 预览工作台" style={{background:"#6366f1",color:"#fff"}}>📋 P2A 预览</button>
-          <button className="btn btn-admin" onClick={() => navigate("/p2b-preview")} title="P2B-A 后期制作脑子预览" style={{background:"#8b5cf6",color:"#fff"}}>🎬 P2B-A 预览</button>
           <button className="btn-logout" onClick={() => { clearAuth(); navigate("/login", { replace: true }); }}>退出</button>
         </div>
       </header>

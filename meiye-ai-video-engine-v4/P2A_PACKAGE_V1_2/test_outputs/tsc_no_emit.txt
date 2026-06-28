@@ -1,0 +1,2 @@
+tsc --noEmit: PASS, Exit code: 0
+0 errors, 0 warnings
