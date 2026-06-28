@@ -221,12 +221,12 @@ def main():
     assert os.path.exists(os.path.splitext(out2)[0] + ".srt")
     print("  ✔ no_font 降级：fallback_reason=no_font，底座仍成片 + SRT")
 
-    # 分层降级：让 full tier 渲染失败 → 自动降到 subtitle_only
+    # 分层降级（B2.1 后链路：差异化 ASS → B2 固定 ASS → 无叠加；不再有 subtitle_only/drawtext）
     orig_render = pe._render
     calls = {"n": 0}
     def _render_fail_full(src, o, plan, au, w, h, f, overlays):
         calls["n"] += 1
-        # 第一次（full，叠加层最多）强制失败，其余正常
+        # 第一次（差异化 ASS）强制失败 → 降到固定 ASS（仍渲染三层），其余正常
         if calls["n"] == 1:
             raise subprocess.CalledProcessError(1, ["ffmpeg"])
         return orig_render(src, o, plan, au, w, h, f, overlays)
@@ -236,11 +236,11 @@ def main():
         r3 = pe.execute_plan(src_path, src_dur, audio, out3, vpj, W, H, FPS, lo, hi, tol, set(), variant_id=vid_)
     finally:
         pe._render = orig_render
-    assert r3["fallbacks"]["fallback_reason"] == "degraded_to_subtitle_only", r3["fallbacks"]
-    assert r3["fallbacks"]["subtitle_burned"] is True
-    assert r3["fallbacks"]["highlight_burned"] is False and r3["fallbacks"]["cta_burned"] is False
+    assert r3["fallbacks"]["fallback_reason"] == "degraded_to_fixed_ass", r3["fallbacks"]
+    assert r3["fallbacks"]["variation_applied"] is False and r3["fallbacks"]["variation_degraded"] is True
+    assert r3["fallbacks"]["subtitle_burned"] and r3["fallbacks"]["cta_burned"], r3["fallbacks"]
     assert r3["ok"], "降级后仍应成片"
-    print("  ✔ 分层降级：full 失败 → degraded_to_subtitle_only（仅字幕烧录，底座不退化）")
+    print("  ✔ 分层降级：差异化 ASS 失败 → degraded_to_fixed_ass（B2 固定 ASS 三层仍烧录，底座不退化）")
 
     # disabled：关可见层 → fallback_reason=visible_layer_disabled
     config.settings.enable_p2b_visible_layer = False

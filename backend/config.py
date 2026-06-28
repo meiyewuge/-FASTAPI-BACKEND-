@@ -116,5 +116,9 @@ class Settings(BaseSettings):
     enable_p2b_visible_layer: bool = True
     p2b_subtitle_font_path: str = ""    # 中文字体绝对路径（最高优先；空则走候选路径 + fc-match）
 
+    # V4 P2B-B2.1：可见层逐 variant 确定性差异化（ASS 档位）。默认开；关=回 B2 固定 ASS 版式，
+    # 不影响 subtitle/highlight/CTA 可见、不影响 B2 收口能力、不放宽任何安全闸门。
+    enable_p2b_visible_variation: bool = True
+
 
 settings = Settings()
