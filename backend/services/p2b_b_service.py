@@ -205,6 +205,11 @@ def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_
         db.add(v); db.flush()
         final_path = os.path.join(viral_dir, f"{v.id}.mp4")
         os.replace(tmp_out, final_path)
+        # P2B-B2: copy SRT sidecar if exists
+        tmp_srt = os.path.splitext(tmp_out)[0] + ".srt"
+        if os.path.exists(tmp_srt):
+            import shutil
+            shutil.copy2(tmp_srt, os.path.splitext(final_path)[0] + ".srt")
         v.local_url = video_storage.local_url(v.id, "viral")
         v.download_url = v.local_url; v.share_url = v.local_url
         batch_md5.add(qa["md5"])
@@ -215,6 +220,8 @@ def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_
 
         item.status = "done"; item.video_id = v.id; item.output_path = final_path
         item.duration = v.duration_seconds; item.md5 = qa["md5"]
+        # P2B-B2: merge fallbacks into qa for reporting
+        qa.update(res.get("fallbacks", {}))
         item.qa_json = json.dumps(qa, ensure_ascii=False)
         item.rhythm_applied_json = json.dumps(res["plan"].get("windows"), ensure_ascii=False) \
             if isinstance(res.get("plan"), dict) else None

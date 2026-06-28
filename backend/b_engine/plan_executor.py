@@ -176,41 +176,74 @@ def _norm(W: int, H: int, FPS: int) -> str:
 
 
 def _build_overlays(vp: dict, font_path: str, target: float, text_dir: str) -> tuple[dict, dict]:
-    """构建分层叠加层（每条文案单独 textfile，规避中文/特殊字符转义炸 ffmpeg）。
+    """构建分层叠加层（ASS 字幕文件 + subtitles 滤镜，兼容无 drawtext 的 ffmpeg）。
 
-    返回 (layers, applied)：layers = {subtitle:[...], highlight:[...], cta:[...]}（各为 drawtext 列表），
-    供分层 fallback 组合（全叠加 → 仅字幕 → 无叠加）。
+    返回 (layers, applied)：layers = {subtitle:[ass_path|...], highlight:[ass_path|...], cta:[ass_path|...]}，
+    供分层 fallback 组合（全叠加 → 仅字幕 → 无叠加）。每个 key 对应 ASS 文件路径。
     """
     layers = {"subtitle": [], "highlight": [], "cta": []}
     applied = {"subtitles": [], "highlight": None, "cta": None}
     counter = {"i": 0}
 
-    def _tf(text: str) -> str:
+    def _ass_ts(t: float) -> str:
+        t = max(0.0, t)
+        h = int(t // 3600); m = int(t % 3600 // 60); s = t % 60
+        return f"{h}:{m:02d}:{s:05.2f}"
+
+    def _write_ass(entries: list, filename: str, style_name: str,
+                   fontsize: int, primary_color: str, alignment: int,
+                   margin_v: int = 0) -> str | None:
+        """写一个 ASS 文件（含多条对话行），返回文件路径。"""
+        if not entries:
+            return None
         counter["i"] += 1
-        path = os.path.join(text_dir, f"ov_{counter['i']:02d}.txt")
+        path = os.path.join(text_dir, filename)
+        lines = [
+            "[Script Info]",
+            "ScriptType: v4.00+",
+            "PlayResX: 720",
+            "PlayResY: 1280",
+            "ScaledBorderAndShadow: yes",
+            "",
+            "[V4+ Styles]",
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+            "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+            "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+            f"Style: {style_name},{os.path.basename(font_path)},{fontsize},{primary_color},"
+            "&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,{alignment},10,10,{margin_v},1",
+            "",
+            "[Events]",
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        ]
+        for e in entries:
+            st = _ass_ts(e["start"])
+            en = _ass_ts(e["end"])
+            txt = e["text"].replace("\\N", " ").replace("\\n", " ").replace("\n", " ")
+            lines.append(f"Dialogue: 0,{st},{en},{style_name},,0,0,0,,{txt}")
         with open(path, "w", encoding="utf-8") as f:
-            f.write((text or "").strip())     # 不写换行，避免 drawtext 渲染出空行
+            f.write("\n".join(lines) + "\n")
         return path
 
-    def _dt(text: str, color: str, size: int, y: str, st: float, en: float) -> str:
-        st = max(0.0, min(st, target)); en = max(st + 0.3, min(en, target))
-        tf = _tf(text).replace("\\", "/")
-        return (f"drawtext=fontfile='{font_path}':textfile='{tf}':fontcolor={color}:"
-                f"fontsize={size}:box=1:boxcolor=black@0.5:x=(w-text_w)/2:y={y}:"
-                f"enable='between(t,{st:.2f},{en:.2f})'")
-
     # 字幕：按优先级取前 2（钩子 + 关键）
-    entries = sorted(((vp.get("subtitle_plan") or {}).get("subtitle_entries") or []),
-                     key=lambda e: str(e.get("priority", "P9")))[:2]
-    for e in entries:
+    sub_entries = sorted(((vp.get("subtitle_plan") or {}).get("subtitle_entries") or []),
+                         key=lambda e: str(e.get("priority", "P9")))[:2]
+    sub_rows = []
+    for e in sub_entries:
         txt = (e.get("text") or "")[:18]
         if not txt:
             continue
-        layers["subtitle"].append(
-            _dt(txt, "white", 36, "h*0.12", float(e.get("start", 0.3)), float(e.get("end", 2.5))))
+        sub_rows.append({"start": max(0.0, float(e.get("start", 0.3))),
+                         "end": min(target, float(e.get("end", 2.5))),
+                         "text": txt})
         applied["subtitles"].append({"text": txt, "start": e.get("start"), "end": e.get("end")})
 
-    # 高光卡（1 张）：叙事转折点附近
+    if sub_rows:
+        # 白字顶部居中：alignment=8(顶部居中), margin_v=120
+        p = _write_ass(sub_rows, "subtitle.ass", "Sub", 36, "&H00FFFFFF", 8, 120)
+        if p:
+            layers["subtitle"].append(p)
+
+    # 高光卡（1 张）：叙事转折点附近，居中，黄字
     cards = (vp.get("highlight_card_plan") or {}).get("cards") or []
     if cards:
         c = cards[0]
@@ -218,13 +251,22 @@ def _build_overlays(vp: dict, font_path: str, target: float, text_dir: str) -> t
         cdur = float(c.get("duration", 1.0) or 1.0)
         st = max(0.5, target * 0.33)
         if txt:
-            layers["highlight"].append(_dt(txt, "yellow", 54, "(h-text_h)/2", st, st + cdur))
+            hl_rows = [{"start": st, "end": st + cdur, "text": txt}]
+            # alignment=5(屏幕正中), 黄色大字
+            p = _write_ass(hl_rows, "highlight.ass", "HL", 54, "&H0000FFFF", 5, 0)
+            if p:
+                layers["highlight"].append(p)
             applied["highlight"] = {"content": txt, "start": round(st, 2), "duration": cdur}
 
-    # CTA：结尾 2.5s
+    # CTA：结尾 2.5s，底部，黄字
     cta_txt = (vp.get("cta_plan") or {}).get("text", "")[:18]
     if cta_txt:
-        layers["cta"].append(_dt(cta_txt, "yellow", 40, "h-text_h-60", max(0.0, target - 2.5), target))
+        cta_st = max(0.0, target - 2.5)
+        cta_rows = [{"start": cta_st, "end": target, "text": cta_txt}]
+        # alignment=2(底部居中), margin_v=60
+        p = _write_ass(cta_rows, "cta.ass", "CTA", 40, "&H0000FFFF", 2, 60)
+        if p:
+            layers["cta"].append(p)
         applied["cta"] = {"text": cta_txt}
 
     return layers, applied
@@ -272,9 +314,15 @@ def _build_cmd(src: str, out: str, plan: dict, audio: bool, W: int, H: int, FPS:
             cur = cur + seg_k - d
             e["applied_duration"] = round(d, 3)
 
-    # 叠加层（可空）
+    # 叠加层（可空）：subtitles 滤镜需逐级串联
     if overlays:
-        fc.append(f"[{acc_v}]" + ",".join(overlays) + "[vout]")
+        cur_v = acc_v
+        for idx, ov in enumerate(overlays):
+            nv = f"ov{idx}" if idx < len(overlays) - 1 else "vout"
+            fc.append(f"[{cur_v}]{ov}[{nv}]")
+            cur_v = nv
+        if cur_v != "vout":
+            fc.append(f"[{cur_v}]null[vout]")
     else:
         fc.append(f"[{acc_v}]null[vout]")
 
@@ -349,10 +397,21 @@ def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: 
         text_dir = tempfile.mkdtemp()
         layers, applied_all = _build_overlays(vp, font["font_path"], target, text_dir)
         # 分层降级：全叠加 → 仅字幕 → 无叠加（逐级回退，不一失败就全跳过）
+        # 将 ASS 文件路径转为 subtitles 滤镜列表
+        def _to_sub_filters(ass_paths: list) -> list:
+            """ASS 文件路径列表 → subtitles 滤镜字符串列表。"""
+            result = []
+            for p in ass_paths:
+                p_esc = p.replace("\\", "/").replace(":", "\\:")
+                result.append(f"subtitles={p_esc}:force_style='FontName={os.path.basename(font['font_path'])}'")
+            return result
+
+        all_ass = layers["subtitle"] + layers["highlight"] + layers["cta"]
+        sub_ass = layers["subtitle"]
         tiers = [
-            ("full", layers["subtitle"] + layers["highlight"] + layers["cta"],
+            ("full", _to_sub_filters(all_ass),
              {"subtitle": bool(layers["subtitle"]), "highlight": bool(layers["highlight"]), "cta": bool(layers["cta"])}),
-            ("subtitle_only", layers["subtitle"],
+            ("subtitle_only", _to_sub_filters(sub_ass),
              {"subtitle": bool(layers["subtitle"]), "highlight": False, "cta": False}),
             ("none", [], {"subtitle": False, "highlight": False, "cta": False}),
         ]
