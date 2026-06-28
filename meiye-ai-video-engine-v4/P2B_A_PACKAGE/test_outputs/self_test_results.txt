@@ -1,0 +1,41 @@
+===== P2B-A 自测结果 =====
+日期: 2026-06-28
+Commit: 5d31ce2
+分支: qoder/v4-frontend-workbench
+
+===== 构建验证 =====
+[1] tsc --noEmit: PASS (exit code 0, 0 errors)
+[2] vite build: PASS (782ms, 39 modules)
+    - dist/index.html: 0.41 kB
+    - dist/assets/index-6c1dNaZS.css: 33.26 kB
+    - dist/assets/index-D-q3WAqY.js: 272.86 kB
+
+===== 功能验收 =====
+[3] 路由 /p2b-preview: main.tsx 注册 RequireAuth 包裹
+[4] Workbench 入口: header 新增「🎬 P2B-A 预览」按钮 (#8b5cf6)
+[5] 黄色横幅: "P2B-A 预览模式 · 只出计划，不执行视频 · cost=¥0"
+[6] Step 1: production_order_id 手动输入 + 快捷按钮 + GET by ID
+[7] Step 2: 中心思想 7 字段展示 + 禁改红线红色标签 + 锁定机制
+[8] Step 3: 6×5 网格卡片 + 展开详情 (craft/rhythm/transition/subtitle/highlight/uniqueness/cta)
+[9] Step 4: 确认入库 + idempotent 宽容处理
+[10] Step 5: by-production-order 列表 + explain 7 类说明
+[11] L2 Skills 面板: GET /p2b/skills + 6 条卡片展示
+
+===== 6 条硬约束 =====
+[12] Step 1 不依赖列表 API: 仅用 GET /production-orders/{id} ✅
+[13] variant_plan_json 兼容 string/object/null: parseVariantPlan() ✅
+[14] idempotent 宽容: true→"已存在", false/缺失→"已确认入库" ✅
+[15] skill_chain 中文 + skill_id: skillChainLabel() + skillChainId() ✅
+[16] 无执行入口: 无 execute/remixer/火山/上传/付费素材 按钮 ✅
+[17] Network 白名单: 仅 8 个 P2B-A API ✅
+
+===== 不退化验证 =====
+[18] A 台/B 台: Workbench.tsx 仅新增 1 行按钮
+[19] P2A: 未修改 P2APreviewWorkbench.tsx
+[20] partial_done: client.ts 行 700 + 734 确认
+[21] Admin/登录: 不受影响
+
+===== 安全确认 =====
+[22] 无硬编码密钥/token
+[23] JWT Bearer 鉴权
+[24] Preview Only — 不执行视频

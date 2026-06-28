@@ -990,11 +990,9 @@ export interface ExecutionPlan {
 export interface ExecutionPlanPreviewResult {
   production_order_id?: string;
   total_count?: number;
-  groups?: { group_type: string; group_type_cn?: string; count: number; plans?: ExecutionPlan[] }[];
+  groups?: { group_type: string; group_type_cn?: string; count: number; plans: ExecutionPlan[] }[];
   plans?: ExecutionPlan[];
-  execution_plans?: ExecutionPlan[];
   dedup_rate?: string | number;
-  dedup_report?: { dedup_rate?: string | number; [key: string]: unknown };
   cost_estimate?: number | string | null;
   execute_allowed?: boolean | number | null;
   summary?: Record<string, unknown>;
@@ -1074,12 +1072,7 @@ export const p2bExplainExecutionPlan = (id: string) =>
 
 /** P2B API 7: GET /p2b/execution-plans/by-production-order/{id} */
 export const p2bExecutionPlansByPO = (productionOrderId: string) =>
-  get<{
-    execution_plans?: ExecutionPlan[];
-    items?: ExecutionPlan[];
-    plans?: ExecutionPlan[];
-    total?: number;
-  }>(
+  get<{ items?: ExecutionPlan[]; plans?: ExecutionPlan[]; total?: number }>(
     `/p2b/execution-plans/by-production-order/${productionOrderId}`,
   );
 

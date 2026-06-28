@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   getProductionOrder, p2bThemeKernels, p2bExecutionPlansPreview,
@@ -41,19 +41,6 @@ function parseVariantPlan(v?: string | Record<string, unknown> | null): Record<s
     try { return JSON.parse(v); } catch { return null; }
   }
   return null;
-}
-
-function getVariantPlan(p: EP): Record<string, unknown> | null {
-  if (p.variant_plan && typeof p.variant_plan === "object") {
-    return p.variant_plan as Record<string, unknown>;
-  }
-  return parseVariantPlan(p.variant_plan_json);
-}
-
-function renderPlanValue(v: unknown): React.ReactNode {
-  if (v == null) return "暂无";
-  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v);
-  return <pre className="p2b-json-pre">{JSON.stringify(v, null, 2)}</pre>;
 }
 
 function skillChainLabel(step: ExecutionPlanSkillChainItem | string): string {
@@ -122,7 +109,6 @@ export default function P2BPreviewWorkbench() {
       return;
     }
     setPoData(r.data);
-    localStorage.setItem("p2b_last_po_id", r.data.production_order_id);
     showToast("生产单已读取");
   };
 
@@ -168,7 +154,7 @@ export default function P2BPreviewWorkbench() {
     const r = await p2bExecutionPlansByPO(poData.production_order_id);
     setStep5Loading(false);
     if (r.code !== 0 || !r.data) { showToast(r.message || "查询已入库计划失败"); return; }
-    const plans = r.data.execution_plans || r.data.items || r.data.plans || [];
+    const plans = r.data.items || r.data.plans || [];
     setStoredPlans(plans);
     setExplainData(null);
     showToast(`已入库 ${plans.length} 条`);
@@ -185,10 +171,8 @@ export default function P2BPreviewWorkbench() {
 
   // ==================== 获取全部 plans（兼容顶层和嵌套）====================
   const getAllPlans = (data: EPPreview): EP[] => {
-    if (Array.isArray(data.execution_plans) && data.execution_plans.length > 0) return data.execution_plans;
     if (Array.isArray(data.plans) && data.plans.length > 0) return data.plans;
-    if (Array.isArray(data.groups)) return data.groups.flatMap(g => g.plans || []);
-    return [];
+    return data.groups?.flatMap(g => g.plans || []) || [];
   };
 
   // ==================== Render ====================
@@ -288,14 +272,12 @@ export default function P2BPreviewWorkbench() {
           )}
           {previewData && (() => {
             const allPlans = getAllPlans(previewData);
-            const groupCount = previewData.groups?.length || new Set(allPlans.map(p => p.group_type)).size || 0;
-            const dedupRate = previewData.dedup_report?.dedup_rate ?? previewData.dedup_rate ?? "100%";
             return (
               <div className="p2b-preview-section">
                 <div className="p2b-summary">
                   <span>{allPlans.length} 条执行计划</span>
-                  <span>{groupCount} 组策略</span>
-                  <span>去重率 {String(dedupRate)}</span>
+                  <span>{previewData.groups?.length || 0} 组策略</span>
+                  <span>去重率 {String(previewData.dedup_rate ?? "100%")}</span>
                   <span><CostBadge cost={previewData.cost_estimate ?? 0} /></span>
                   <span className="p2b-allowed-tag">{previewData.execute_allowed === true ? "⚠️ 允许执行" : "🔒 不执行视频"}</span>
                 </div>
@@ -324,24 +306,15 @@ export default function P2BPreviewWorkbench() {
                         </div>
 
                         {/* 展开详情 */}
-                        {isExpanded && (() => {
-                          const vp = getVariantPlan(p);
-                          const craft = p.craft_explanation || vp?.craft_explanation;
-                          const rhythm = p.rhythm_plan || vp?.rhythm_plan;
-                          const transition = p.transition_plan || vp?.transition_plan;
-                          const subtitle = p.subtitle_plan || vp?.subtitle_plan;
-                          const highlight = p.highlight_card_plan || vp?.highlight_card_plan;
-                          const uniqueness = p.uniqueness_plan || vp?.uniqueness_plan;
-                          const cta = p.cta_plan || vp?.cta_plan;
-                          return (
+                        {isExpanded && (
                           <div className="p2b-card-detail" onClick={e => e.stopPropagation()}>
-                            {craft != null && <div className="p2b-detail-block"><h5>craft_explanation</h5><div>{renderPlanValue(craft)}</div></div>}
-                            {rhythm != null && <div className="p2b-detail-block"><h5>rhythm_plan</h5><div>{renderPlanValue(rhythm)}</div></div>}
-                            {transition != null && <div className="p2b-detail-block"><h5>transition_plan</h5><div>{renderPlanValue(transition)}</div></div>}
-                            {subtitle != null && <div className="p2b-detail-block"><h5>subtitle_plan</h5><div>{renderPlanValue(subtitle)}</div></div>}
-                            {highlight != null && <div className="p2b-detail-block"><h5>highlight_card_plan</h5><div>{renderPlanValue(highlight)}</div></div>}
-                            {uniqueness != null && <div className="p2b-detail-block"><h5>uniqueness_plan</h5><div>{renderPlanValue(uniqueness)}</div></div>}
-                            {cta != null && <div className="p2b-detail-block"><h5>cta_plan</h5><div>{renderPlanValue(cta)}</div></div>}
+                            {p.craft_explanation && <div className="p2b-detail-block"><h5>craft_explanation</h5><p>{p.craft_explanation}</p></div>}
+                            {p.rhythm_plan && <div className="p2b-detail-block"><h5>rhythm_plan</h5><p>{p.rhythm_plan}</p></div>}
+                            {p.transition_plan && <div className="p2b-detail-block"><h5>transition_plan</h5><p>{p.transition_plan}</p></div>}
+                            {p.subtitle_plan && <div className="p2b-detail-block"><h5>subtitle_plan</h5><p>{p.subtitle_plan}</p></div>}
+                            {p.highlight_card_plan && <div className="p2b-detail-block"><h5>highlight_card_plan</h5><p>{p.highlight_card_plan}</p></div>}
+                            {p.uniqueness_plan && <div className="p2b-detail-block"><h5>uniqueness_plan</h5><p>{p.uniqueness_plan}</p></div>}
+                            {p.cta_plan && <div className="p2b-detail-block"><h5>cta_plan</h5><p>{p.cta_plan}</p></div>}
                             {p.skill_chain && (
                               <div className="p2b-detail-block">
                                 <h5>skill_chain</h5>
@@ -356,12 +329,11 @@ export default function P2BPreviewWorkbench() {
                                 </div>
                               </div>
                             )}
-                            {vp && (
-                              <JsonBlock data={vp} label="variant_plan" />
+                            {parseVariantPlan(p.variant_plan_json) && (
+                              <JsonBlock data={parseVariantPlan(p.variant_plan_json)} label="variant_plan_json" />
                             )}
                           </div>
-                          );
-                        })()}
+                        )}
                       </div>
                     );
                   })}
