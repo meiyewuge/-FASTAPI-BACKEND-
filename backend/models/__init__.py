@@ -16,10 +16,11 @@ from .fission_plan import FissionPlan, FissionVariant
 from .qa_result import QaResult
 from .skill_registry import SkillRegistry
 from .execution_plan import ExecutionPlan, SkillExecution
+from .p2b_run import P2bExecutionRun, P2bExecutionRunItem
 
 __all__ = [
     "Tenant", "Store", "Video", "Task", "CostRecord", "Upload", "InviteCode", "AdminUser",
     "WorkflowRun", "VideoFeedbackSignal", "KnowledgeCandidate", "DirectorPlan", "CostLedger",
     "ProductionOrder", "ShotMap", "FissionPlan", "FissionVariant", "QaResult", "SkillRegistry",
-    "ExecutionPlan", "SkillExecution",
+    "ExecutionPlan", "SkillExecution", "P2bExecutionRun", "P2bExecutionRunItem",
 ]

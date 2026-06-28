@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.routes import api_router
 from api.p2b_routes import p2b_router
+from api.p2b_b_routes import p2b_b_router
 from db import init_db
 
 
@@ -72,6 +73,8 @@ async def _on_unhandled_error(request: Request, exc: Exception):
 app.include_router(api_router, prefix="/api")
 # V4 P2B-A：主题驱动 L2 执行计划（/api/p2b/*，受 ENABLE_L2_SKILLS 控制）
 app.include_router(p2b_router, prefix="/api")
+# V4 P2B-B1：小批量真实执行（/api/p2b-b/*，受 ENABLE_P2B_REAL_EXECUTION + staging 双闸门）
+app.include_router(p2b_b_router, prefix="/api")
 
 
 @app.get("/health")

@@ -105,5 +105,11 @@ class Settings(BaseSettings):
     enable_l2_skills: bool = False
     p2b_plan_version: str = "p2b_a_v1"   # 执行计划版本（幂等唯一键的一部分）
 
+    # V4 P2B-B1：小批量真实执行（脑子→执行器→成片）。默认关闭；仅 staging + 开关 才允许真实生成；
+    # production 强制 403（优先级最高，即使 flag=true）。单次最多 6 条。
+    enable_p2b_real_execution: bool = False
+    p2b_b1_max_items: int = 6            # 单 run 最多执行条数（B1 上限）
+    p2b_b1_defect_source_ids: list[int] = [60]  # 已知缺陷源（禁用作为执行源），如 60 号
+
 
 settings = Settings()
