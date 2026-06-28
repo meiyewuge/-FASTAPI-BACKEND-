@@ -22,8 +22,15 @@ p2b_router = APIRouter(prefix="/p2b")
 
 _DISABLED = Resp(code=4031, message="P2B-A 功能未开启（ENABLE_L2_SKILLS=false）")
 
+# production 环境硬拦截：无论 ENABLE_L2_SKILLS 是否被误配为 true，一律禁开
+_PROD_ENVS = {"prod", "production"}
+
 
 def _enabled() -> bool:
+    """P2B-A 是否开启。V1.1 硬锁：production/prod 环境一律返回 False（禁开）。"""
+    env = (settings.app_env or "").lower()
+    if env in _PROD_ENVS:
+        return False
     return bool(settings.enable_l2_skills)
 
 

@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import settings
-from models import ExecutionPlan, SkillExecution
+from models import ExecutionPlan, FissionPlan, SkillExecution
 from services import p2b_orchestration_service as orch
 from services import p2b_theme_service as theme_svc
 from services import production_order_service
@@ -27,11 +27,36 @@ def _targets() -> tuple[float, float]:
     return settings.b_remix_target_lo, settings.b_remix_target_hi
 
 
+def _validate_fission_plan(db: Session, tenant_id: str, production_order_id: str,
+                           fission_plan_id: str | None) -> bool:
+    """fission_plan_id 校验（V1.1 硬锁）。
+
+    - None：可选，沿用 deterministic 生成逻辑 → 合法。
+    - 非空：必须在 P2A FissionPlan 表存在，且归属同一 production_order_id + tenant_id。
+      不存在/越权 → False（禁止把未校验的 fission_plan_id 写入 execution_plans）。
+    """
+    if not fission_plan_id:
+        return True
+    fp = (
+        db.query(FissionPlan)
+        .filter(
+            FissionPlan.fission_plan_id == fission_plan_id,
+            FissionPlan.production_order_id == production_order_id,
+            FissionPlan.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    return fp is not None
+
+
 def _build(db: Session, tenant_id: str, production_order_id: str,
            fission_plan_id: str | None) -> dict | None:
-    """公共构建：order → theme → 30 计划。order 不存在/越权 → None。"""
+    """公共构建：order → theme → 30 计划。order 不存在/越权、fission_plan_id 非法 → None。"""
     order = production_order_service.get(db, tenant_id, production_order_id)
     if order is None:
+        return None
+    # V1.1：非空 fission_plan_id 必须校验存在 + 归属（tenant + production_order）
+    if not _validate_fission_plan(db, tenant_id, production_order_id, fission_plan_id):
         return None
     theme = theme_svc.build_theme_kernel(db, tenant_id, order)
     lo, hi = _targets()

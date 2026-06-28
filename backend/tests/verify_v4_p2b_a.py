@@ -204,6 +204,29 @@ def main():
             assert step["skill_id"].endswith("_v1"), step
     print("  ✔ skill_chain 存 canonical skill_id + 中文 display_name")
 
+    # ---- V1.1 硬锁①：fission_plan_id 非空校验（不存在/越权 → 3001）----
+    from models import FissionPlan
+    s = _db.SessionLocal()
+    s.add(FissionPlan(fission_plan_id="fp_valid_A", production_order_id=po_id, tenant_id="tenantA"))
+    s.add(FissionPlan(fission_plan_id="fp_other_tenant", production_order_id=po_id, tenant_id="tenantB"))
+    s.commit(); s.close()
+    # 合法 fission_plan_id（preview 不入库）→ 30 条且回填该 id
+    okfp = c.post("/api/p2b/execution-plans/preview",
+                  json={"production_order_id": po_id, "fission_plan_id": "fp_valid_A"}, headers=A).json()
+    assert okfp["code"] == 0 and okfp["data"]["total"] == 30, okfp
+    assert all(p["fission_plan_id"] == "fp_valid_A" for p in okfp["data"]["execution_plans"]), "应回填合法 fission_plan_id"
+    # 不存在的 fission_plan_id → 3001
+    assert c.post("/api/p2b/execution-plans/preview",
+                  json={"production_order_id": po_id, "fission_plan_id": "fp_not_exist"}, headers=A).json()["code"] == 3001
+    # 属于其它租户的 fission_plan_id（A 请求 B 的）→ 3001
+    assert c.post("/api/p2b/execution-plans/preview",
+                  json={"production_order_id": po_id, "fission_plan_id": "fp_other_tenant"}, headers=A).json()["code"] == 3001
+    # confirm 非法 fission_plan_id → 3001 且不写入
+    assert c.post("/api/p2b/execution-plans",
+                  json={"production_order_id": po_id, "fission_plan_id": "fp_not_exist"}, headers=A).json()["code"] == 3001
+    assert _count("execution_plans") == 0, "非法 fission confirm 不应写入"
+    print("  ✔ V1.1 硬锁①：fission_plan_id 非空校验（不存在/越权→3001，未校验不写入）")
+
     # ---- 7) confirm 入库 30 条 ----
     cf = c.post("/api/p2b/execution-plans", json={"production_order_id": po_id}, headers=A).json()
     assert cf["code"] == 0 and cf["data"]["total"] == 30 and cf["data"]["idempotent"] is False, cf
@@ -261,6 +284,44 @@ def main():
     assert c.get(f"/api/p2b/execution-plans/by-production-order/{po_id}", headers=B).json()["data"]["total"] == 0
     assert c.post("/api/p2b/execution-plans/preview", json={"production_order_id": po_id}, headers=B).json()["code"] == 3001
     print("  ✔ tenant 隔离：B 无法访问 A 的生产单/执行计划")
+
+    # ---- V1.1 硬锁①续：合法 fission_plan_id 正常写入（独立生产单）----
+    po_f = _make_production_order(c, A)
+    s = _db.SessionLocal()
+    s.add(FissionPlan(fission_plan_id="fp_for_pf", production_order_id=po_f, tenant_id="tenantA"))
+    s.commit(); s.close()
+    cf_f = c.post("/api/p2b/execution-plans",
+                  json={"production_order_id": po_f, "fission_plan_id": "fp_for_pf"}, headers=A).json()
+    assert cf_f["code"] == 0 and cf_f["data"]["total"] == 30, cf_f
+    s = _db.SessionLocal()
+    fids = {r[0] for r in s.execute(
+        text("SELECT DISTINCT fission_plan_id FROM execution_plans WHERE production_order_id=:p"),
+        {"p": po_f}).fetchall()}
+    s.close()
+    assert fids == {"fp_for_pf"}, fids
+    print("  ✔ V1.1 硬锁①：合法 fission_plan_id 正常写入 execution_plans")
+
+    # ---- V1.1 硬锁②：production 环境硬拦截（无视 ENABLE_L2_SKILLS）----
+    _orig_env = config.settings.app_env
+    try:
+        config.settings.enable_l2_skills = True
+        for env in ("production", "prod"):
+            config.settings.app_env = env
+            assert c.get("/api/p2b/skills", headers=A).json()["code"] == 4031, f"{env}+true 应 4031"
+            assert c.post("/api/p2b/execution-plans/preview",
+                          json={"production_order_id": po_id}, headers=A).json()["code"] == 4031
+        # production + ENABLE_L2_SKILLS=false → 仍 4031
+        config.settings.app_env = "production"; config.settings.enable_l2_skills = False
+        assert c.get("/api/p2b/skills", headers=A).json()["code"] == 4031
+        # staging/dev + true → 可用
+        config.settings.enable_l2_skills = True
+        for env in ("staging", "dev"):
+            config.settings.app_env = env
+            assert c.get("/api/p2b/skills", headers=A).json()["code"] == 0, f"{env}+true 应可用"
+    finally:
+        config.settings.app_env = _orig_env
+        config.settings.enable_l2_skills = True
+    print("  ✔ V1.1 硬锁②：production/prod 环境硬拦截（即使 ENABLE_L2_SKILLS=true 仍返回 4031）")
 
     # ---- 16) 不调火山 ----
     assert trig["n"] == 0, f"火山被触发 {trig['n']} 次"
