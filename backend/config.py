@@ -124,7 +124,10 @@ class Settings(BaseSettings):
     # 默认开；production 永不触发（runs 403）；关=回 B2.1 音频/编码口径，不影响 B1/B2/B2.1。
     enable_p2b_audio_encoding_diff: bool = True
     p2b_loudness_target_lufs: float = -14.0   # EBU R128 目标响度
-    p2b_true_peak_dbtp: float = -1.0          # True Peak 上限
+    p2b_true_peak_dbtp: float = -1.0          # True Peak 验收上限（最终 mp4 实测须 ≤ 此值）
+    # V2 hotfix：内部 TP 目标收紧 + 安全限幅 headroom，抵消 AAC 编码后真峰回弹（仅 TP 内部参数）
+    p2b_tp_internal_dbtp: float = -2.0        # loudnorm 内部 TP 目标（比验收线低，留余量）
+    p2b_limiter_limit: float = 0.794          # alimiter 限幅（≈ -2 dBFS，给 AAC 留 headroom）
     p2b_build_commit: str = ""                # 诚实溯源用：本次部署 commit（ECS 部署时注入；空=unknown）
 
 

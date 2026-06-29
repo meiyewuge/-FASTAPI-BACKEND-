@@ -451,7 +451,9 @@ def audio_encoding_info(variant_id: str, run_id: str = "") -> dict:
     return {
         "applied": True,
         "target_lufs": settings.p2b_loudness_target_lufs,
-        "true_peak_target_dbtp": settings.p2b_true_peak_dbtp,
+        "true_peak_target_dbtp": settings.p2b_true_peak_dbtp,        # 验收线
+        "tp_internal_dbtp": settings.p2b_tp_internal_dbtp,           # V2：内部更紧
+        "limiter_limit": settings.p2b_limiter_limit,                # V2：alimiter headroom
         "loudnorm_pass": "two",             # 两趟 loudnorm（analyze + linear apply），EQ 前置
         "eq_profile": eq_name, "eq_index": eq_idx, "eq_filter": eq_flt,
         "tempo_factor": _TEMPO_RESERVED,    # 1.0：B2.5 不变速
@@ -559,7 +561,10 @@ def _apply_audio_encoding(path: str, audio_enc: dict) -> None:
     """
     if not (audio_enc and audio_enc.get("applied")):
         return
-    lufs = audio_enc["target_lufs"]; tp = audio_enc["true_peak_target_dbtp"]
+    lufs = audio_enc["target_lufs"]
+    # V2：用内部更紧的 TP 目标（默认 -2.0），抵消 AAC 编码后真峰回弹；验收线仍 -1。
+    tp = audio_enc.get("tp_internal_dbtp", audio_enc["true_peak_target_dbtp"])
+    limit = audio_enc.get("limiter_limit", 0.794)
     eq = audio_enc.get("eq_filter") or "anull"
 
     meas = _loudnorm_analyze(path, eq, lufs, tp)
@@ -572,7 +577,8 @@ def _apply_audio_encoding(path: str, audio_enc: dict) -> None:
     else:
         # 兜底：测量失败回退单趟 dynamic（EQ 仍前置）
         ln = f"loudnorm=I={lufs:g}:TP={tp:g}:LRA={_LRA:g}"
-    af = f"{eq},{ln},aformat=sample_rates=44100:channel_layouts=stereo"
+    # V2：loudnorm 后增加安全限幅（≈ -2 dBFS），给 AAC 编码留 headroom，防真峰回弹超 -1 dBTP
+    af = f"{eq},{ln},alimiter=limit={limit:g}:level=false,aformat=sample_rates=44100:channel_layouts=stereo"
 
     tmp = path + ".aenc.mp4"
     cmd = ["ffmpeg", "-y", "-i", path, "-map", "0:v", "-map", "0:a", "-c:v", "copy",

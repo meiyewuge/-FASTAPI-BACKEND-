@@ -26,13 +26,18 @@ _SAMPLE_DIR = os.environ.get("SAMPLE_DIR") or os.path.join(tempfile.mkdtemp(), "
 
 
 def _make_source(path, seconds, w=320, h=240, audio=True):
-    # 宽带音频（pink noise）：EQ 会改变整体响度，逼近真实内容（正弦会掩盖 EQ-after-loudnorm 缺陷）
+    # 宽带 + 高 crest 源：pink noise 连续底 + 密集高频瞬态（每 50ms 一个 4ms 尖峰）。
+    # 逼近 ECS 真实生成视频音频（~13dB crest、True Peak 顶到 -1 附近），能真正压测 true-peak limiter；
+    # 正弦窄带掩盖 EQ-after 缺陷、pink 单源 crest 偏低不压 limiter，故二者都不用单独使用。
     cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc=s={w}x{h}:d={seconds}:r=30"]
     if audio:
-        cmd += ["-f", "lavfi", "-i", f"anoisesrc=d={seconds}:c=pink:a=0.9"]
+        cmd += ["-f", "lavfi", "-i", f"anoisesrc=d={seconds}:c=pink:a=0.7",
+                "-f", "lavfi",
+                "-i", f"aevalsrc=exprs=0.45*sin(2*PI*3000*t)*lt(mod(t\\,0.05)\\,0.004):d={seconds}:s=44100",
+                "-filter_complex", "[1:a][2:a]amix=inputs=2:weights=1 1:normalize=0[a]"]
     cmd += ["-pix_fmt", "yuv420p"]
     if audio:
-        cmd += ["-c:a", "aac", "-shortest"]
+        cmd += ["-map", "0:v", "-map", "[a]", "-c:a", "aac", "-shortest"]
     cmd += [path]
     subprocess.run(cmd, check=True, capture_output=True)
 
