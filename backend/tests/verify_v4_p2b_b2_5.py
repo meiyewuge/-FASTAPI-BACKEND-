@@ -26,9 +26,10 @@ _SAMPLE_DIR = os.environ.get("SAMPLE_DIR") or os.path.join(tempfile.mkdtemp(), "
 
 
 def _make_source(path, seconds, w=320, h=240, audio=True):
+    # 宽带音频（pink noise）：EQ 会改变整体响度，逼近真实内容（正弦会掩盖 EQ-after-loudnorm 缺陷）
     cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc=s={w}x{h}:d={seconds}:r=30"]
     if audio:
-        cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}"]
+        cmd += ["-f", "lavfi", "-i", f"anoisesrc=d={seconds}:c=pink:a=0.9"]
     cmd += ["-pix_fmt", "yuv420p"]
     if audio:
         cmd += ["-c:a", "aac", "-shortest"]
@@ -37,16 +38,18 @@ def _make_source(path, seconds, w=320, h=240, audio=True):
 
 
 def _measure_loudness(path):
-    """ebur128 测 Integrated loudness(I) 与 True Peak。返回 (I_lufs, true_peak_dbfs)。"""
-    r = subprocess.run(["ffmpeg", "-i", path, "-af", "ebur128=peak=true", "-f", "null", "-"],
+    """用 loudnorm analyze 测 Integrated loudness(I, LUFS) 与 True Peak(input_tp, dBTP)。"""
+    r = subprocess.run(["ffmpeg", "-i", path, "-map", "0:a", "-af",
+                        "loudnorm=I=-14:TP=-1:print_format=json", "-f", "null", "-"],
                        capture_output=True, text=True)
-    log = r.stderr
-    # 取 Summary 段最后出现的 I 与 Peak
-    i_vals = re.findall(r"I:\s*(-?\d+\.?\d*)\s*LUFS", log)
-    pk_vals = re.findall(r"Peak:\s*(-?\d+\.?\d*)\s*dBFS", log)
-    I = float(i_vals[-1]) if i_vals else None
-    TP = float(pk_vals[-1]) if pk_vals else None
-    return I, TP
+    m = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", r.stderr, re.S)
+    if not m:
+        return None, None
+    try:
+        d = json.loads(m[-1])
+        return float(d["input_i"]), float(d["input_tp"])
+    except (ValueError, KeyError):
+        return None, None
 
 
 def _format_tags(path):
@@ -177,11 +180,11 @@ def main():
         dur = qa_checks.probe_duration(path); assert 24.5 <= dur <= 35.5, dur
         assert qa_checks.has_audio(path)
         md5s.add(it["md5"])
-        # 响度 + True Peak
+        # 响度 + True Peak（验收线：I=-14±1 LUFS，True Peak ≤ -1 dBTP）
         I, TP = _measure_loudness(path)
         lufs_list.append((it["group_type"], I, TP))
-        assert I is not None and abs(I - (-14.0)) <= 1.5, f"{it['group_type']} I={I} 偏离 -14 过大"
-        assert TP is not None and TP <= -0.5, f"{it['group_type']} TruePeak={TP} 超限"
+        assert I is not None and -15.0 <= I <= -13.0, f"{it['group_type']} I={I} 不在 -14±1"
+        assert TP is not None and TP <= -1.0, f"{it['group_type']} TruePeak={TP} 超过 -1 dBTP"
         # AAC 44100 stereo
         astream = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a",
                                   "-show_entries", "stream=codec_name,sample_rate,channels",
@@ -199,7 +202,7 @@ def main():
     se.close()
     assert len(md5s) == 3, f"MD5 {len(md5s)}/3"
     assert len(set(sigs)) == 3, f"audio_encoding_signature 应 3/3 唯一: {sigs}"
-    print("  ✔ 响度≈-14 LUFS(±1.5) / TruePeak≤-0.5 / AAC44100stereo / metadata 清理+诚实溯源 / 无伪造标签")
+    print("  ✔ 响度=-14 LUFS(±1) / TruePeak≤-1 dBTP / AAC44100stereo / metadata 清理+诚实溯源 / 无伪造标签")
     print(f"    实测响度: " + "; ".join(f"{g}:{I}LUFS,TP{TP}" for g, I, TP in lufs_list))
     print("  ✔ audio_encoding_signature 3/3 唯一 / MD5 3/3 唯一 / duration∈[25,35]")
 

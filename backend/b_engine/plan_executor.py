@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from typing import Any
@@ -451,7 +452,7 @@ def audio_encoding_info(variant_id: str, run_id: str = "") -> dict:
         "applied": True,
         "target_lufs": settings.p2b_loudness_target_lufs,
         "true_peak_target_dbtp": settings.p2b_true_peak_dbtp,
-        "loudnorm_pass": "single",          # 一阶段单 pass；B3/后续精修可升 two-pass
+        "loudnorm_pass": "two",             # 两趟 loudnorm（analyze + linear apply），EQ 前置
         "eq_profile": eq_name, "eq_index": eq_idx, "eq_filter": eq_flt,
         "tempo_factor": _TEMPO_RESERVED,    # 1.0：B2.5 不变速
         "encoding_profile": _ENC_PROFILE,
@@ -532,21 +533,50 @@ def _build_cmd(src: str, out: str, plan: dict, audio: bool, W: int, H: int, FPS:
             "-c:a", "aac", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", out]
 
 
-def _apply_audio_encoding(path: str, audio_enc: dict) -> None:
-    """B2.5 第二趟（audio-only，-c:v copy）：响度规范化 + 轻 EQ + metadata 清理 + 诚实溯源。
+_LRA = 11.0   # loudnorm Loudness Range 目标
 
-    单独一趟在成片上做，不进 _build_cmd 的 filter_complex（loudnorm 与 acrossfade 同图会偶发卡死）；
-    `-c:v copy` 不重编码视频、不改时长/不变速/不变调；只重编码音频。
+
+def _loudnorm_analyze(path: str, eq: str, lufs: float, tp: float) -> dict | None:
+    """两趟 loudnorm 第一趟：EQ → loudnorm(print_format=json) 测量。返回 measured 字典或 None。"""
+    af = f"{eq},loudnorm=I={lufs:g}:TP={tp:g}:LRA={_LRA:g}:print_format=json"
+    r = subprocess.run(["ffmpeg", "-i", path, "-map", "0:a", "-af", af, "-f", "null", "-"],
+                       capture_output=True, text=True, timeout=180)
+    m = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", r.stderr, re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m[-1])
+    except ValueError:
+        return None
+
+
+def _apply_audio_encoding(path: str, audio_enc: dict) -> None:
+    """B2.5 第二/第三趟（audio-only，-c:v copy）：两趟 loudnorm（EQ 前置）+ metadata 清理 + 诚实溯源。
+
+    链路：EQ → loudnorm analyze（测量）→ loudnorm apply(linear，按测量值精确达标) → AAC 导出。
+    EQ 放 loudnorm 之前，避免 EQ 改变最终响度；linear 模式按测量值线性规范，稳定达到 -14 LUFS±1、TP ≤ -1。
+    `-c:v copy` 不重编码视频、不改时长/不变速/不变调。loudnorm 不与 acrossfade 同图（避免偶发卡死）。
     """
     if not (audio_enc and audio_enc.get("applied")):
         return
     lufs = audio_enc["target_lufs"]; tp = audio_enc["true_peak_target_dbtp"]
     eq = audio_enc.get("eq_filter") or "anull"
+
+    meas = _loudnorm_analyze(path, eq, lufs, tp)
+    if meas:
+        # 第二趟：linear 模式 + 测量值 → 精确达标（EQ 仍前置，保证测量一致）
+        ln = (f"loudnorm=I={lufs:g}:TP={tp:g}:LRA={_LRA:g}:linear=true:"
+              f"measured_I={meas['input_i']}:measured_TP={meas['input_tp']}:"
+              f"measured_LRA={meas['input_lra']}:measured_thresh={meas['input_thresh']}:"
+              f"offset={meas.get('target_offset', '0.0')}")
+    else:
+        # 兜底：测量失败回退单趟 dynamic（EQ 仍前置）
+        ln = f"loudnorm=I={lufs:g}:TP={tp:g}:LRA={_LRA:g}"
+    af = f"{eq},{ln},aformat=sample_rates=44100:channel_layouts=stereo"
+
     tmp = path + ".aenc.mp4"
     cmd = ["ffmpeg", "-y", "-i", path, "-map", "0:v", "-map", "0:a", "-c:v", "copy",
-           "-af", f"loudnorm=I={lufs:g}:TP={tp:g}:LRA=11,{eq},"
-                  f"aformat=sample_rates=44100:channel_layouts=stereo",
-           "-c:a", "aac", "-ar", "44100", "-ac", "2",
+           "-af", af, "-c:a", "aac", "-ar", "44100", "-ac", "2",
            "-map_metadata", "-1", "-metadata", f"comment={audio_enc['provenance']}",
            "-movflags", "+faststart", tmp]
     subprocess.run(cmd, check=True, capture_output=True, timeout=180)
