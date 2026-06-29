@@ -194,21 +194,26 @@ def get_score(db: Session, tenant_id: str, run_id: str) -> dict | None:
 
 
 def publish_pool(db: Session, tenant_id: str, run_id: str) -> dict:
-    """发布池读取契约：只返回 batch_summary.pass=true 且 recommended_action=pass_to_publish_pool 的条目。"""
+    """发布池读取契约（quality isolation hotfix）：只按 per-variant recommended_action=pass_to_publish_pool 放行；
+    **不因 batch_summary.pass=false（局部失败/邻居质量不达标）阻断健康视频进入发布池。**
+    """
     b3b = get_score(db, tenant_id, run_id)
     if not b3b:
         return {"run_id": run_id, "eligible": False, "reason": "尚未评分", "videos": []}
-    batch_pass = (b3b.get("batch_summary") or {}).get("pass") is True
-    eligible = [p for p in (b3b.get("per_variant") or [])
+    bs = b3b.get("batch_summary") or {}
+    eligible = [p["video_id"] for p in (b3b.get("per_variant") or [])
                 if p.get("recommended_action") == "pass_to_publish_pool"]
     return {
         "run_id": run_id,
-        "eligible": batch_pass and len(eligible) > 0,
-        "batch_pass": batch_pass,
-        "effective_variant_count": (b3b.get("batch_summary") or {}).get("effective_variant_count", 0),
-        "batch_pass_rate": (b3b.get("batch_summary") or {}).get("batch_pass_rate", 0.0),
-        "videos": [p["video_id"] for p in eligible] if batch_pass else [],
-        "contract": "batch_summary.pass=true AND recommended_action=pass_to_publish_pool",
+        "eligible": len(eligible) > 0,           # 只要有健康条过线即放行（不被 batch_pass 阻断）
+        "batch_pass": bs.get("pass"),            # 仅供参考，不作为放行门槛
+        "effective_variant_count": bs.get("effective_variant_count", 0),
+        "batch_pass_rate": bs.get("batch_pass_rate", 0.0),
+        "publishable_video_ids": eligible,
+        "blocked_video_ids": bs.get("blocked_video_ids", []),
+        "quality_fail_videos": bs.get("quality_fail_videos", []),
+        "videos": eligible,
+        "contract": "per-variant recommended_action=pass_to_publish_pool（不被 batch_summary.pass 连坐）",
     }
 
 

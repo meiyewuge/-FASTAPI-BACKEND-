@@ -258,12 +258,12 @@ def main():
     assert qa2["b3_batch"]["batch_id"] == run_id
     print("  ✔ (10) 重跑幂等覆盖，不追加")
 
-    # 发布池契约
+    # 发布池契约（quality isolation：只按 per-variant action，不被 batch_pass 连坐）
     pp = c.get(f"/api/p2b-b3/publish-pool/{run_id}", headers=A).json()["data"]
-    assert pp["contract"] == "batch_summary.pass=true AND recommended_action=pass_to_publish_pool"
-    if pp["batch_pass"]:
-        assert all(vid in scored_ids for vid in pp["videos"])
-    print(f"  ✔ 发布池契约：eligible={pp['eligible']} videos={pp['videos']}")
+    assert "不被 batch_summary.pass 连坐" in pp["contract"], pp["contract"]
+    assert set(pp["videos"]) <= set(scored_ids)
+    assert "publishable_video_ids" in pp and "blocked_video_ids" in pp
+    print(f"  ✔ 发布池契约（per-variant 不连坐）：eligible={pp['eligible']} videos={pp['videos']}")
 
     # (15) 大 N 模拟 N=50/100 + (16) O(N²) 降级 + (17) proxy/pixel 记录
     for N in (50, 100):
@@ -301,14 +301,92 @@ def main():
     assert (amt or 0) == 0, f"B3 cost 应为 0，实际 {amt}"
     print("  ✔ (18) 不调火山/LLM / (19) 不新增表 / (20) cost=0")
 
+    # ============ 场景 C：quality_fail per-variant 隔离（21/22/23）============
+    # 三条视觉/文本各不同，只有 vid2 TP 超标（quality_fail）。期望：vid2 回炉，vid1/vid3 不连坐。
+    tmpd = tempfile.mkdtemp()
+    p1, p2, p3 = (os.path.join(tmpd, f"s{i}.mp4") for i in (1, 2, 3))
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=s=160x120:d=12:r=30", "-pix_fmt", "yuv420p", p1], capture_output=True)
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "mandelbrot=s=160x120:rate=30", "-t", "12", "-pix_fmt", "yuv420p", p2], capture_output=True)
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "rgbtestsrc=s=160x120:d=12:r=30", "-pix_fmt", "yuv420p", p3], capture_output=True)
+    K = config.settings.p2b_b3_keyframes
+    fh1 = b3_score.frame_hashes(p1, 12.0, K); fh2 = b3_score.frame_hashes(p2, 12.0, K); fh3 = b3_score.frame_hashes(p3, 12.0, K)
+
+    def _mkv(vid, gt, sig, txt, fh, eq, measured):
+        return {"video_id": vid, "group_type": gt, "duration": 30,
+                "windows": [{"role": "产品", "start": vid * 1.0, "end": vid * 1.0 + 3}],
+                "transitions": [], "subtitle_applied": [{"text": txt}],
+                "highlight_applied": {"text": f"高光{vid}"}, "cta_applied": {"text": f"关注{vid}"},
+                "visible_style_signature": sig, "variation_dimensions": {"subtitle_alignment": vid, "cta_style": txt[:1], "highlight_time_bucket": vid * 0.1},
+                "audio_encoding_signature": f"lufs-14tp-1eq{vid}:{eq}|enc:x|mc1|var{vid}{vid}{vid}",
+                "eq_profile": eq, "frame_hashes": fh,
+                "qa": {"playable_ok": True, "pts_ok": True}, "measured": measured}
+    v1 = _mkv(1, "pain_first", "sa0mv1fs2ol0ha1ht2ca0cs0cd1", "痛点字幕完全不同AAAA", fh1, "neutral", {"lufs": -14.0, "true_peak": -2.0})
+    v2 = _mkv(2, "selling_first", "sa1mv0fs1ol2ha0ht1ca2cs1cd0", "卖点字幕完全不同BBBB", fh2, "warm", {"lufs": -14.0, "true_peak": -0.3})  # TP 超标
+    v3 = _mkv(3, "result_close", "sa2mv2fs0ol1ha2ht0ca1cs2cd2", "效果字幕完全不同CCCC", fh3, "clear", {"lufs": -14.1, "true_peak": -2.1})
+    thrC = {"vds_pass": 70, "visual_floor": 0.12, "text_floor": 0.10, "kf_min_floor": 0.06,
+            "visual_target": 0.35, "text_target": 0.30, "audio_target": 0.5, "keyframes": K,
+            "audio_switch_low": 0.08, "audio_switch_high": 0.12, "calibration": "provisional", "b3_version": "b3_v1"}
+    resC = b3_score.score_batch([v1, v2, v3], thrC)
+    pvC = {p["video_id"]: p for p in resC["per_variant"]}
+    bsC = resC["batch_summary"]
+    # (21) per-variant 隔离
+    assert pvC[2]["recommended_action"] == "needs_regeneration_later", pvC[2]
+    assert "quality_fail_self" in pvC[2]["fail_reason"], pvC[2]
+    assert pvC[1]["recommended_action"] == "pass_to_publish_pool", f"vid1 被连坐: {pvC[1]}"
+    assert pvC[3]["recommended_action"] == "pass_to_publish_pool", f"vid3 被连坐: {pvC[3]}"
+    # 健康条 fail_reason 不含他人 quality 连坐
+    assert "quality_fail" not in pvC[1]["fail_reason"] and "quality_fail" not in pvC[3]["fail_reason"]
+    assert bsC["quality_fail_videos"] == [2], bsC["quality_fail_videos"]
+    assert bsC["effective_variant_count"] == 2, bsC   # vid1/vid3 不被误杀
+    assert bsC["publishable_video_ids"] == [1, 3] and bsC["blocked_video_ids"] == [2]
+    assert bsC["all_variants_quality_ok"] is False
+    # pairwise 记录哪条质量失败
+    for cell in resC["pairwise_matrix"]:
+        if 2 in cell["pair"]:
+            assert cell["quality_fail_videos"] == [2], cell
+        else:
+            assert cell["quality_fail_videos"] == [], cell
+    print("  ✔ (21) quality_fail per-variant 隔离：vid2 回炉、vid1/vid3 不连坐、quality_fail_videos=[2]")
+
+    # (22) publish_pool 不因 batch 局部失败误杀健康条（batch.pass=false 但健康条仍可进池）
+    assert bsC["pass"] is False, "含 quality_fail 的 batch pass 应 false"
+    # 模拟 service 契约：只按 per-variant action 放行，不被 batch_pass 阻断
+    publishable = [p["video_id"] for p in resC["per_variant"]
+                   if p["recommended_action"] == "pass_to_publish_pool"]
+    assert publishable == [1, 3] and 2 not in publishable
+    print("  ✔ (22) publish_pool 不因 batch 局部失败误杀：batch.pass=false 仍放行 vid1/vid3")
+
+    # (23) quality_unknown 监控字段存在 + unknown 不硬否决
+    for kk in ("quality_unknown_count", "quality_unknown_rate", "quality_unknown_fields_by_video"):
+        assert kk in bsC, f"batch_summary 缺 {kk}"
+    # 构造 unknown：一条无任何实测/qa（loudness/tp/playback 全未知）→ unknown 但不 quality_fail
+    vU = _mkv(4, "pain_first", "sa0mv0fs0ol0ha0ht0ca0cs3cd0", "字幕D", fh1, "neutral", {})
+    vU["qa"] = {"playable_ok": None, "pts_ok": None}; vU["duration"] = None
+    resU = b3_score.score_batch([v1, v3, vU], thrC)
+    pvU = {p["video_id"]: p for p in resU["per_variant"]}
+    assert resU["batch_summary"]["quality_unknown_count"] >= 1
+    assert 0.0 <= resU["batch_summary"]["quality_unknown_rate"] <= 1.0
+    assert pvU[4]["recommended_action"] != "needs_regeneration_later" or pvU[4]["quality_fail"] is False
+    assert pvU[4]["quality_fail"] is False, "unknown 不应当作 quality_fail 硬否决"
+    assert pvU[4]["quality_unknown_fields"], "应记录该条未知字段"
+    print(f"  ✔ (23) quality_unknown 监控：count={resU['batch_summary']['quality_unknown_count']} "
+          f"rate={resU['batch_summary']['quality_unknown_rate']} 不硬否决")
+    # cleanup scenario C temp（路径硬校验，仅删本测试 tmpdir 内 mp4）
+    if tmpd and os.path.isdir(tmpd) and "/tmp" in tmpd:
+        import glob as _g
+        for fp in _g.glob(os.path.join(tmpd, "*.mp4")):
+            os.remove(fp)
+
     # 落样例报告
     with open(os.path.join(_SAMPLE_DIR, "b3_batch_result.json"), "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(_SAMPLE_DIR, "b3_quality_isolation_scenarioC.json"), "w", encoding="utf-8") as f:
+        json.dump(resC, f, ensure_ascii=False, indent=2)
 
     _db.engine.dispose()
     if os.path.exists("./_v4p2bb3_test.db"):
         os.remove("./_v4p2bb3_test.db")
-    print("\n✅ V4 P2B-B3 ALL PASSED（20/20）")
+    print("\n✅ V4 P2B-B3 ALL PASSED（23/23，含 quality isolation 21/22/23）")
 
 
 if __name__ == "__main__":

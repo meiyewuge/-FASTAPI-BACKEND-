@@ -350,8 +350,9 @@ def quality_variant(v: dict) -> dict:
     passed = sum(1 for val in known if val)
     score = round(WEIGHTS_DEFAULT[3] * (passed / len(known)), 3) if known else WEIGHTS_DEFAULT[3]
     quality_fail = any(val is False for val in checks.values())
+    unknown_fields = [name for name, val in checks.items() if val is None]
     return {**checks, "quality_score": score, "quality_fail": quality_fail,
-            "lufs": lufs, "true_peak": tp}
+            "unknown_fields": unknown_fields, "lufs": lufs, "true_peak": tp}
 
 
 # ============================ 权重滞后切换 ============================
@@ -393,16 +394,26 @@ def _rescale_scores(visual_d, text_d, audio_d, q_score, weights, targets) -> tup
 
 
 def score_pair(a: dict, b: dict, thr: dict, weights: list) -> dict:
+    """评一对。质量(quality_fail)为 per-variant 硬闸，**不连坐 pair 差异判定**：
+    pair 的差异判定（non_quality_pair_status）只看 visual/text/audio，剥离质量；质量仅记录哪条失败。
+    """
     targets = (thr["visual_target"], thr["text_target"], thr["audio_target"])
     vis = visual_pair(a, b, thr["visual_target"])
     txt = text_pair(a, b, thr["text_target"])
     aud = audio_pair(a, b, thr["audio_target"])
     q_min = min(a["_quality"]["quality_score"], b["_quality"]["quality_score"])
-    quality_fail = a["_quality"]["quality_fail"] or b["_quality"]["quality_fail"]
+
+    # 质量：per-variant，记录哪条失败（不影响 pair 差异判定）
+    quality_fail_videos = [v["video_id"] for v in (a, b) if v["_quality"]["quality_fail"]]
+    has_quality_fail = bool(quality_fail_videos)
 
     vs, os_, aus, qs = _rescale_scores(vis["visual_distance"], txt["text_distance"],
                                        aud["audio_distance"], q_min, weights, targets)
     vds = round(vs + os_ + aus + qs, 3)
+    # 差异分（剥离质量）：visual+ocr+audio
+    non_quality_score = round(vs + os_ + aus, 3)
+    # 差异过线阈：在 VDS_pass 基础上扣掉质量满分权重（质量 OK 时等价于原 VDS 口径）
+    diff_pass = thr["vds_pass"] - weights[3]
 
     too_similar_visual = (vis["kf_min"] is not None and vis["kf_min"] < thr["kf_min_floor"])
     too_similar_text = txt["all_text_equal"] and txt["sig_diff"] == 0.0
@@ -411,19 +422,19 @@ def score_pair(a: dict, b: dict, thr: dict, weights: list) -> dict:
         flags.append("too_similar_visual")
     if too_similar_text:
         flags.append("too_similar_text")
-    if quality_fail:
-        flags.append("quality_fail")
+    if has_quality_fail:
+        flags.append("quality_fail")        # 保留标记；具体哪条见 quality_fail_videos
     if vis["visual_proxy_only"]:
         flags.append("visual_proxy_only")
 
-    # pair 状态分类
+    # 差异状态（non_quality）：只看 visual/text/audio，**不含 quality_fail 连坐**
     below_floor = (vis["visual_distance"] < thr["visual_floor"] or txt["text_distance"] < thr["text_floor"])
-    if quality_fail or too_similar_visual or too_similar_text or vds < (thr["vds_pass"] - 5):
-        status = "regen"
-    elif vds < thr["vds_pass"] or below_floor:
-        status = "review"
+    if too_similar_visual or too_similar_text or non_quality_score < (diff_pass - 5):
+        nq_status = "regen"
+    elif non_quality_score < diff_pass or below_floor:
+        nq_status = "review"
     else:
-        status = "pass"
+        nq_status = "pass"
 
     return {
         "pair": [a["video_id"], b["video_id"]],
@@ -434,7 +445,12 @@ def score_pair(a: dict, b: dict, thr: dict, weights: list) -> dict:
                                "sig_diff_weighted", "text_distance", "all_text_equal")},
         **{k: aud[k] for k in ("eq_diff", "sig_diff_audio", "fp_diff", "audio_distance")},
         "visual_score": vs, "ocr_score": os_, "audio_score": aus, "quality_score": qs,
-        "VDS_total": vds, "pair_pass": status == "pass", "pair_status": status,
+        "non_quality_score": non_quality_score,
+        "VDS_total": vds,
+        "non_quality_pair_status": nq_status,           # 剥离质量后的差异判定（驱动 variant 聚合）
+        "pair_status": nq_status,                       # 兼容旧字段 = 差异状态
+        "pair_pass": nq_status == "pass" and not has_quality_fail,  # 全过(含质量)，仅供 batch 报告
+        "quality_fail_videos": quality_fail_videos,     # 本 pair 中质量不达标的具体条目
         "pair_flags": flags,
     }
 
@@ -465,26 +481,36 @@ def score_batch(videos: list[dict], thr: dict, previous_weight_profile: str | No
 
     matrix = [score_pair(a, b, thr, weights) for a, b in combinations(videos, 2)]
 
-    # 每 variant 聚合：取其参与 pair 的状态/分
+    # 每 variant 聚合：质量为 per-variant 硬闸（只否决自身），差异判定剥离质量、不被邻居连坐。
     per_variant = []
     for v in videos:
         vid = v["video_id"]
         mypairs = [c for c in matrix if vid in c["pair"]]
-        statuses = [c["pair_status"] for c in mypairs]
-        action = _action_from_statuses(statuses)
-        if v["_quality"]["quality_fail"]:
+        own_quality = v["_quality"]
+        # 差异状态：只看自身参与 pair 的 non_quality_pair_status（不含对方质量）
+        diff_statuses = [c["non_quality_pair_status"] for c in mypairs]
+        diff_action = _action_from_statuses(diff_statuses)
+        # 差异相关原因（剥离质量 flag）
+        diff_reasons = sorted({f for c in mypairs for f in c["pair_flags"] if f != "quality_fail"})
+
+        if own_quality["quality_fail"]:
+            # 自身质量不达标 → 硬否决（不连坐邻居，也不被邻居连坐）
             action = "needs_regeneration_later"
-        vds_list = [c["VDS_total"] for c in mypairs] or [0.0]
-        reasons = sorted({f for c in mypairs for f in c["pair_flags"]})
-        if v["_quality"]["quality_fail"]:
-            reasons = sorted(set(reasons) | {"quality_fail"})
+            reasons = sorted(set(diff_reasons) | {"quality_fail_self"})
+        else:
+            action = diff_action          # 健康条：只按自身差异结果判定
+            reasons = diff_reasons
+        nq_list = [c["non_quality_score"] for c in mypairs] or [0.0]
         per_variant.append({
             "video_id": vid, "group_type": v.get("group_type"),
             "visual_score": round(sum(c["visual_score"] for c in mypairs) / len(mypairs), 3) if mypairs else 0.0,
             "ocr_score": round(sum(c["ocr_score"] for c in mypairs) / len(mypairs), 3) if mypairs else 0.0,
             "audio_score": round(sum(c["audio_score"] for c in mypairs) / len(mypairs), 3) if mypairs else 0.0,
-            "quality_score": v["_quality"]["quality_score"],
-            "VDS_total": round(min(vds_list), 3),   # 取最坏 pair 作为该条 VDS
+            "quality_score": own_quality["quality_score"],
+            "quality_fail": own_quality["quality_fail"],
+            "quality_unknown_fields": own_quality["unknown_fields"],
+            "non_quality_score": round(min(nq_list), 3),
+            "VDS_total": round(min(nq_list) + own_quality["quality_score"], 3),
             "pass": action == "pass_to_publish_pool",
             "fail_reason": reasons,
             "recommended_action": action,
@@ -492,21 +518,35 @@ def score_batch(videos: list[dict], thr: dict, previous_weight_profile: str | No
 
     total = len(videos)
     effective = sum(1 for p in per_variant if p["recommended_action"] == "pass_to_publish_pool")
+    publishable = [p["video_id"] for p in per_variant if p["recommended_action"] == "pass_to_publish_pool"]
+    blocked = [p["video_id"] for p in per_variant if p["recommended_action"] != "pass_to_publish_pool"]
+    quality_fail_videos = sorted({vid for c in matrix for vid in c["quality_fail_videos"]})
+    all_quality_ok = len(quality_fail_videos) == 0
+
+    # 质量 unknown 监控（非阻塞）
+    unknown_by_video = {p["video_id"]: p["quality_unknown_fields"]
+                        for p in per_variant if p["quality_unknown_fields"]}
+    quality_unknown_count = len(unknown_by_video)
+    quality_unknown_rate = round(quality_unknown_count / total, 4) if total else 0.0
+
     too_similar_pairs = [c["pair"] for c in matrix if ("too_similar_visual" in c["pair_flags"]
                                                        or "too_similar_text" in c["pair_flags"])]
-    min_vds = min((c["VDS_total"] for c in matrix), default=0.0)
-    weakest = min(matrix, key=lambda c: c["VDS_total"])["pair"] if matrix else []
+    min_nq = min((c["non_quality_score"] for c in matrix), default=0.0)
+    weakest = min(matrix, key=lambda c: c["non_quality_score"])["pair"] if matrix else []
     visual_covered = all(c["visual_distance"] >= thr["visual_floor"] for c in matrix)
     ocr_covered = all(c["text_distance"] >= thr["text_floor"] for c in matrix)
     audio_covered = all(c["audio_distance"] > 0 for c in matrix)
-    batch_pass = all(c["pair_pass"] for c in matrix)
-    batch_action = _action_from_statuses([c["pair_status"] for c in matrix])
+    # batch.pass = 全 pair 差异过线 且 所有 variant 质量 OK（仅报告用；publish_pool 不依赖它）
+    batch_pass = all(c["non_quality_pair_status"] == "pass" for c in matrix) and all_quality_ok
+    batch_action = _action_from_statuses([p["recommended_action"] for p in per_variant])
 
     fail_reasons = sorted({f for c in matrix for f in c["pair_flags"]})
     if not visual_covered:
         fail_reasons.append("visual_below_floor")
     if not ocr_covered:
         fail_reasons.append("text_below_floor")
+    if not all_quality_ok:
+        fail_reasons.append("quality_fail")
 
     return {
         "batch_id": None,  # 由 service 填 run_id
@@ -514,7 +554,7 @@ def score_batch(videos: list[dict], thr: dict, previous_weight_profile: str | No
         "pairwise_matrix": matrix,
         "per_variant": per_variant,
         "batch_summary": {
-            "min_pair_VDS": round(min_vds, 3), "weakest_pair": weakest,
+            "min_pair_non_quality_score": round(min_nq, 3), "weakest_pair": weakest,
             "too_similar_pairs": too_similar_pairs,
             "visual_covered": visual_covered, "ocr_covered": ocr_covered, "audio_covered": audio_covered,
             "pass": batch_pass, "fail_reason": sorted(set(fail_reasons)),
@@ -522,6 +562,13 @@ def score_batch(videos: list[dict], thr: dict, previous_weight_profile: str | No
             "total_variant_count": total,
             "effective_variant_count": effective,
             "batch_pass_rate": round(effective / total, 4) if total else 0.0,
+            "all_variants_quality_ok": all_quality_ok,
+            "quality_fail_videos": quality_fail_videos,
+            "publishable_video_ids": publishable,
+            "blocked_video_ids": blocked,
+            "quality_unknown_count": quality_unknown_count,
+            "quality_unknown_rate": quality_unknown_rate,
+            "quality_unknown_fields_by_video": unknown_by_video,
         },
         "thresholds_used": {
             "VDS_pass": thr["vds_pass"], "visual_floor": thr["visual_floor"],
