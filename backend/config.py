@@ -130,5 +130,22 @@ class Settings(BaseSettings):
     p2b_limiter_limit: float = 0.794          # alimiter 限幅（≈ -2 dBFS，给 AAC 留 headroom）
     p2b_build_commit: str = ""                # 诚实溯源用：本次部署 commit（ECS 部署时注入；空=unknown）
 
+    # V4 P2B-B3：三维差异评分闸门（只评分，不自动重剪/不生成/不扩批）。默认开；production 永不触发（403）；
+    # 关=不评分、不写 b3 字段，回 B2.5 收口态。零新增表：写 videos.meta.b3_score + run_items.qa_json.b3_batch。
+    enable_p2b_b3_score: bool = True
+    p2b_b3_version: str = "b3_v1"
+    p2b_b3_vds_pass: float = 70.0             # pair VDS 过线
+    p2b_b3_visual_floor: float = 0.12         # 视觉维最低阈（provisional，负样本到位前不锁定）
+    p2b_b3_text_floor: float = 0.10           # 文本维最低阈（provisional）
+    p2b_b3_kf_min_floor: float = 0.06         # 近重复关键帧下界（provisional）
+    p2b_b3_visual_target: float = 0.35        # 视觉满分差异度（校准锚）
+    p2b_b3_text_target: float = 0.30          # 文本满分差异度
+    p2b_b3_audio_target: float = 0.50         # 音频满分差异度（辅助维，目标低）
+    p2b_b3_keyframes: int = 8                 # 关键帧抽样数 K
+    p2b_b3_audio_switch_low: float = 0.08     # 权重滞后：audio_distance_mean<low → 45/35/10/10
+    p2b_b3_audio_switch_high: float = 0.12    # audio_distance_mean>high → 40/35/15/10；区间内保持上次
+    p2b_b3_fullpair_max_n: int = 30           # N>此值 → 不做全量 O(N²)，走分桶+候选精算降级
+    p2b_b3_calibration: str = "provisional"   # 负样本到位并定稿后改 "final"
+
 
 settings = Settings()

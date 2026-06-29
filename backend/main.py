@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from api.routes import api_router
 from api.p2b_routes import p2b_router
 from api.p2b_b_routes import p2b_b_router
+from api.p2b_b3_routes import p2b_b3_router
 from db import init_db
 
 
@@ -75,6 +76,8 @@ app.include_router(api_router, prefix="/api")
 app.include_router(p2b_router, prefix="/api")
 # V4 P2B-B1：小批量真实执行（/api/p2b-b/*，受 ENABLE_P2B_REAL_EXECUTION + staging 双闸门）
 app.include_router(p2b_b_router, prefix="/api")
+# V4 P2B-B3：三维差异评分闸门（/api/p2b-b3/*，受 ENABLE_P2B_B3_SCORE；production 强制 403）
+app.include_router(p2b_b3_router, prefix="/api")
 
 
 @app.get("/health")
