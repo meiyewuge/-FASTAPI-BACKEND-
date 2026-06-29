@@ -200,7 +200,8 @@ def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_
             batch_id=run_id, duration_seconds=qa_checks.probe_duration(tmp_out),
             meta=json.dumps({"p2b_b1": True, "execution_plan_id": e.execution_plan_id,
                              "applied": res["applied"], "fallbacks": res["fallbacks"],
-                             "audio_encoding": res.get("audio_encoding", {})},  # B2.5
+                             "audio_encoding": res.get("audio_encoding", {}),   # B2.5
+                             "visual_encoding": res.get("visual_encoding", {})},  # B2.7
                             ensure_ascii=False),
         )
         db.add(v); db.flush()

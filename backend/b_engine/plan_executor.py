@@ -464,8 +464,88 @@ def audio_encoding_info(variant_id: str, run_id: str = "") -> dict:
     }
 
 
+# ============================ B2.7 视觉合规差异化（逐 variant 构图 + 轻调色） ============================
+# 档位（确定性、≤幅度上限）。只放大不缩小、不黑边、不镜像、不变速、不 hue 旋转、不强锐化。
+_VZ_OPTS = [1.00, 1.06, 1.12]            # zoom（≤1.12）
+_VPX_OPTS = [0.50, 0.42, 0.58]           # pan_x：中心 ±8%
+_VPY_OPTS = [0.45, 0.50, 0.55]           # pan_y：中上 / 中 / 中下
+_VTEMP_OPTS = ["neutral", "warm", "cool"]
+_VCONTRAST_OPTS = [0.96, 1.00, 1.06]     # 0.92–1.10 内
+_VSAT_OPTS = [0.96, 1.00, 1.08]          # 0.92–1.12 内（护肤色）
+_VGAMMA_OPTS = [0.96, 1.00, 1.05]        # 0.92–1.08 内
+_VBRIGHT_OPTS = [-0.03, 0.0, 0.03]       # ±0.04 内
+_VTEMP_BAL = {"neutral": "", "warm": "colorbalance=rm=0.03:bm=-0.03",
+              "cool": "colorbalance=rm=-0.03:bm=0.03"}     # 小幅冷暖，无 hue 旋转
+
+
+def resolve_visual_profile(vp: dict, variant_id: str) -> dict:
+    """逐 variant 确定性视觉档位（构图 + 轻调色）+ visual_profile_signature。同 variant 跨 run 一致、跨 variant 互异。
+
+    group_type 决定构图基调（zoom/pan_y），轻调色由增强 seed 互异质数取档。全部 ≤ 幅度上限。
+    """
+    seed = _variation_seed(vp, variant_id)
+    vidx = _variant_index(vp, seed)
+    gt = vp.get("group_type")
+    g = _GROUP_TYPE_ORDER.index(gt) if gt in _GROUP_TYPE_ORDER else (seed % 6)
+
+    zi = g % 3                       # 构图缩放：按 group 家族
+    pyi = g % 3                      # 垂直锚点：按 group 家族
+    pxi = (seed // 3) % 3
+    ti = (seed // 5) % 3
+    ci = (seed // 7) % 3
+    si = (seed // 11) % 3
+    gmi = (seed // 13) % 3
+    bi = (seed // 17) % 3
+
+    prof = {
+        "zoom": _VZ_OPTS[zi], "pan_x": _VPX_OPTS[pxi], "pan_y": _VPY_OPTS[pyi],
+        "temperature_profile": _VTEMP_OPTS[ti],
+        "contrast": _VCONTRAST_OPTS[ci], "saturation": _VSAT_OPTS[si],
+        "gamma": _VGAMMA_OPTS[gmi], "brightness": _VBRIGHT_OPTS[bi],
+        "sharpness": False,          # 第一版 OFF
+    }
+    sig = f"z{zi}px{pxi}py{pyi}tp{ti}ct{ci}sa{si}gm{gmi}br{bi}"
+    prof["visual_profile_signature"] = sig
+    return prof
+
+
+def _visual_filter(profile: dict, W: int, H: int) -> str:
+    """把 visual_profile 编译成 ffmpeg 滤镜串（不含前导逗号）。仅 crop/scale/eq/colorbalance；
+    无 hue 旋转、无 hflip/vflip/transpose（镜像）、无 setpts/atempo（变速）。无可改动 → 返回空串。
+    """
+    parts: list[str] = []
+    z = profile.get("zoom", 1.0)
+    if z and z > 1.0:               # 只放大；先按 z 放大再裁回 WxH（居中+锚点），不产生黑边
+        px = profile.get("pan_x", 0.5); py = profile.get("pan_y", 0.5)
+        parts.append(f"scale=iw*{z:g}:ih*{z:g}")
+        parts.append(f"crop={W}:{H}:(iw-{W})*{px:g}:(ih-{H})*{py:g}")
+    c = profile.get("contrast", 1.0); s = profile.get("saturation", 1.0)
+    gm = profile.get("gamma", 1.0); b = profile.get("brightness", 0.0)
+    if not (c == 1.0 and s == 1.0 and gm == 1.0 and b == 0.0):
+        parts.append(f"eq=contrast={c:g}:saturation={s:g}:gamma={gm:g}:brightness={b:g}")
+    bal = _VTEMP_BAL.get(profile.get("temperature_profile", "neutral"), "")
+    if bal:
+        parts.append(bal)
+    return ",".join(parts)
+
+
+def visual_profile_info(variant_id: str, vp: dict, W: int, H: int) -> dict:
+    """B2.7 视觉差异化信息（flag 关 → applied=False、visual_filter=""，_norm 字节等价）。"""
+    if not settings.enable_p2b_visual_diff:
+        return {"applied": False, "visual_profile_signature": "off", "visual_filter": "",
+                "profile": {}}
+    prof = resolve_visual_profile(vp, variant_id)
+    vf = _visual_filter(prof, W, H)
+    return {"applied": True, "visual_profile_signature": prof["visual_profile_signature"],
+            "visual_filter": vf, "profile": prof,
+            "limits": {"zoom_max": 1.12, "pan_x_center_pct": 8, "contrast": [0.92, 1.10],
+                       "saturation": [0.92, 1.12], "gamma": [0.92, 1.08], "brightness_abs": 0.04,
+                       "hue_rotation": False, "mirror": False, "speed_change": False,
+                       "sharpness": False}}
+
+
 def _build_cmd(src: str, out: str, plan: dict, audio: bool, W: int, H: int, FPS: int,
-               overlays: list[str]) -> list[str]:
+               overlays: list[str], visual_filter: str = "") -> list[str]:
     """组装单条 ffmpeg 命令（视频 xfade/concat + 音频 acrossfade/concat + 叠加层）。
 
     B2.5 的音频/编码后处理不在此（见 _apply_audio_encoding 第二趟），保持拼接 filter_complex 干净。
@@ -477,9 +557,13 @@ def _build_cmd(src: str, out: str, plan: dict, audio: bool, W: int, H: int, FPS:
     norm = _norm(W, H, FPS)
     fc: list[str] = []
 
+    # B2.7：逐 variant 视觉档位，注入在 _norm 之后、ASS 叠加之前（叠加在后 → 字幕/高光/CTA 不被裁、品牌色不被调色）。
+    # visual_filter="" 时 vf="" → 本行与未引入 B2.7 时字节等价（铁验收）。
+    vf = f",{visual_filter}" if visual_filter else ""
+
     inputs = ["-i", src]
     for k, w in enumerate(windows):
-        fc.append(f"[0:v]trim=start={w['start']:.3f}:end={w['end']:.3f},{norm}[v{k}]")
+        fc.append(f"[0:v]trim=start={w['start']:.3f}:end={w['end']:.3f},{norm}{vf}[v{k}]")
         if audio:
             fc.append(f"[0:a]atrim=start={w['start']:.3f}:end={w['end']:.3f},asetpts=PTS-STARTPTS,"
                       f"aresample=async=1:first_pts=0[a{k}]")
@@ -602,10 +686,10 @@ def _write_srt(path: str, vp: dict) -> None:
         f.write("\n".join(lines))
 
 
-def _render(src, out, plan, audio, W, H, FPS, overlays) -> None:
+def _render(src, out, plan, audio, W, H, FPS, overlays, visual_filter: str = "") -> None:
     if os.path.exists(out):
         os.remove(out)
-    subprocess.run(_build_cmd(src, out, plan, audio, W, H, FPS, overlays),
+    subprocess.run(_build_cmd(src, out, plan, audio, W, H, FPS, overlays, visual_filter),
                    check=True, capture_output=True, timeout=300)
 
 
@@ -623,6 +707,8 @@ def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: 
     target = plan["target_output"]
     font = resolve_font()
     audio_enc = audio_encoding_info(variant_id, run_id)   # B2.5（flag 关 → applied=False）
+    visual_enc = visual_profile_info(variant_id, vp, W, H)   # B2.7（flag 关 → applied=False、filter=""）
+    vfilter = visual_enc["visual_filter"]
 
     # SRT sidecar：只要 subtitle_plan 有内容就输出（烧录成功也输出）
     has_sub = bool((vp.get("subtitle_plan") or {}).get("subtitle_entries"))
@@ -649,10 +735,10 @@ def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: 
 
     if not settings.enable_p2b_visible_layer:
         fallbacks["fallback_reason"] = "visible_layer_disabled"
-        _render(src, out, plan, audio, W, H, FPS, [])
+        _render(src, out, plan, audio, W, H, FPS, [], vfilter)
     elif not font["available"]:
         fallbacks["fallback_reason"] = "no_font"
-        _render(src, out, plan, audio, W, H, FPS, [])
+        _render(src, out, plan, audio, W, H, FPS, [], vfilter)
     else:
         variation_on = bool(settings.enable_p2b_visible_variation)
         # fallback 链（不含 drawtext）：差异化 ASS → B2 固定 ASS（保留强可感 字幕位置+CTA时长）→ 无叠加+SRT
@@ -680,7 +766,7 @@ def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: 
                 layers, applied_all = _build_overlays(vp, font["font_path"], target, text_dir, style)
                 ov = _to_sub_filters(layers["subtitle"] + layers["highlight"] + layers["cta"])
             try:
-                _render(src, out, plan, audio, W, H, FPS, ov)
+                _render(src, out, plan, audio, W, H, FPS, ov, vfilter)
             except subprocess.CalledProcessError:
                 continue
             fallbacks["subtitle_burned"] = bool(layers["subtitle"])
@@ -699,5 +785,7 @@ def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: 
 
     qa = qa_checks.run_gates(out, batch_md5, lo, hi, tol)
     qa["audio_encoding"] = audio_enc          # 记录到 run_items.qa_json.audio_encoding（service 写 qa_json）
+    qa["visual_encoding"] = visual_enc        # B2.7：记录视觉档位（service 写 meta.visual_encoding）
     return {"ok": qa["final_status"] == "pass", "qa": qa, "plan": plan,
-            "applied": applied, "fallbacks": fallbacks, "audio_encoding": audio_enc}
+            "applied": applied, "fallbacks": fallbacks, "audio_encoding": audio_enc,
+            "visual_encoding": visual_enc}

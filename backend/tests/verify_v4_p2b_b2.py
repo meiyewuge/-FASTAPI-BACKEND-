@@ -224,12 +224,12 @@ def main():
     # 分层降级（B2.1 后链路：差异化 ASS → B2 固定 ASS → 无叠加；不再有 subtitle_only/drawtext）
     orig_render = pe._render
     calls = {"n": 0}
-    def _render_fail_full(src, o, plan, au, w, h, f, overlays):
+    def _render_fail_full(src, o, plan, au, w, h, f, overlays, visual_filter=""):
         calls["n"] += 1
         # 第一次（差异化 ASS）强制失败 → 降到固定 ASS（仍渲染三层），其余正常
         if calls["n"] == 1:
             raise subprocess.CalledProcessError(1, ["ffmpeg"])
-        return orig_render(src, o, plan, au, w, h, f, overlays)
+        return orig_render(src, o, plan, au, w, h, f, overlays, visual_filter)
     pe._render = _render_fail_full
     try:
         out3 = os.path.join(d, "u3.mp4")

@@ -147,5 +147,10 @@ class Settings(BaseSettings):
     p2b_b3_fullpair_max_n: int = 30           # N>此值 → 不做全量 O(N²)，走分桶+候选精算降级
     p2b_b3_calibration: str = "provisional"   # 负样本到位并定稿后改 "final"
 
+    # V4 P2B-B2.7：视觉合规差异化层（逐 variant 构图裁切+缩放 + 轻调色；只对授权素材重构图/轻调色）。
+    # 默认 **关**（staging 可开、production 永不开）。关时 _norm 输出与未引入本层字节等价（铁验收）。
+    # 注入点：_build_cmd 的 _norm 阶段、ASS 叠加之前 → 字幕/高光/CTA 不被裁、品牌色不被调色。零新增表。
+    enable_p2b_visual_diff: bool = False
+
 
 settings = Settings()
