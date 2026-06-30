@@ -26,10 +26,29 @@ def _is_prod() -> bool:
     return (settings.app_env or "").lower() in _PROD_ENVS
 
 
-def _guard() -> None:
-    """production 强制 403（最高优先级）。"""
+def _prod_gray_ok(tenant_id: str) -> bool:
+    """B2.6：B3 routes 的 production 灰度窄门（与 /api/p2b-b/runs 一致 + 必须 publish_required）。"""
+    return (settings.enable_p2b_production_gray
+            and tenant_id in (settings.p2b_gray_tenant_allowlist or [])
+            and settings.enable_p2b_b3_score
+            and settings.p2b_b3_publish_required)
+
+
+def _guard(tenant_id: str) -> None:
+    """score / get / publish-pool：staging 放行；production 仅灰度窄门满足才放行，否则 403。
+
+    B2.6 hotfix：production gray 链路里 /api/p2b-b/runs 能生成，则 B3 score/publish 必须可达，
+    否则"B3 必开 + 发布前评分"链路断裂。
+    """
+    if _is_prod() and not _prod_gray_ok(tenant_id):
+        raise HTTPException(status_code=403,
+                            detail="P2B-B3 在 production 未满足灰度窄门（gray/白名单/B3/publish_required）")
+
+
+def _guard_prod_block() -> None:
+    """simulate：大 N 模拟在 production 一律 403（不进灰度窄门）。"""
     if _is_prod():
-        raise HTTPException(status_code=403, detail="P2B-B3 评分在 production 环境被禁止")
+        raise HTTPException(status_code=403, detail="P2B-B3 大 N 模拟在 production 环境被禁止")
 
 
 class ScoreIn(BaseModel):
@@ -48,7 +67,7 @@ def score(
     user: dict = Depends(get_current_user),
 ) -> Resp:
     """对一个 run（batch）的 done 视频做三维评分并幂等写库（meta.b3_score + qa_json.b3_batch）。"""
-    _guard()
+    _guard(user["tenant_id"])
     res = p2b_b3_service.score_run(db, user["tenant_id"], body.run_id)
     if not res["ok"]:
         return Resp(code=res["code"], message=res["reason"])
@@ -62,7 +81,7 @@ def get_score(
     user: dict = Depends(get_current_user),
 ) -> Resp:
     """读取已写入的 b3_batch 评分结果。"""
-    _guard()
+    _guard(user["tenant_id"])
     data = p2b_b3_service.get_score(db, user["tenant_id"], run_id)
     if data is None:
         return Resp(code=3001, message="run 不存在 / 未评分 / 不属于当前租户")
@@ -76,7 +95,7 @@ def publish_pool(
     user: dict = Depends(get_current_user),
 ) -> Resp:
     """发布池读取契约：只返回 pass=true 且 recommended_action=pass_to_publish_pool 的条目。"""
-    _guard()
+    _guard(user["tenant_id"])
     return Resp(data=p2b_b3_service.publish_pool(db, user["tenant_id"], run_id))
 
 
@@ -87,7 +106,7 @@ def simulate(
     user: dict = Depends(get_current_user),
 ) -> Resp:
     """大 N metadata-only 模拟（不渲染、不入库、不生成视频）：检测 signature 重复/档位撞车/too_similar 候选密度。"""
-    _guard()
+    _guard_prod_block()
     if not settings.enable_p2b_b3_score:
         return Resp(code=4032, message="B3 评分未开启（ENABLE_P2B_B3_SCORE=false）")
     return Resp(message="大 N 模拟完成（metadata-only，cost=0）",
