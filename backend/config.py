@@ -152,5 +152,10 @@ class Settings(BaseSettings):
     # 注入点：_build_cmd 的 _norm 阶段、ASS 叠加之前 → 字幕/高光/CTA 不被裁、品牌色不被调色。零新增表。
     enable_p2b_visual_diff: bool = False
 
+    # V4 P2B Phase 2：B1 取窗发散（方案 A 同 role 受限分带 + 方案 C overlap cap 兜底）。
+    # 默认 **关**（staging 可开、production 永不开）。关时 derive_windows 取窗与未引入本层逐字段相等（铁验收）。
+    # 目的：降低同 role 跨 variant 的 source window overlap，抬 structural_window_diff（B3 visual_distance 的 45% 项）。
+    enable_p2b_window_divergence: bool = False
+
 
 settings = Settings()

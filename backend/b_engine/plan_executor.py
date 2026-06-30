@@ -184,10 +184,85 @@ def resolve_visible_style(vp: dict, variant_id: str) -> dict:
     }
 
 
+# ============================ Phase 2：B1 取窗发散（A 受限分带 + C overlap cap） ============================
+_WD_N_BANDS = 3            # 分带数（对齐跨组 3 条）
+_WD_BAND_W = 0.12         # A 带宽：±12% 源时长（受限，保 role 内容/连贯）
+_WD_OVERLAP_CAP = 0.5     # C：同 role 跨 variant 估计 IoU 上限
+_WD_HARD_W = 0.18         # C 兜底硬上限：平移总幅度 ≤ ±18% 源（仍受源边界约束）
+_WD_STRATEGY = "role_band_plus_overlap_cap"
+
+
+def _iou_1d(s1: float, e1: float, s2: float, e2: float) -> float:
+    lo = max(s1, s2); hi = min(e1, e2); inter = max(0.0, hi - lo)
+    union = (e1 - s1) + (e2 - s2) - inter
+    return inter / union if union > 0 else (1.0 if inter > 0 else 0.0)
+
+
+def _band_center_frac(band_idx: int, n: int, w: float) -> float:
+    """band 0..n-1 → 偏移占源时长比例：band0→-w、中间→0、末带→+w。"""
+    if n <= 1:
+        return 0.0
+    return ((band_idx / (n - 1)) - 0.5) * 2 * w
+
+
+def _apply_window_divergence(windows: list, src_dur: float, vidx: int) -> dict:
+    """方案 A（受限分带）+ C（overlap cap + fallback）。原地平移 windows 的 start/end（seg/role/顺序不变）。
+
+    返回 window_divergence 摘要（含 role_iou_before/after、degraded、structural_window_diff_estimate）。
+    估计口径：本 variant 窗口 vs 最近邻带同 role 窗口（同 seg、邻带偏移），近似跨 variant overlap（忽略他变体 jitter）。
+    """
+    band_idx = vidx % _WD_N_BANDS
+    off_frac = _band_center_frac(band_idx, _WD_N_BANDS, _WD_BAND_W)
+    adj_idx = band_idx + 1 if band_idx == 0 else band_idx - 1
+    adj_frac = _band_center_frac(adj_idx, _WD_N_BANDS, _WD_BAND_W)
+    ious_before, ious_after, reasons = [], [], []
+    degraded = False
+    hard = _WD_HARD_W * src_dur
+    step = max(0.05 * src_dur, 0.2)
+
+    for w in windows:
+        seg = w["seg"]; avail = max(src_dur - seg, 0.0)
+        s0 = w["start"]                     # 中心带（band 未偏移）原始 start（含原 jitter）
+        if avail <= 0:                      # 整段源，无可移动空间 → 兜底
+            ious_before.append(1.0); ious_after.append(1.0)
+            degraded = True; reasons.append(f"{w['role']}:no_room"); continue
+        new_start = min(max(s0 + off_frac * src_dur, 0.0), avail)
+        adj_start = min(max(s0 + adj_frac * src_dur, 0.0), avail)
+        iou_b = _iou_1d(new_start, new_start + seg, adj_start, adj_start + seg)
+        ious_before.append(round(iou_b, 4))
+        # C：若估计 IoU 超 cap，按确定性方向（远离邻带）平移，至 cap 或 源边界/硬上限
+        cur, iou_c, guard = new_start, iou_b, 0
+        direction = 1.0 if (new_start - adj_start) >= 0 else -1.0
+        while iou_c > _WD_OVERLAP_CAP and guard < 60:
+            cand = cur + direction * step
+            if cand < 0 or cand > avail or abs(cand - s0) > hard:
+                break
+            cur = cand
+            iou_c = _iou_1d(cur, cur + seg, adj_start, adj_start + seg)
+            guard += 1
+        if iou_c > _WD_OVERLAP_CAP:
+            degraded = True; reasons.append(f"{w['role']}:iou{iou_c:.2f}>cap")
+        ious_after.append(round(iou_c, 4))
+        w["start"] = round(cur, 3); w["end"] = round(cur + seg, 3)
+
+    mean_b = round(sum(ious_before) / len(ious_before), 4) if ious_before else 0.0
+    mean_a = round(sum(ious_after) / len(ious_after), 4) if ious_after else 0.0
+    return {
+        "applied": True, "flag": True, "strategy": _WD_STRATEGY,
+        "band_width_ratio": _WD_BAND_W, "overlap_cap": _WD_OVERLAP_CAP,
+        "band_index": band_idx, "n_bands": _WD_N_BANDS,
+        "role_iou_before": mean_b, "role_iou_after": mean_a,
+        "role_iou_before_list": ious_before, "role_iou_after_list": ious_after,
+        "structural_window_diff_estimate": round(1.0 - mean_a, 4),
+        "degraded": degraded, "degraded_reason": "; ".join(reasons) if reasons else "",
+    }
+
+
 def derive_windows(vp: dict, src_dur: float, lo: float, hi: float, seed: int = 0) -> dict:
     """从 rhythm_plan + transition_plan 推导：源取窗 + 转场 + 目标时长（含补偿）。
 
     seed：按 variant 派生的窗口偏移种子，避免同角色窗口重叠 / 不同 variant 取窗雷同（MD5 去重）。
+    Phase 2：ENABLE_P2B_WINDOW_DIVERGENCE=true 时在原 base/jitter 之上叠加"受限分带 + overlap cap"（关时逐字段相等）。
     """
     rhythm = vp.get("rhythm_plan") or {}
     shots = rhythm.get("shot_durations") or []
@@ -247,8 +322,15 @@ def derive_windows(vp: dict, src_dur: float, lo: float, hi: float, seed: int = 0
         windows.append({"role": r, "start": round(start, 3),
                         "end": round(start + seg, 3), "seg": round(seg, 3)})
 
+    # Phase 2：取窗发散（flag 门控；关时 windows 逐字段不变）
+    if settings.enable_p2b_window_divergence:
+        window_divergence = _apply_window_divergence(windows, src_dur, _variant_index(vp, seed))
+    else:
+        window_divergence = {"applied": False, "flag": False, "strategy": _WD_STRATEGY}
+
     return {"windows": windows, "transitions": exec_trans,
-            "target_output": round(target_output, 3), "sum_transition": round(sum_t, 3), "n": n}
+            "target_output": round(target_output, 3), "sum_transition": round(sum_t, 3), "n": n,
+            "window_divergence": window_divergence}
 
 
 def _norm(W: int, H: int, FPS: int) -> str:
@@ -805,6 +887,7 @@ def execute_plan(src: str, src_dur: float, audio: bool, out: str, variant_plan: 
     qa = qa_checks.run_gates(out, batch_md5, lo, hi, tol)
     qa["audio_encoding"] = audio_enc          # 记录到 run_items.qa_json.audio_encoding（service 写 qa_json）
     qa["visual_encoding"] = visual_enc        # B2.7：记录视觉档位（service 写 meta.visual_encoding）
+    qa["window_divergence"] = plan.get("window_divergence", {"applied": False})  # Phase 2：取窗发散摘要
     return {"ok": qa["final_status"] == "pass", "qa": qa, "plan": plan,
             "applied": applied, "fallbacks": fallbacks, "audio_encoding": audio_enc,
             "visual_encoding": visual_enc}
