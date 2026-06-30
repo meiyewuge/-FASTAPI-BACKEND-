@@ -27,10 +27,26 @@ def _is_prod() -> bool:
     return (settings.app_env or "").lower() in _PROD_ENVS
 
 
-def _guard_real_execution(max_items: int) -> Resp | None:
-    """真实执行闸门。production 强制 403（最高优先级）。"""
+def _guard_real_execution(db: Session, tenant_id: str, max_items: int) -> Resp | None:
+    """真实执行闸门。
+
+    production：默认 403；仅当 B2.6 灰度窄门**全部条件满足**才放行（白名单 + 配额 + B3 必开 + max_items≤gray_max）。
+    staging：沿用 ENABLE_P2B_REAL_EXECUTION + b1_max_items。
+    """
     if _is_prod():
-        raise HTTPException(status_code=403, detail="P2B-B1 真实执行在 production 环境被禁止")
+        # B2.6 生产灰度窄门：不满足任一条件 → 维持 403
+        gray_ok = (settings.enable_p2b_production_gray
+                   and tenant_id in (settings.p2b_gray_tenant_allowlist or [])
+                   and settings.enable_p2b_b3_score
+                   and max_items <= settings.p2b_gray_max_items)
+        if not gray_ok:
+            raise HTTPException(status_code=403,
+                                detail="P2B-B 真实执行在 production 未满足灰度窄门（gray/白名单/B3/max_items）")
+        if p2b_b_service.today_run_count(db, tenant_id) >= settings.p2b_gray_daily_run_quota:
+            raise HTTPException(status_code=403,
+                                detail=f"P2B-B production 灰度今日配额已用尽（{settings.p2b_gray_daily_run_quota}）")
+        return None        # 灰度放行（窄门即授权，不再依赖 ENABLE_P2B_REAL_EXECUTION）
+    # staging 路径（不变）
     if not settings.enable_p2b_real_execution:
         return Resp(code=4031, message="P2B-B1 真实执行未开启（ENABLE_P2B_REAL_EXECUTION=false）")
     if max_items > settings.p2b_b1_max_items:
@@ -71,15 +87,17 @@ def runs(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ) -> Resp:
-    """真实执行小批量（staging + flag 双闸门；production 强制 403）。"""
-    blocked = _guard_real_execution(body.max_items)
+    """真实执行小批量（staging：flag 双闸门；production：B2.6 灰度窄门）。含 B2.6 去重拦截。"""
+    blocked = _guard_real_execution(db, user["tenant_id"], body.max_items)
     if blocked is not None:
         return blocked
     res = p2b_b_service.execute_run(
         db, user["tenant_id"], user.get("phone"), body.production_order_id,
         body.execution_plan_ids, body.source_video_id, body.max_items,
-        (settings.app_env or "").lower(),
+        (settings.app_env or "").lower(), force=bool(getattr(body, "force", False)),
     )
+    if res.get("duplicate_run"):
+        return Resp(message="命中窗口内同参 run，返回已有 run（未创建新 run）", data=res["data"])
     if not res["ok"]:
         return Resp(code=res["code"], message=res["reason"])
     return Resp(message="小批量真实执行完成（cost=0）", data=res["data"])

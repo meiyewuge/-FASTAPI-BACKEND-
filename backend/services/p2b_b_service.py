@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -160,6 +161,39 @@ def preview_run(db: Session, tenant_id: str, production_order_id: str,
     return {"ok": True, "data": data}
 
 
+def today_run_count(db: Session, tenant_id: str) -> int:
+    """B2.6：该租户当日（UTC）已创建的 run 数（production 灰度配额用）。"""
+    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    return (db.query(P2bExecutionRun)
+            .filter(P2bExecutionRun.tenant_id == tenant_id,
+                    P2bExecutionRun.created_at >= start).count())
+
+
+def find_duplicate_run(db: Session, tenant_id: str, production_order_id: str,
+                       plan_ids: list[str], source_video_id: int):
+    """B2.6 去重：窗口内同 (production_order_id, sorted(plan_ids), source_video_id) 且 status∈{running,done} 的 run。
+
+    命中返回该 P2bExecutionRun，否则 None。零新增表：比对既有 run 的 items 的 execution_plan_id 集合。
+    """
+    cutoff = datetime.utcnow() - timedelta(minutes=settings.p2b_dup_run_window_minutes)
+    cands = (db.query(P2bExecutionRun)
+             .filter(P2bExecutionRun.tenant_id == tenant_id,
+                     P2bExecutionRun.production_order_id == production_order_id,
+                     P2bExecutionRun.source_video_id == source_video_id,
+                     P2bExecutionRun.status.in_(("running", "done")),
+                     P2bExecutionRun.created_at >= cutoff)
+             .order_by(P2bExecutionRun.id.desc()).all())
+    target = sorted(plan_ids)
+    for r in cands:
+        item_pids = sorted(
+            pid for (pid,) in db.query(P2bExecutionRunItem.execution_plan_id)
+            .filter(P2bExecutionRunItem.run_id == r.run_id,
+                    P2bExecutionRunItem.tenant_id == tenant_id).all())
+        if item_pids == target:
+            return r
+    return None
+
+
 def recent_runs(db: Session, tenant_id: str, production_order_id: str, limit: int = 5) -> list[dict]:
     """B2.7 防重复 run：列该生产单最近的 run（验证脚本应在重试前先查，避免超时盲目重发 POST /runs）。"""
     rows = (db.query(P2bExecutionRun)
@@ -171,14 +205,28 @@ def recent_runs(db: Session, tenant_id: str, production_order_id: str, limit: in
 
 
 def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_order_id: str,
-                plan_ids: list[str], source_video_id: int, max_items: int, app_env: str) -> dict:
-    """真实执行（同步，小批量）。写 run/items/videos。cost=0。"""
+                plan_ids: list[str], source_video_id: int, max_items: int, app_env: str,
+                force: bool = False) -> dict:
+    """真实执行（同步，小批量）。写 run/items/videos。cost=0。
+
+    B2.6 去重：force=false 时，窗口内同参 run（running/done）命中 → 不创建新 run，返回 existing。
+    """
     src = validate_source(db, tenant_id, source_video_id)
     if not src["ok"]:
         return {"ok": False, "code": 2002, "reason": src["reason"]}
     selected = _select_plans(db, tenant_id, production_order_id, plan_ids, max_items)
     if not selected:
         return {"ok": False, "code": 3001, "reason": "未找到可执行的 confirmed execution_plan"}
+
+    # B2.6 duplicate run 硬拦截（force=true 可跳过；production 灰度默认 force=false）
+    if not force:
+        dup = find_duplicate_run(db, tenant_id, production_order_id,
+                                 [e.execution_plan_id for e in selected], source_video_id)
+        if dup is not None:
+            return {"ok": True, "duplicate_run": True,
+                    "data": {"duplicate_run": True, "existing_run_id": dup.run_id,
+                             "existing_status": dup.status, "created_new": False,
+                             "window_minutes": settings.p2b_dup_run_window_minutes}}
 
     lo, hi, tol = _targets()
     W, H, FPS = settings.b_remix_width, settings.b_remix_height, settings.b_remix_fps

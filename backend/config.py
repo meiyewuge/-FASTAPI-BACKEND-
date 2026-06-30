@@ -157,5 +157,18 @@ class Settings(BaseSettings):
     # 目的：降低同 role 跨 variant 的 source window overlap，抬 structural_window_diff（B3 visual_distance 的 45% 项）。
     enable_p2b_window_divergence: bool = False
 
+    # V4 P2B-B2.6：生产加固（production 灰度窄门 + 去重 + B3 强制闸门）。production 默认安全态全关。
+    # 真实执行在 production 必须同时满足：app_env=production + enable_p2b_production_gray + tenant∈白名单
+    # + 当日 run 数 < quota + max_items ≤ gray_max_items + enable_p2b_b3_score；不满足任一 → 403。
+    enable_p2b_production_gray: bool = False        # production 窄门总闸（默认关=安全态）
+    p2b_gray_tenant_allowlist: list[str] = []       # 灰度租户白名单（空=无人可灰度）
+    p2b_gray_daily_run_quota: int = 3               # 单租户每日灰度 run 配额
+    p2b_gray_max_items: int = 3                     # 灰度单 run 上限（更严于 b1 的 6）
+    p2b_b3_publish_required: bool = True            # 发布前强制经 B3（不提供绕过入口）
+    p2b_dup_run_window_minutes: int = 10            # 去重窗口（同参 run 命中即返回已有）
+    p2b_b3_batch_pass_rate_target: float = 0.67     # 告警阈：batch_pass_rate 低于此 → 告警
+    p2b_b3_quality_unknown_alert_rate: float = 0.10 # 告警阈：quality_unknown_rate 高于此 → 告警
+    p2b_b3_degraded_alert_rate: float = 0.20        # 告警阈：degraded_rate 高于此 → 告警
+
 
 settings = Settings()

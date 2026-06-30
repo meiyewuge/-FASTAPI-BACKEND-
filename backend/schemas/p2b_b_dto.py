@@ -22,3 +22,4 @@ class RunsIn(BaseModel):
     source_video_id: int = Field(...)
     max_items: int = Field(3, ge=1, le=6)
     run_name: Optional[str] = None
+    force: bool = Field(False, description="B2.6：跳过 duplicate run 拦截（管理端用；灰度默认 false）")

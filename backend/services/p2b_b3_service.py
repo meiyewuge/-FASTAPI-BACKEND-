@@ -179,7 +179,38 @@ def score_run(db: Session, tenant_id: str, run_id: str, with_frames: bool = True
     result["batch_summary"]["visual_proxy_only_count"] = proxy_only
     result["batch_summary"]["pixel_verified_variant_count"] = len(videos) - proxy_only
 
-    # ---- 幂等写库：videos.meta.b3_score（每条）+ run_items.qa_json.b3_batch（整批）----
+    # B2.6：degraded_rate 汇总（来自各 item 的 window_divergence）
+    deg = []
+    for it in items:
+        wd = (_as_obj(it.qa_json) or {}).get("window_divergence") or {}
+        deg.append((wd.get("degraded") is True, wd.get("degraded_reason", "")))
+    degraded_count = sum(1 for d, _ in deg if d)
+    degraded_rate = round(degraded_count / len(items), 4) if items else 0.0
+    degraded_reasons = [r for d, r in deg if d and r]
+    bs = result["batch_summary"]
+    bs["degraded_count"] = degraded_count
+    bs["degraded_rate"] = degraded_rate
+    bs["degraded_reasons"] = degraded_reasons
+
+    # B2.6：b3_alerts（非阻塞，写 JSON；先不接外部告警服务）
+    alerts = {
+        "quality_fail": bs.get("quality_fail_videos", []),
+        "quality_fail_alert": len(bs.get("quality_fail_videos", [])) > 0,
+        "quality_unknown_rate": bs.get("quality_unknown_rate", 0.0),
+        "quality_unknown_alert": bs.get("quality_unknown_rate", 0.0) > settings.p2b_b3_quality_unknown_alert_rate,
+        "batch_pass_rate": bs.get("batch_pass_rate", 0.0),
+        "batch_pass_rate_low": bs.get("batch_pass_rate", 0.0) < settings.p2b_b3_batch_pass_rate_target,
+        "too_similar": len(bs.get("too_similar_pairs", [])) > 0,
+        "too_similar_pairs": bs.get("too_similar_pairs", []),
+        "degraded_rate": degraded_rate,
+        "degraded_alert": degraded_rate > settings.p2b_b3_degraded_alert_rate,
+    }
+    alerts["any_alert"] = bool(alerts["quality_fail_alert"] or alerts["quality_unknown_alert"]
+                               or alerts["batch_pass_rate_low"] or alerts["too_similar"]
+                               or alerts["degraded_alert"])
+    bs["b3_alerts"] = alerts
+
+    # ---- 幂等写库：videos.meta.b3_score（每条）+ run_items.qa_json.b3_batch + b3_alerts（整批）----
     pv_by_id = {p["video_id"]: p for p in result["per_variant"]}
     for it in items:
         v = db.get(Video, it.video_id)
@@ -191,6 +222,7 @@ def score_run(db: Session, tenant_id: str, run_id: str, with_frames: bool = True
             v.meta = json.dumps(meta, ensure_ascii=False)
         qa = _as_obj(it.qa_json) or {}
         qa["b3_batch"] = result          # 幂等：直接覆盖同 key，不追加
+        qa["b3_alerts"] = alerts         # B2.6：run_items.qa_json.b3_alerts
         it.qa_json = json.dumps(qa, ensure_ascii=False)
     db.commit()
 
@@ -215,21 +247,28 @@ def publish_pool(db: Session, tenant_id: str, run_id: str) -> dict:
     """
     b3b = get_score(db, tenant_id, run_id)
     if not b3b:
-        return {"run_id": run_id, "eligible": False, "reason": "尚未评分", "videos": []}
+        # B2.6 强制闸门：未跑 B3 → 一律不可发布（无绕过入口）
+        return {"run_id": run_id, "eligible": False, "has_b3_score": False,
+                "publish_required": settings.p2b_b3_publish_required,
+                "reason": "未跑 B3 评分；B3 是发布前唯一强制闸门，未评分不可发布", "videos": []}
     bs = b3b.get("batch_summary") or {}
+    # 强制闸门：只放行 recommended_action=pass_to_publish_pool；blocked/quality_fail/unknown 一律不出池
     eligible = [p["video_id"] for p in (b3b.get("per_variant") or [])
                 if p.get("recommended_action") == "pass_to_publish_pool"]
     return {
         "run_id": run_id,
-        "eligible": len(eligible) > 0,           # 只要有健康条过线即放行（不被 batch_pass 阻断）
+        "has_b3_score": True,
+        "publish_required": settings.p2b_b3_publish_required,
+        "eligible": len(eligible) > 0,           # 有健康条过线即放行（不被 batch_pass 连坐）
         "batch_pass": bs.get("pass"),            # 仅供参考，不作为放行门槛
         "effective_variant_count": bs.get("effective_variant_count", 0),
         "batch_pass_rate": bs.get("batch_pass_rate", 0.0),
         "publishable_video_ids": eligible,
         "blocked_video_ids": bs.get("blocked_video_ids", []),
         "quality_fail_videos": bs.get("quality_fail_videos", []),
+        "b3_alerts": bs.get("b3_alerts", {}),
         "videos": eligible,
-        "contract": "per-variant recommended_action=pass_to_publish_pool（不被 batch_summary.pass 连坐）",
+        "contract": "B3 强制：仅 recommended_action=pass_to_publish_pool 放行；未评分/blocked/quality_fail/unknown 永不发布",
     }
 
 
