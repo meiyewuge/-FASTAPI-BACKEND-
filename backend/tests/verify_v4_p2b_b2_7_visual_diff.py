@@ -119,7 +119,7 @@ def _run_batch(c, A):
                  json={"production_order_id": po, "execution_plan_ids": plan_ids,
                        "source_video_id": src_id, "max_items": 3}, headers=A).json()
     assert run["code"] == 0 and run["data"]["completed"] == 3, run
-    return po, run["data"]["run_id"]
+    return po, run["data"]["run_id"], plan_ids, elig
 
 
 def _b3_visual_mean(c, A, run_id):
@@ -182,7 +182,7 @@ def main():
     c = _client(visual_diff=False)
     A = _hdr("tenantA")
     tables0 = _tables()
-    po0, run_off = _run_batch(c, A)
+    po0, run_off, _, _ = _run_batch(c, A)
     vmean_off, _ = _b3_visual_mean(c, A, run_off)
     # off 时 meta.visual_encoding.applied=False
     from models import Video
@@ -196,13 +196,13 @@ def main():
     # ON
     c = _client(visual_diff=True)
     A = _hdr("tenantA")
-    po1, run_on = _run_batch(c, A)
+    po1, run_on, plan_ids_on, elig_on = _run_batch(c, A)
     vmean_on, b3data = _b3_visual_mean(c, A, run_on)
 
     items = c.get(f"/api/p2b-b/runs/{run_on}/items", headers=A).json()["data"]["items"]
     vids = sorted(it["video_id"] for it in items)
     se = _db.SessionLocal()
-    vis_sigs = []
+    vis_sigs, zooms = [], []
     for vid in vids:
         v = se.get(Video, vid)
         meta = json.loads(v.meta)
@@ -211,6 +211,7 @@ def main():
         assert ve.get("applied") is True, ve
         assert "visual_profile_signature" in ve and ve["profile"], ve
         vis_sigs.append(ve["visual_profile_signature"])
+        zooms.append(ve["profile"]["zoom"])
         p = ve["profile"]
         assert p["zoom"] <= _LIMITS["zoom_max"] and p["sharpness"] is False
         path = os.path.join(_STORAGE, "viral", f"{vid}.mp4")
@@ -227,6 +228,53 @@ def main():
     se.close()
     assert len(set(vis_sigs)) == 3, f"3 条 visual_profile_signature 应唯一: {vis_sigs}"
     print(f"  ✔ (2) visual_profile 存在 / (13) meta.visual_encoding 写入 / (8) 音频路径零改 / (15) B2.5 不退化")
+
+    # ---- (HOTFIX-1) zoom 档位生效：3 条至少覆盖 2 个 zoom 档位（ECS 失败时全 1.0）----
+    assert len(set(zooms)) >= 2, f"3 条必须至少覆盖 2 个 zoom 档位（修复前全 1.0）: {zooms}"
+    assert set(zooms) == {1.00, 1.06, 1.12}, f"跨组 3 条应覆盖 1.00/1.06/1.12: {zooms}"
+    assert all(z <= 1.12 for z in zooms), zooms
+    # var_01/02/03 也须至少 2 档（variant_index 驱动 zoom）
+    vz = [pe.resolve_visual_profile({"group_type": gt, "group_index": 1}, vid)["zoom"]
+          for gt, vid in [("pain_first", "var_01"), ("selling_first", "var_02"), ("result_close", "var_03")]]
+    assert len(set(vz)) >= 2, f"var_01/02/03 应至少 2 个 zoom 档位: {vz}"
+    print(f"  ✔ (HOTFIX-1) zoom 档位生效：实跑3条 zoom={sorted(set(zooms))} / var_01-03 zoom={vz}（variant_index 驱动）")
+
+    # ---- (HOTFIX-3) quality_fail 诊断字段：实测值 + fail 字段 + 流信息 ----
+    bs = b3data["batch_summary"]
+    assert "quality_fail_fields_by_video" in bs, "batch_summary 应含 quality_fail_fields_by_video"
+    for pv in b3data["per_variant"]:
+        assert "quality_fail_fields" in pv and "quality_detail" in pv, pv
+        qd = pv["quality_detail"]
+        for kk in ("loudness_ok", "true_peak_ok", "clipping_ok", "playback_ok", "pts_ok", "duration_ok",
+                   "measured_integrated_loudness_lufs", "measured_true_peak_dbtp",
+                   "sample_rate", "channels", "codec"):
+            assert kk in qd, f"quality_detail 缺 {kk}: {qd}"
+        # 本批音频达标 → 有实测 LUFS/TP，且 codec/sr/channels 已回填（B2.7 重编码后音频未丢元信息）
+        assert qd["measured_integrated_loudness_lufs"] is not None, qd
+        assert qd["measured_true_peak_dbtp"] is not None, qd
+        assert qd["codec"] == "aac" and qd["sample_rate"] == "44100" and qd["channels"] == 2, qd
+    print("  ✔ (HOTFIX-3) quality 诊断字段：measured_loudness/TP + clipping/playback/pts/duration + codec/sr/channels 全回填")
+
+    # ---- (HOTFIX-2) group_type 预检：3 条全同组 FAIL FAST；跨组 OK ----
+    from services import p2b_b_service as bsvc
+    same_group = [e["execution_plan_id"] for e in elig_on if e["group_type"] == "pain_first"][:3]
+    se = _db.SessionLocal()
+    pre_bad = bsvc.precheck_visual_diff_sample(se, "tenantA", same_group)
+    pre_good = bsvc.precheck_visual_diff_sample(se, "tenantA", plan_ids_on)
+    se.close()
+    assert pre_bad["ok"] is False and pre_bad["distinct_groups"] == ["pain_first"], pre_bad
+    assert "pain_first / selling_first / result_close" in pre_bad["reason"], pre_bad
+    assert pre_good["ok"] is True and len(pre_good["distinct_groups"]) == 3, pre_good
+    # preview API 也带预检 + recent_runs 防呆（用有效源，确保进到预检字段）
+    src_pv = _make_mother("tenantA", 40)
+    pv = c.post("/api/p2b-b/runs/preview", json={"production_order_id": po1,
+                "execution_plan_ids": same_group, "source_video_id": src_pv, "max_items": 3},
+                headers=A).json()
+    assert pv["code"] == 0, pv
+    assert pv["data"]["visual_diff_precheck"]["ok"] is False, pv["data"]["visual_diff_precheck"]
+    assert "recent_runs" in pv["data"], "preview 应带 recent_runs 防呆"
+    assert any(r["run_id"] == run_on for r in pv["data"]["recent_runs"]), "recent_runs 应含本次 run"
+    print("  ✔ (HOTFIX-2) group_type 预检：3条全同组 FAIL FAST（提示跨组），跨组 OK；preview 附预检+recent_runs 防呆")
 
     # ---- (14) B3 可间接评估视觉差异：ON 的 visual_distance 均值 ≥ OFF ----
     assert vmean_on >= vmean_off, f"B2.7 应提升视觉差异 on={vmean_on:.4f} >= off={vmean_off:.4f}"
@@ -261,7 +309,7 @@ def main():
     _db.engine.dispose()
     if os.path.exists("./_v4p2bb27_test.db"):
         os.remove("./_v4p2bb27_test.db")
-    print("\n✅ V4 P2B-B2.7 ALL PASSED（17/17）")
+    print("\n✅ V4 P2B-B2.7 ALL PASSED（17/17 + HOTFIX zoom/precheck/quality诊断）")
 
 
 if __name__ == "__main__":

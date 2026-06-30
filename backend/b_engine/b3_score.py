@@ -351,8 +351,14 @@ def quality_variant(v: dict) -> dict:
     score = round(WEIGHTS_DEFAULT[3] * (passed / len(known)), 3) if known else WEIGHTS_DEFAULT[3]
     quality_fail = any(val is False for val in checks.values())
     unknown_fields = [name for name, val in checks.items() if val is None]
+    fail_fields = [name for name, val in checks.items() if val is False]   # B3 实际判 fail 的字段
+    stream = v.get("stream") or {}                                         # codec/sample_rate/channels（service 探测）
     return {**checks, "quality_score": score, "quality_fail": quality_fail,
-            "unknown_fields": unknown_fields, "lufs": lufs, "true_peak": tp}
+            "unknown_fields": unknown_fields, "fail_fields": fail_fields,
+            "measured_integrated_loudness_lufs": lufs, "measured_true_peak_dbtp": tp,
+            "lufs": lufs, "true_peak": tp,
+            "sample_rate": stream.get("sample_rate"), "channels": stream.get("channels"),
+            "codec": stream.get("codec")}
 
 
 # ============================ 权重滞后切换 ============================
@@ -508,7 +514,13 @@ def score_batch(videos: list[dict], thr: dict, previous_weight_profile: str | No
             "audio_score": round(sum(c["audio_score"] for c in mypairs) / len(mypairs), 3) if mypairs else 0.0,
             "quality_score": own_quality["quality_score"],
             "quality_fail": own_quality["quality_fail"],
+            "quality_fail_fields": own_quality["fail_fields"],          # B3 实际判 fail 的字段
             "quality_unknown_fields": own_quality["unknown_fields"],
+            "quality_detail": {                                         # 诊断：实测值 + 各闸 + 流信息
+                k: own_quality.get(k) for k in (
+                    "loudness_ok", "true_peak_ok", "clipping_ok", "playback_ok", "pts_ok", "duration_ok",
+                    "measured_integrated_loudness_lufs", "measured_true_peak_dbtp",
+                    "sample_rate", "channels", "codec")},
             "non_quality_score": round(min(nq_list), 3),
             "VDS_total": round(min(nq_list) + own_quality["quality_score"], 3),
             "pass": action == "pass_to_publish_pool",
@@ -522,6 +534,9 @@ def score_batch(videos: list[dict], thr: dict, previous_weight_profile: str | No
     blocked = [p["video_id"] for p in per_variant if p["recommended_action"] != "pass_to_publish_pool"]
     quality_fail_videos = sorted({vid for c in matrix for vid in c["quality_fail_videos"]})
     all_quality_ok = len(quality_fail_videos) == 0
+    # B3 实际判 fail 的字段（按 video）+ 实测值，便于定位音频是否退化（如 measured_true_peak_dbtp > -1）
+    quality_fail_fields_by_video = {p["video_id"]: p["quality_fail_fields"]
+                                    for p in per_variant if p["quality_fail_fields"]}
 
     # 质量 unknown 监控（非阻塞）
     unknown_by_video = {p["video_id"]: p["quality_unknown_fields"]
@@ -564,6 +579,7 @@ def score_batch(videos: list[dict], thr: dict, previous_weight_profile: str | No
             "batch_pass_rate": round(effective / total, 4) if total else 0.0,
             "all_variants_quality_ok": all_quality_ok,
             "quality_fail_videos": quality_fail_videos,
+            "quality_fail_fields_by_video": quality_fail_fields_by_video,   # 诊断：哪条哪些质量字段 fail
             "publishable_video_ids": publishable,
             "blocked_video_ids": blocked,
             "quality_unknown_count": quality_unknown_count,

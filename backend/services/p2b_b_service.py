@@ -81,6 +81,28 @@ def eligible_plans(db: Session, tenant_id: str, production_order_id: str) -> lis
     return out
 
 
+def precheck_visual_diff_sample(db: Session, tenant_id: str, plan_ids: list[str]) -> dict:
+    """B2.7 视觉效果验收前预检：读 execution_plan_ids 的 group_type，3 条全同组 → FAIL FAST。
+
+    理由：B2.7 构图 zoom 由 variant_index（含 group）驱动，跨组样本才能稳定覆盖多 zoom 档位、
+    形成有意义的视觉差异验收。3 条全 pain_first 这类同组样本**不得**作为 B2.7 效果验收集。
+    返回 {ok, group_types, distinct_groups, reason}。仅供验证/预检，不改变 runs 执行行为。
+    """
+    rows = (db.query(ExecutionPlan)
+            .filter(ExecutionPlan.tenant_id == tenant_id,
+                    ExecutionPlan.execution_plan_id.in_(plan_ids))
+            .all())
+    by_id = {r.execution_plan_id: r for r in rows}
+    gts = [by_id[i].group_type for i in plan_ids if i in by_id]
+    distinct = sorted(set(gts))
+    if len(gts) >= 2 and len(distinct) == 1:
+        return {"ok": False, "group_types": gts, "distinct_groups": distinct,
+                "reason": (f"B2.7 效果验收样本全部为同一 group_type={distinct[0]}；"
+                           f"请改用跨组 plan（建议 pain_first / selling_first / result_close）以覆盖多 zoom 档位。"),
+                "recommended_groups": ["pain_first", "selling_first", "result_close"]}
+    return {"ok": True, "group_types": gts, "distinct_groups": distinct, "reason": ""}
+
+
 def _select_plans(db: Session, tenant_id: str, production_order_id: str,
                   plan_ids: list[str], max_items: int) -> list[ExecutionPlan]:
     rows = (
@@ -122,14 +144,30 @@ def preview_run(db: Session, tenant_id: str, production_order_id: str,
         })
     # P2B-B2：附带可见层字体健康（additive，不改既有字段语义）
     fh = plan_executor.font_health()
-    return {"ok": True, "data": {
+    data = {
         "production_order_id": production_order_id, "source_video_id": source_video_id,
         "source_duration": round(src["duration"], 2), "selected": items,
         "expected_outputs": len(items), "expected_cost": 0,
         "execution_mode": "staging_only",
         "visible_layer_ready": fh["visible_layer_ready"],
         "visible_layer": fh,
-    }}
+    }
+    # B2.7：视觉差异化开启时，附带跨组样本预检（additive 建议，不阻断 preview）
+    if settings.enable_p2b_visual_diff:
+        data["visual_diff_precheck"] = precheck_visual_diff_sample(db, tenant_id, plan_ids)
+        # 防呆：列最近同生产单 run，提示验证脚本"超时先查询、勿盲目重发"
+        data["recent_runs"] = recent_runs(db, tenant_id, production_order_id, limit=5)
+    return {"ok": True, "data": data}
+
+
+def recent_runs(db: Session, tenant_id: str, production_order_id: str, limit: int = 5) -> list[dict]:
+    """B2.7 防重复 run：列该生产单最近的 run（验证脚本应在重试前先查，避免超时盲目重发 POST /runs）。"""
+    rows = (db.query(P2bExecutionRun)
+            .filter(P2bExecutionRun.tenant_id == tenant_id,
+                    P2bExecutionRun.production_order_id == production_order_id)
+            .order_by(P2bExecutionRun.id.desc()).limit(limit).all())
+    return [{"run_id": r.run_id, "status": r.status, "completed": r.completed,
+             "requested_count": r.requested_count, "created_at": str(r.created_at)} for r in rows]
 
 
 def execute_run(db: Session, tenant_id: str, user_phone: str | None, production_order_id: str,

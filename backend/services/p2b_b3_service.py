@@ -45,6 +45,19 @@ def _as_obj(s):
         return None
 
 
+def _probe_audio_stream(path: str) -> dict:
+    """探测音频流 codec/sample_rate/channels（B2.7 重编码后定位音频是否退化用）。"""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                            "-show_entries", "stream=codec_name,sample_rate,channels",
+                            "-of", "json", path], capture_output=True, text=True, timeout=30)
+        st = (json.loads(r.stdout).get("streams") or [{}])[0]
+        return {"codec": st.get("codec_name"),
+                "sample_rate": st.get("sample_rate"), "channels": st.get("channels")}
+    except Exception:  # noqa: BLE001
+        return {"codec": None, "sample_rate": None, "channels": None}
+
+
 def _measure_mp4(path: str) -> dict:
     """质量维兜底实测（仅当 meta/qa 无实测时）：loudnorm analyze 读 I(LUFS)/TP(dBTP)，与 ECS 同口径。"""
     try:
@@ -92,6 +105,7 @@ def _gather_video(db: Session, item: P2bExecutionRunItem, with_frames: bool, k: 
 
     frame_hashes = None
     proxy_unavailable_reason = None
+    stream = {"codec": None, "sample_rate": None, "channels": None}
     path = video_storage.local_path(v.id, "viral") if v is not None else None
     if with_frames and v is not None:
         dur = item.duration or (v.duration_seconds if v else 0)
@@ -99,6 +113,7 @@ def _gather_video(db: Session, item: P2bExecutionRunItem, with_frames: bool, k: 
             frame_hashes = b3_score.frame_hashes(path, float(dur), k)
             if frame_hashes is None:
                 proxy_unavailable_reason = "frame_extract_failed"
+            stream = _probe_audio_stream(path)              # B2.7 后定位音频是否退化
             if not measured and not has_meta_measure:
                 measured = _measure_mp4(path)   # 缺实测才重测
         else:
@@ -116,6 +131,7 @@ def _gather_video(db: Session, item: P2bExecutionRunItem, with_frames: bool, k: 
         "audio_encoding": ae,
         "qa": {"playable_ok": qa.get("playable_ok"), "pts_ok": qa.get("pts_ok")},
         "measured": measured,
+        "stream": stream,
         "frame_hashes": frame_hashes,
         "_proxy_reason": proxy_unavailable_reason,
     }

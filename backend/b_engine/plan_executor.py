@@ -481,16 +481,18 @@ _VTEMP_BAL = {"neutral": "", "warm": "colorbalance=rm=0.03:bm=-0.03",
 def resolve_visual_profile(vp: dict, variant_id: str) -> dict:
     """逐 variant 确定性视觉档位（构图 + 轻调色）+ visual_profile_signature。同 variant 跨 run 一致、跨 variant 互异。
 
-    group_type 决定构图基调（zoom/pan_y），轻调色由增强 seed 互异质数取档。全部 ≤ 幅度上限。
+    **zoom 由 variant_index 驱动**（hotfix V1：旧版按 group_type 取 zoom，导致 3 条同组全 zoom=1.0、构图无差异）。
+    variant_index = group_order×5 + (group_index-1)（0..29 唯一）→ 任意跨组/跨 index 的 3 条都能覆盖多 zoom 档位。
+    pan_y 仍带 group 家族味，轻调色由增强 seed 互异质数取档。全部 ≤ 幅度上限。
     """
     seed = _variation_seed(vp, variant_id)
     vidx = _variant_index(vp, seed)
     gt = vp.get("group_type")
     g = _GROUP_TYPE_ORDER.index(gt) if gt in _GROUP_TYPE_ORDER else (seed % 6)
 
-    zi = g % 3                       # 构图缩放：按 group 家族
-    pyi = g % 3                      # 垂直锚点：按 group 家族
-    pxi = (seed // 3) % 3
+    zi = vidx % 3                    # 构图缩放：由 variant_index 驱动（不再只看 group_type）
+    pyi = g % 3                      # 垂直锚点：保留 group 家族味
+    pxi = (vidx + seed // 3) % 3     # 水平锚点：variant_index 参与，避免同组雷同
     ti = (seed // 5) % 3
     ci = (seed // 7) % 3
     si = (seed // 11) % 3
