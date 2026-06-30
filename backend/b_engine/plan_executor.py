@@ -465,34 +465,51 @@ def audio_encoding_info(variant_id: str, run_id: str = "") -> dict:
 
 
 # ============================ B2.7 视觉合规差异化（逐 variant 构图 + 轻调色） ============================
+# Strength Hotfix V1（Phase 1，参数经拍板）：zoom/pan 档位加大 + 跨组三维正交，提升 pHash/dHash 差异。
 # 档位（确定性、≤幅度上限）。只放大不缩小、不黑边、不镜像、不变速、不 hue 旋转、不强锐化。
-_VZ_OPTS = [1.00, 1.06, 1.12]            # zoom（≤1.12）
-_VPX_OPTS = [0.50, 0.42, 0.58]           # pan_x：中心 ±8%
-_VPY_OPTS = [0.45, 0.50, 0.55]           # pan_y：中上 / 中 / 中下
+_VZ_OPTS = [1.00, 1.12, 1.22]            # zoom：拍板 [1.00,1.12,1.22]（≤1.22，1.30 未批）
+_VPX_OPTS = [0.40, 0.50, 0.60]           # pan_x：中心 ±10%（拍板由 ±8% 提到 ±10%）
+_VPY_OPTS = [0.34, 0.50, 0.66]           # pan_y：强错开 中上/中/中下
 _VTEMP_OPTS = ["neutral", "warm", "cool"]
-_VCONTRAST_OPTS = [0.96, 1.00, 1.06]     # 0.92–1.10 内
+_VCONTRAST_OPTS = [0.96, 1.00, 1.06]     # 0.92–1.10 内（调色服务人眼，对 pHash 近乎无贡献）
 _VSAT_OPTS = [0.96, 1.00, 1.08]          # 0.92–1.12 内（护肤色）
 _VGAMMA_OPTS = [0.96, 1.00, 1.05]        # 0.92–1.08 内
 _VBRIGHT_OPTS = [-0.03, 0.0, 0.03]       # ±0.04 内
 _VTEMP_BAL = {"neutral": "", "warm": "colorbalance=rm=0.03:bm=-0.03",
               "cool": "colorbalance=rm=-0.03:bm=0.03"}     # 小幅冷暖，无 hue 旋转
 
+# 跨组构图原型（zoom_idx, pan_y_idx, pan_x_idx）——拍板的三维强正交组合：
+#   pain_first   zoom1.22 + pan_y0.34 + pan_x0.40
+#   selling_first zoom1.12 + pan_y0.50 + pan_x0.50
+#   result_close zoom1.00 + pan_y0.66 + pan_x0.60
+# 三对在 zoom/pan_y/pan_x 上同时错开（非只错 zoom）。
+_GROUP_ARCH = {"pain_first": (2, 0, 0), "selling_first": (1, 1, 1), "result_close": (0, 2, 2)}
+
 
 def resolve_visual_profile(vp: dict, variant_id: str) -> dict:
     """逐 variant 确定性视觉档位（构图 + 轻调色）+ visual_profile_signature。同 variant 跨 run 一致、跨 variant 互异。
 
-    **zoom 由 variant_index 驱动**（hotfix V1：旧版按 group_type 取 zoom，导致 3 条同组全 zoom=1.0、构图无差异）。
-    variant_index = group_order×5 + (group_index-1)（0..29 唯一）→ 任意跨组/跨 index 的 3 条都能覆盖多 zoom 档位。
-    pan_y 仍带 group 家族味，轻调色由增强 seed 互异质数取档。全部 ≤ 幅度上限。
+    跨组（pain/selling/result）走 _GROUP_ARCH 三维强正交原型；同组用 (group_index-1) 偏移在三维同时错开
+    （保留 Strength 前 hotfix 的同组分散防呆）；非典型组用 variant_index 兜底。轻调色由 seed 取档（服务人眼，非 B3 提分杠杆）。
     """
     seed = _variation_seed(vp, variant_id)
     vidx = _variant_index(vp, seed)
     gt = vp.get("group_type")
     g = _GROUP_TYPE_ORDER.index(gt) if gt in _GROUP_TYPE_ORDER else (seed % 6)
+    gi = vp.get("group_index")
+    off = (gi - 1) if isinstance(gi, int) and gi >= 1 else 0
 
-    zi = vidx % 3                    # 构图缩放：由 variant_index 驱动（不再只看 group_type）
-    pyi = g % 3                      # 垂直锚点：保留 group 家族味
-    pxi = (vidx + seed // 3) % 3     # 水平锚点：variant_index 参与，避免同组雷同
+    arch = _GROUP_ARCH.get(gt)
+    if arch:
+        # 跨组原型 + 同组 (gi-1) 偏移：三维同时错开，且同组多条仍分散
+        zi = (arch[0] + off) % 3
+        pyi = (arch[1] + off) % 3
+        pxi = (arch[2] + off) % 3
+    else:
+        # 非典型组兜底：variant_index 驱动，仍覆盖多档
+        zi = vidx % 3
+        pyi = (vidx // 3) % 3
+        pxi = (vidx + seed // 3) % 3
     ti = (seed // 5) % 3
     ci = (seed // 7) % 3
     si = (seed // 11) % 3
@@ -540,7 +557,7 @@ def visual_profile_info(variant_id: str, vp: dict, W: int, H: int) -> dict:
     vf = _visual_filter(prof, W, H)
     return {"applied": True, "visual_profile_signature": prof["visual_profile_signature"],
             "visual_filter": vf, "profile": prof,
-            "limits": {"zoom_max": 1.12, "pan_x_center_pct": 8, "contrast": [0.92, 1.10],
+            "limits": {"zoom_max": 1.22, "pan_x_center_pct": 10, "contrast": [0.92, 1.10],
                        "saturation": [0.92, 1.12], "gamma": [0.92, 1.08], "brightness_abs": 0.04,
                        "hue_rotation": False, "mirror": False, "speed_change": False,
                        "sharpness": False}}

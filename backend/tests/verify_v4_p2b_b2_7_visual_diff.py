@@ -24,7 +24,7 @@ import db as _db
 
 _STORAGE = os.path.join(tempfile.mkdtemp(), "videos")
 _SAMPLE_DIR = os.environ.get("SAMPLE_DIR") or os.path.join(tempfile.mkdtemp(), "p2b_b27_samples")
-_LIMITS = {"zoom_max": 1.12, "contrast": (0.92, 1.10), "saturation": (0.92, 1.12),
+_LIMITS = {"zoom_max": 1.22, "contrast": (0.92, 1.10), "saturation": (0.92, 1.12),
            "gamma": (0.92, 1.08), "brightness_abs": 0.04}
 _FORBIDDEN = ("hue=", "hflip", "vflip", "transpose", "atempo")
 
@@ -163,7 +163,7 @@ def main():
         assert _LIMITS["gamma"][0] <= p["gamma"] <= _LIMITS["gamma"][1], p
         assert abs(p["brightness"]) <= _LIMITS["brightness_abs"], p
         assert p["sharpness"] is False, "锐度第一版必须 OFF"
-        assert 0.42 <= p["pan_x"] <= 0.58, p   # 中心 ±8%
+        assert 0.40 <= p["pan_x"] <= 0.60, p   # 中心 ±10%（Strength 拍板）
     # (3) signature 3 唯一
     assert len(set(sigs)) == 3, f"visual_profile_signature 应 3 唯一: {sigs}"
     print(f"  ✔ (3) signature 3 唯一 / (4) 参数≤上限 / (5)无hue (6)无mirror (7)无变速  sigs={sigs}")
@@ -202,7 +202,7 @@ def main():
     items = c.get(f"/api/p2b-b/runs/{run_on}/items", headers=A).json()["data"]["items"]
     vids = sorted(it["video_id"] for it in items)
     se = _db.SessionLocal()
-    vis_sigs, zooms = [], []
+    vis_sigs, zooms, panys, panxs = [], [], [], []
     for vid in vids:
         v = se.get(Video, vid)
         meta = json.loads(v.meta)
@@ -211,7 +211,7 @@ def main():
         assert ve.get("applied") is True, ve
         assert "visual_profile_signature" in ve and ve["profile"], ve
         vis_sigs.append(ve["visual_profile_signature"])
-        zooms.append(ve["profile"]["zoom"])
+        zooms.append(ve["profile"]["zoom"]); panys.append(ve["profile"]["pan_y"]); panxs.append(ve["profile"]["pan_x"])
         p = ve["profile"]
         assert p["zoom"] <= _LIMITS["zoom_max"] and p["sharpness"] is False
         path = os.path.join(_STORAGE, "viral", f"{vid}.mp4")
@@ -229,15 +229,29 @@ def main():
     assert len(set(vis_sigs)) == 3, f"3 条 visual_profile_signature 应唯一: {vis_sigs}"
     print(f"  ✔ (2) visual_profile 存在 / (13) meta.visual_encoding 写入 / (8) 音频路径零改 / (15) B2.5 不退化")
 
-    # ---- (HOTFIX-1) zoom 档位生效：3 条至少覆盖 2 个 zoom 档位（ECS 失败时全 1.0）----
-    assert len(set(zooms)) >= 2, f"3 条必须至少覆盖 2 个 zoom 档位（修复前全 1.0）: {zooms}"
-    assert set(zooms) == {1.00, 1.06, 1.12}, f"跨组 3 条应覆盖 1.00/1.06/1.12: {zooms}"
-    assert all(z <= 1.12 for z in zooms), zooms
-    # var_01/02/03 也须至少 2 档（variant_index 驱动 zoom）
+    # ---- (STRENGTH-1/2/3) 新档位生效：zoom 1.00/1.12/1.22、pan_y 0.34/0.50/0.66、pan_x 0.40/0.50/0.60 ----
+    assert set(zooms) == {1.00, 1.12, 1.22}, f"跨组 3 条 zoom 应为 1.00/1.12/1.22: {zooms}"
+    assert set(panys) == {0.34, 0.50, 0.66}, f"跨组 3 条 pan_y 应为 0.34/0.50/0.66: {panys}"
+    assert set(panxs) == {0.40, 0.50, 0.60}, f"跨组 3 条 pan_x 应为 0.40/0.50/0.60: {panxs}"
+    assert all(z <= 1.22 for z in zooms), zooms
+    # (STRENGTH-组合) 三维强正交：任意两条 zoom/pan_y/pan_x 同时不同（非只错 zoom）
+    trip = list(zip(zooms, panys, panxs))
+    for i in range(3):
+        for j in range(i + 1, 3):
+            difdims = sum(1 for k in range(3) if trip[i][k] != trip[j][k])
+            assert difdims == 3, f"两条应在 zoom/pan_y/pan_x 三维同时错开: {trip[i]} vs {trip[j]}"
+    # (STRENGTH-安全区) 最大 zoom+pan 下中央安全矩形(≥70%)仍完整保留（不裁主体）
+    for z, py, px in trip:
+        vis_lo_x = (1 - 1 / z) * px; vis_hi_x = vis_lo_x + 1 / z   # 可见原始横向区间（归一）
+        vis_lo_y = (1 - 1 / z) * py; vis_hi_y = vis_lo_y + 1 / z
+        assert vis_lo_x <= 0.15 and vis_hi_x >= 0.85, f"中央70%横向被裁: z={z} px={px}"
+        assert vis_lo_y <= 0.15 and vis_hi_y >= 0.85, f"中央70%纵向被裁: z={z} py={py}"
+    # var_01/02/03 兜底覆盖三 zoom 档
     vz = [pe.resolve_visual_profile({"group_type": gt, "group_index": 1}, vid)["zoom"]
           for gt, vid in [("pain_first", "var_01"), ("selling_first", "var_02"), ("result_close", "var_03")]]
-    assert len(set(vz)) >= 2, f"var_01/02/03 应至少 2 个 zoom 档位: {vz}"
-    print(f"  ✔ (HOTFIX-1) zoom 档位生效：实跑3条 zoom={sorted(set(zooms))} / var_01-03 zoom={vz}（variant_index 驱动）")
+    assert set(vz) == {1.00, 1.12, 1.22}, f"var_01/02/03 跨组应覆盖 1.00/1.12/1.22: {vz}"
+    print(f"  ✔ (STRENGTH) zoom={sorted(set(zooms))} pan_y={sorted(set(panys))} pan_x={sorted(set(panxs))}"
+          f" / 三维强正交 / 中央70%安全区保留")
 
     # ---- (HOTFIX-3) quality_fail 诊断字段：实测值 + fail 字段 + 流信息 ----
     bs = b3data["batch_summary"]
