@@ -1,8 +1,9 @@
-"""任务状态机 — 6 态流转 + 合法转换约束。
+"""任务状态机 — 7 态流转 + 合法转换约束。
 
 设计依据：M1 W1 服务骨架。
 
-6 态流转：queued → producing → gated → packaged → in_review → closed
+正常链路：queued → producing → gated → packaged → in_review → closed
+缺料停单：producing → halted_missing_materials（终态）
 不允许跳态（如 queued → closed），不允许倒退。
 每次转换记录时间戳和操作人（history）。
 """
@@ -19,11 +20,15 @@ class InvalidTransition(ValueError):
     """非法状态转换。"""
 
 
-# ── 合法转换表（设计文档 W1 §3）──────────────────────────────────────
-# 只允许相邻前向流转；closed 为终态，不可再转换。
+# ── 合法转换表（设计文档 W1 §3 + Patch A 缺料停单）──────────────────────
+# 正常链路 + 缺料停单；closed / halted_missing_materials 为终态。
 _ALLOWED_TRANSITIONS = {
     FactoryTaskState.QUEUED: {FactoryTaskState.PRODUCING},
-    FactoryTaskState.PRODUCING: {FactoryTaskState.GATED},
+    FactoryTaskState.PRODUCING: {
+        FactoryTaskState.GATED,
+        FactoryTaskState.HALTED_MISSING_MATERIALS,
+    },
+    FactoryTaskState.HALTED_MISSING_MATERIALS: set(),  # 终态：缺料停单
     FactoryTaskState.GATED: {FactoryTaskState.PACKAGED},
     FactoryTaskState.PACKAGED: {FactoryTaskState.IN_REVIEW},
     FactoryTaskState.IN_REVIEW: {FactoryTaskState.CLOSED},
@@ -80,8 +85,11 @@ class StateMachine:
 
     @property
     def is_terminal(self) -> bool:
-        """是否已到终态。"""
-        return self.current == FactoryTaskState.CLOSED
+        """是否已到终态（closed 或缺料停单）。"""
+        return self.current in (
+            FactoryTaskState.CLOSED,
+            FactoryTaskState.HALTED_MISSING_MATERIALS,
+        )
 
     @property
     def allowed_next(self) -> List[FactoryTaskState]:

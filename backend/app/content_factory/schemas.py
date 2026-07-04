@@ -5,7 +5,7 @@
 本层职责边界：
 - 纯数据结构定义，不含任何网络调用或持久化逻辑；
 - task_type 复用 model_router.TaskType，保证下游无缝衔接；
-- FactoryTaskState 为 6 态终态枚举，状态流转逻辑在 task_state.py。
+- FactoryTaskState 为 7 态枚举（含缺料停单态），状态流转逻辑在 task_state.py。
 """
 from __future__ import annotations
 
@@ -13,9 +13,12 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from backend.app.model_router.schemas import TaskType
+
+if TYPE_CHECKING:
+    from backend.app.model_router.schemas import MissingMaterialReport
 
 
 def _new_id(prefix: str) -> str:
@@ -23,17 +26,19 @@ def _new_id(prefix: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 任务状态（6 态）
+# 任务状态（7 态，含缺料停单态）
 # ──────────────────────────────────────────────────────────────────────
 class FactoryTaskState(str, Enum):
-    """文案加工厂任务状态机 — 6 态流转。
+    """文案加工厂任务状态机 — 7 态流转（含停单态）。
 
-    queued → producing → gated → packaged → in_review → closed
+    正常链路：queued → producing → gated → packaged → in_review → closed
+    缺料停单：producing → halted_missing_materials（终态）
     不允许跳态（如 queued → closed）。
     """
 
     QUEUED = "queued"            # 排队等待处理
     PRODUCING = "producing"      # 模型生成中（Brief 理解 + 召回 + 出稿）
+    HALTED_MISSING_MATERIALS = "halted_missing_materials"  # 缺料停单（终态）
     GATED = "gated"              # 六硬门质检中（W4 工单实现后激活）
     PACKAGED = "packaged"        # 打包完成，等待人审
     IN_REVIEW = "in_review"      # 人工审读中
@@ -43,6 +48,13 @@ class FactoryTaskState(str, Enum):
 # ──────────────────────────────────────────────────────────────────────
 # Brief（Brief 理解层输入）
 # ──────────────────────────────────────────────────────────────────────
+# ── 合法 target_platform 值 ─────────────────────────────────────────
+VALID_TARGET_PLATFORMS = {"brand_site", "xiaohongshu", "douyin", "shipinhao"}
+
+# ── M1 锁死品牌线 ───────────────────────────────────────────────────
+M1_LOCKED_LINE = "brand_dfd"
+
+
 @dataclass
 class Brief:
     """一次内容生产请求的 Brief 理解层输入。
@@ -50,7 +62,9 @@ class Brief:
     brief_id：Brief 唯一标识（自动生成）
     trace_id：全链路溯源 ID（与 task_id/brief_id 三 ID 绑定）
     task_type：任务类型，复用 model_router.TaskType
-    platform：目标平台（可选）
+    target_platform：目标平台（必填，四选一：brand_site / xiaohongshu / douyin / shipinhao）
+    line：品牌线（M1 锁死 brand_dfd，G5 品牌一致门锚点）
+    direction_hint：方向提示（平台灵感/热点/对标内容只进此字段，不得作为事实源）
     raw_text：原始 Brief 文本（不得为空）
     target_audience：目标受众（可选）
     risk_hint：风险提示（可选，HIGH_RISK 类内容必填）
@@ -59,8 +73,10 @@ class Brief:
     """
 
     raw_text: str
+    target_platform: str  # 必填，四选一
     task_type: TaskType = TaskType.FACT_STRICT
-    platform: Optional[str] = None
+    line: str = M1_LOCKED_LINE
+    direction_hint: Optional[str] = None
     target_audience: Optional[str] = None
     risk_hint: Optional[str] = None
     batch_id: Optional[str] = None

@@ -1,13 +1,14 @@
-"""W2 测试 — 9080 只读召回 + 过滤 + 绑定 + 日志。
+"""W2 测试 — 9080 只读召回 + 过滤 + 绑定 + 日志 + Patch C。
 
-覆盖 M1 W2 9080 只读召回适配：
+覆盖 M1 W2 9080 只读召回适配 + Claude Code V2 Patch C：
 - MockRecallClient 返回正确结构
-- 白名单过滤
-- 黑名单过滤
+- 白名单过滤（fail-closed）
+- 黑名单过滤（含 M1 黑名单）
 - used_materials 绑定 + source_refs
 - 缺料报告
 - 召回日志 14 字段完整
 - 默认配置 mock=True
+- fail-closed：缺 material_type / source_type / status → 拒绝
 """
 import pytest
 
@@ -74,9 +75,12 @@ class TestMockRecallClient:
 class TestWhitelistFilter:
     def test_whitelist_keeps_allowed_types(self):
         materials = [
-            {"id": "m1", "material_type": "fact_card"},
-            {"id": "m2", "material_type": "compliance_rule"},
-            {"id": "m3", "material_type": "random_type"},
+            {"id": "m1", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m2", "material_type": "compliance_rule",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m3", "material_type": "random_type",
+             "source_type": "9080_approved", "status": "active"},
         ]
         filtered = apply_filters(materials)
         ids = [m["id"] for m in filtered]
@@ -86,8 +90,10 @@ class TestWhitelistFilter:
 
     def test_whitelist_custom(self):
         materials = [
-            {"id": "m1", "material_type": "custom_type"},
-            {"id": "m2", "material_type": "fact_card"},
+            {"id": "m1", "material_type": "custom_type",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m2", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
         ]
         filtered = apply_filters(materials, whitelist=["custom_type"])
         assert len(filtered) == 1
@@ -95,7 +101,8 @@ class TestWhitelistFilter:
 
     def test_empty_whitelist_no_filter(self):
         materials = [
-            {"id": "m1", "material_type": "anything"},
+            {"id": "m1", "material_type": "anything",
+             "source_type": "9080_approved", "status": "active"},
         ]
         filtered = apply_filters(materials, whitelist=[], blacklist=[])
         assert len(filtered) == 1
@@ -107,9 +114,12 @@ class TestWhitelistFilter:
 class TestBlacklistFilter:
     def test_blacklist_removes_blocked_types(self):
         materials = [
-            {"id": "m1", "material_type": "draft"},
-            {"id": "m2", "material_type": "fact_card"},
-            {"id": "m3", "material_type": "rejected"},
+            {"id": "m1", "material_type": "draft",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m2", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m3", "material_type": "rejected",
+             "source_type": "9080_approved", "status": "active"},
         ]
         filtered = apply_filters(materials, whitelist=[])
         ids = [m["id"] for m in filtered]
@@ -119,8 +129,10 @@ class TestBlacklistFilter:
 
     def test_blacklist_by_status(self):
         materials = [
-            {"id": "m1", "material_type": "fact_card", "status": "archived"},
-            {"id": "m2", "material_type": "fact_card", "status": "active"},
+            {"id": "m1", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "archived"},
+            {"id": "m2", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
         ]
         filtered = apply_filters(materials, whitelist=[])
         assert len(filtered) == 1
@@ -128,9 +140,12 @@ class TestBlacklistFilter:
 
     def test_filter_with_report(self):
         materials = [
-            {"id": "m1", "material_type": "fact_card"},
-            {"id": "m2", "material_type": "draft"},
-            {"id": "m3", "material_type": "unknown"},
+            {"id": "m1", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m2", "material_type": "draft",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m3", "material_type": "unknown",
+             "source_type": "9080_approved", "status": "active"},
         ]
         filtered, report = apply_filters_with_report(materials)
         assert isinstance(report, FilterReport)
@@ -151,7 +166,7 @@ class TestBindMaterials:
             status=RecallStatus.APPROVED,
             source_refs=[SourceRef(material_id="m1")],
         )
-        brief = Brief(raw_text="品牌科普", task_type=TaskType.FACT_STRICT)
+        brief = Brief(raw_text="品牌科普", task_type=TaskType.FACT_STRICT, target_platform="brand_site")
         bound = bind_materials(result, brief)
         assert bound.is_sufficient is True
         assert bound.missing_report is None
@@ -160,7 +175,7 @@ class TestBindMaterials:
 
     def test_missing_materials(self):
         result = RecallResult(materials=[], status=RecallStatus.MISSING)
-        brief = Brief(raw_text="品牌科普", task_type=TaskType.FACT_STRICT)
+        brief = Brief(raw_text="品牌科普", task_type=TaskType.FACT_STRICT, target_platform="brand_site")
         bound = bind_materials(result, brief)
         assert bound.is_sufficient is False
         assert isinstance(bound.missing_report, MissingMaterialReport)
@@ -170,7 +185,7 @@ class TestBindMaterials:
             materials=[{"id": "m1", "content": "唯一素材"}],
             status=RecallStatus.APPROVED,
         )
-        brief = Brief(raw_text="敏感肌科普", task_type=TaskType.HIGH_RISK)
+        brief = Brief(raw_text="敏感肌科普", task_type=TaskType.HIGH_RISK, target_platform="brand_site")
         bound = bind_materials(result, brief)
         # HIGH_RISK 需要 ≥2 素材
         assert bound.is_sufficient is False
@@ -178,7 +193,7 @@ class TestBindMaterials:
 
     def test_blocked_recall(self):
         result = RecallResult(materials=[], status=RecallStatus.BLOCKED)
-        brief = Brief(raw_text="测试", task_type=TaskType.FACT_STRICT)
+        brief = Brief(raw_text="测试", task_type=TaskType.FACT_STRICT, target_platform="brand_site")
         bound = bind_materials(result, brief)
         assert bound.is_sufficient is False
         assert "拦截" in bound.missing_report.missing_material_types[0]
@@ -249,3 +264,105 @@ class TestRecallLog:
         summary = log.summary()
         assert summary["approved"] == 2
         assert summary["missing"] == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Patch C: fail-closed + M1 黑名单
+# ──────────────────────────────────────────────────────────────────────
+class TestFailClosed:
+    def test_missing_material_type_rejected(self):
+        """缺 material_type → 拒绝。"""
+        materials = [
+            {"id": "m1", "source_type": "9080_approved", "status": "active"},
+            {"id": "m2", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials)
+        assert len(filtered) == 1
+        assert filtered[0]["id"] == "m2"
+
+    def test_missing_source_type_rejected(self):
+        """缺 source_type → 拒绝。"""
+        materials = [
+            {"id": "m1", "material_type": "fact_card", "status": "active"},
+            {"id": "m2", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials)
+        assert len(filtered) == 1
+        assert filtered[0]["id"] == "m2"
+
+    def test_missing_status_rejected(self):
+        """缺 status → 拒绝。"""
+        materials = [
+            {"id": "m1", "material_type": "fact_card",
+             "source_type": "9080_approved"},
+            {"id": "m2", "material_type": "fact_card",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials)
+        assert len(filtered) == 1
+        assert filtered[0]["id"] == "m2"
+
+
+class TestM1Blacklist:
+    def test_kimi_expansion_blocked(self):
+        """Kimi 扩写件不得进入事实材料。"""
+        materials = [
+            {"id": "m1", "material_type": "kimi_expansion",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials, whitelist=[])
+        assert len(filtered) == 0
+
+    def test_daily_brief_blocked(self):
+        materials = [
+            {"id": "m1", "material_type": "daily_brief",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials, whitelist=[])
+        assert len(filtered) == 0
+
+    def test_webintel_blocked(self):
+        materials = [
+            {"id": "m1", "material_type": "webintel",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m2", "material_type": "webintel_crawl",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials, whitelist=[])
+        assert len(filtered) == 0
+
+    def test_crawl_blocked(self):
+        materials = [
+            {"id": "m1", "material_type": "crawl_raw",
+             "source_type": "9080_approved", "status": "active"},
+            {"id": "m2", "material_type": "crawl_unverified",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials, whitelist=[])
+        assert len(filtered) == 0
+
+    def test_craft_memory_blocked(self):
+        materials = [
+            {"id": "m1", "material_type": "craft_memory",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials, whitelist=[])
+        assert len(filtered) == 0
+
+    def test_platform_inspiration_as_fact_blocked(self):
+        materials = [
+            {"id": "m1", "material_type": "platform_inspiration_as_fact",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials, whitelist=[])
+        assert len(filtered) == 0
+
+    def test_raw_draft_blocked(self):
+        materials = [
+            {"id": "m1", "material_type": "raw_draft",
+             "source_type": "9080_approved", "status": "active"},
+        ]
+        filtered = apply_filters(materials, whitelist=[])
+        assert len(filtered) == 0

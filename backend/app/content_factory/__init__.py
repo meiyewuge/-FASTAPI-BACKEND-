@@ -18,7 +18,7 @@
 - recall/：9080 只读召回子包
 """
 from .schemas import Brief, ContentStagingEntry, FactoryTaskState, TraceContext
-from .brief import BriefParseError, parse_brief, parse_batch_briefs
+from .brief import BriefParseError, InvalidPlatformError, parse_brief, parse_batch_briefs
 from .task_state import InvalidTransition, StateMachine, TransitionRecord
 from .factory import ContentFactory, FactoryResult
 from .staging import ContentStaging
@@ -31,6 +31,7 @@ __all__ = [
     "ContentStagingEntry",
     "FactoryResult",
     "FactoryTaskState",
+    "InvalidPlatformError",
     "InvalidTransition",
     "StateMachine",
     "TraceContext",

@@ -1,13 +1,15 @@
 """W1 测试 — Brief 理解层 + 状态机 + Staging + 工厂骨架。
 
-覆盖 M1 W1 服务骨架：
-- Brief 解析正反样例
+覆盖 M1 W1 服务骨架 + Claude Code V2 Patch A/B：
+- Brief 解析正反样例（含 target_platform / line / direction_hint）
 - 批量 Brief 解析
-- 状态机 6 态合法流转
+- 状态机 7 态合法流转（含缺料停单态）
 - 状态机非法跳态拦截
 - trace_id / task_id / brief_id 绑定
 - staging put / get / list
 - factory 骨架 process_brief 返回正确结构
+- 缺料停单：零素材 → HALTED_MISSING_MATERIALS
+- Brief 边界字段验证
 """
 import pytest
 
@@ -19,6 +21,7 @@ from backend.app.content_factory import (
     ContentStagingEntry,
     FactoryResult,
     FactoryTaskState,
+    InvalidPlatformError,
     InvalidTransition,
     StateMachine,
     TraceContext,
@@ -33,15 +36,18 @@ from backend.app.model_router.schemas import TaskType
 # ──────────────────────────────────────────────────────────────────────
 class TestBriefParsing:
     def test_parse_valid_brief(self):
-        b = parse_brief({"raw_text": "写一篇品牌科普", "task_type": "fact_strict"})
+        b = parse_brief({"raw_text": "写一篇品牌科普", "task_type": "fact_strict",
+                         "target_platform": "xiaohongshu"})
         assert isinstance(b, Brief)
         assert b.raw_text == "写一篇品牌科普"
         assert b.task_type == TaskType.FACT_STRICT
+        assert b.target_platform == "xiaohongshu"
+        assert b.line == "brand_dfd"
         assert b.brief_id.startswith("brief_")
         assert b.trace_id.startswith("trace_")
 
     def test_parse_brief_default_task_type(self):
-        b = parse_brief({"raw_text": "写一篇文案"})
+        b = parse_brief({"raw_text": "写一篇文案", "target_platform": "brand_site"})
         assert b.task_type == TaskType.FACT_STRICT
 
     def test_parse_brief_empty_text_fails(self):
@@ -64,14 +70,17 @@ class TestBriefParsing:
         b = parse_brief({
             "raw_text": "  写一篇小红书改写  ",
             "task_type": "platform_rewrite",
-            "platform": "xiaohongshu",
+            "target_platform": "xiaohongshu",
+            "line": "brand_dfd",
+            "direction_hint": "热门护肤话题",
             "target_audience": "25-35 女性",
             "risk_hint": None,
             "batch_id": "batch_001",
         })
         assert b.raw_text == "写一篇小红书改写"  # 去空格
         assert b.task_type == TaskType.PLATFORM_REWRITE
-        assert b.platform == "xiaohongshu"
+        assert b.target_platform == "xiaohongshu"
+        assert b.direction_hint == "热门护肤话题"
         assert b.batch_id == "batch_001"
 
 
@@ -81,8 +90,9 @@ class TestBriefParsing:
 class TestBatchBriefs:
     def test_parse_batch(self):
         raws = [
-            {"raw_text": "品牌科普 A"},
-            {"raw_text": "品牌科普 B", "task_type": "state_aesthetic"},
+            {"raw_text": "品牌科普 A", "target_platform": "brand_site"},
+            {"raw_text": "品牌科普 B", "task_type": "state_aesthetic",
+             "target_platform": "brand_site"},
         ]
         briefs = parse_batch_briefs(raws)
         assert len(briefs) == 2
@@ -94,14 +104,15 @@ class TestBatchBriefs:
 
     def test_parse_batch_one_fails(self):
         raws = [
-            {"raw_text": "正常 Brief"},
+            {"raw_text": "正常 Brief", "target_platform": "brand_site"},
             {"raw_text": ""},  # 失败
         ]
         with pytest.raises(BriefParseError, match="Brief\\[1\\]"):
             parse_batch_briefs(raws)
 
     def test_parse_batch_preserves_existing_batch_id(self):
-        raws = [{"raw_text": "A", "batch_id": "my_batch"}]
+        raws = [{"raw_text": "A", "batch_id": "my_batch",
+                 "target_platform": "brand_site"}]
         briefs = parse_batch_briefs(raws)
         assert briefs[0].batch_id == "my_batch"
 
@@ -155,7 +166,7 @@ class TestStateMachine:
 # ──────────────────────────────────────────────────────────────────────
 class TestTraceContext:
     def test_from_brief(self):
-        b = Brief(raw_text="test")
+        b = Brief(raw_text="test", target_platform="brand_site")
         ctx = TraceContext.from_brief(b)
         assert ctx.trace_id == b.trace_id
         assert ctx.brief_id == b.brief_id
@@ -200,7 +211,7 @@ class TestStaging:
 class TestFactorySkeleton:
     def test_process_brief_without_recall(self):
         factory = ContentFactory()
-        brief = Brief(raw_text="写一篇品牌科普")
+        brief = Brief(raw_text="写一篇品牌科普", target_platform="brand_site")
         result = factory.process_brief(brief)
 
         assert isinstance(result, FactoryResult)
@@ -213,7 +224,7 @@ class TestFactorySkeleton:
 
     def test_process_brief_writes_staging(self):
         factory = ContentFactory()
-        brief = Brief(raw_text="写一篇品牌科普")
+        brief = Brief(raw_text="写一篇品牌科普", target_platform="brand_site")
         result = factory.process_brief(brief)
 
         entry = factory.staging.get(result.content_id)
@@ -229,8 +240,12 @@ class TestFactorySkeleton:
             scripted_results=[
                 RecallResult(
                     materials=[
-                        {"id": "mat_001", "content": "事实卡内容"},
-                        {"id": "mat_002", "content": "合规规则"},
+                        {"id": "mat_001", "content": "事实卡内容",
+                         "material_type": "fact_card", "source_type": "9080_approved",
+                         "status": "active"},
+                        {"id": "mat_002", "content": "合规规则",
+                         "material_type": "compliance_rule", "source_type": "9080_approved",
+                         "status": "active"},
                     ],
                     status=RecallStatus.APPROVED,
                     metadata=RecallMetadata(query_hash="test"),
@@ -238,10 +253,142 @@ class TestFactorySkeleton:
             ]
         )
         factory = ContentFactory(recall_client=mock_client)
-        brief = Brief(raw_text="写一篇品牌科普")
+        brief = Brief(raw_text="写一篇品牌科普", target_platform="brand_site")
         result = factory.process_brief(brief)
 
         assert result.recall_summary["status"] == "approved"
         assert result.recall_summary["materials_count"] == 2
         assert result.used_materials_ids == ["mat_001", "mat_002"]
         assert len(mock_client.calls) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Patch A: 缺料停单
+# ──────────────────────────────────────────────────────────────────────
+class TestHaltedMissingMaterials:
+    def test_zero_materials_halted(self):
+        """零素材 → 缺料停单，不进 PACKAGED。"""
+        from backend.app.content_factory.recall import (
+            MockRecallClient, RecallResult, RecallStatus, RecallMetadata,
+        )
+        mock_client = MockRecallClient(
+            scripted_results=[
+                RecallResult(
+                    materials=[],
+                    status=RecallStatus.MISSING,
+                    metadata=RecallMetadata(query_hash="test"),
+                ),
+            ]
+        )
+        factory = ContentFactory(recall_client=mock_client)
+        brief = Brief(raw_text="写一篇品牌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+
+        assert result.state == FactoryTaskState.HALTED_MISSING_MATERIALS
+        assert result.text is None
+        assert result.used_materials_ids == []
+        assert result.missing_report is not None
+
+    def test_halted_not_in_staging_candidate(self):
+        """缺料停单后不进入可被后续出稿使用的 staging 候选态。"""
+        from backend.app.content_factory.recall import (
+            MockRecallClient, RecallResult, RecallStatus, RecallMetadata,
+        )
+        mock_client = MockRecallClient(
+            scripted_results=[
+                RecallResult(materials=[], status=RecallStatus.MISSING),
+            ]
+        )
+        factory = ContentFactory(recall_client=mock_client)
+        brief = Brief(raw_text="品牌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+
+        # staging 中不应有 PACKAGED 状态的条目
+        packaged_entries = factory.staging.list_by_state(FactoryTaskState.PACKAGED)
+        assert len(packaged_entries) == 0
+        # halted 状态不应出现在 staging
+        assert result.state == FactoryTaskState.HALTED_MISSING_MATERIALS
+
+    def test_blocked_recall_halted(self):
+        """召回被拦截 → 缺料停单。"""
+        from backend.app.content_factory.recall import (
+            MockRecallClient, RecallResult, RecallStatus,
+        )
+        mock_client = MockRecallClient(
+            scripted_results=[
+                RecallResult(materials=[], status=RecallStatus.BLOCKED),
+            ]
+        )
+        factory = ContentFactory(recall_client=mock_client)
+        brief = Brief(raw_text="敏感肌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+
+        assert result.state == FactoryTaskState.HALTED_MISSING_MATERIALS
+        assert result.missing_report is not None
+
+    def test_halted_is_terminal(self):
+        """缺料停单是终态。"""
+        sm = StateMachine()
+        sm.transition(FactoryTaskState.PRODUCING)
+        sm.transition(FactoryTaskState.HALTED_MISSING_MATERIALS)
+        assert sm.is_terminal
+        assert sm.allowed_next == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Patch B: Brief 边界字段验证
+# ──────────────────────────────────────────────────────────────────────
+class TestBriefBoundaryFields:
+    def test_missing_platform_fails(self):
+        with pytest.raises(BriefParseError, match="target_platform"):
+            parse_brief({"raw_text": "test"})
+
+    def test_invalid_platform_fails(self):
+        with pytest.raises(InvalidPlatformError, match="非法 target_platform"):
+            parse_brief({"raw_text": "test", "target_platform": "weibo"})
+
+    def test_valid_platforms_accepted(self):
+        for p in ["brand_site", "xiaohongshu", "douyin", "shipinhao"]:
+            b = parse_brief({"raw_text": "test", "target_platform": p})
+            assert b.target_platform == p
+
+    def test_line_non_brand_dfd_rejected(self):
+        with pytest.raises(BriefParseError, match="M1 锁死"):
+            parse_brief({"raw_text": "test", "target_platform": "brand_site",
+                         "line": "other_brand"})
+
+    def test_line_default_brand_dfd(self):
+        b = parse_brief({"raw_text": "test", "target_platform": "brand_site"})
+        assert b.line == "brand_dfd"
+
+    def test_direction_hint_stored(self):
+        b = parse_brief({"raw_text": "test", "target_platform": "brand_site",
+                         "direction_hint": "小红书热门话题"})
+        assert b.direction_hint == "小红书热门话题"
+
+    def test_direction_hint_not_in_used_materials(self):
+        """direction_hint 不得进入 used_materials。"""
+        from backend.app.content_factory.recall import (
+            MockRecallClient, RecallResult, RecallStatus,
+        )
+        mock_client = MockRecallClient(
+            scripted_results=[
+                RecallResult(
+                    materials=[
+                        {"id": "m1", "material_type": "fact_card",
+                         "source_type": "9080_approved", "status": "active"},
+                    ],
+                    status=RecallStatus.APPROVED,
+                ),
+            ]
+        )
+        factory = ContentFactory(recall_client=mock_client)
+        brief = Brief(
+            raw_text="品牌科普",
+            target_platform="brand_site",
+            direction_hint="热门话题",
+        )
+        result = factory.process_brief(brief)
+        # used_materials_ids 只含素材 ID，不含 direction_hint
+        assert "热门话题" not in result.used_materials_ids
+        assert result.used_materials_ids == ["m1"]
