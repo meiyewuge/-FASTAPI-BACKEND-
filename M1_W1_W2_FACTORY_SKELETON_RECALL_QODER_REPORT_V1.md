@@ -23,10 +23,14 @@
 
 ## 2. Changed Files
 
-全部 17 个文件均为**新增（A）**（含 W0.5 复核报告）：
+17 个新增文件：
+
+- 13 个后端源码文件（`backend/app/content_factory/`）
+- 2 个测试文件（`tests/`）
+- 1 个设计文档（`docs/M1/`）
+- 1 个 W0.5 复核报告
 
 ```
-A  M1_W0_5_MODEL_ROUTER_QODER_REVIEW_REPORT_V1.md
 A  backend/app/content_factory/__init__.py
 A  backend/app/content_factory/brief.py
 A  backend/app/content_factory/factory.py
@@ -40,10 +44,20 @@ A  backend/app/content_factory/recall/source_refs.py
 A  backend/app/content_factory/schemas.py
 A  backend/app/content_factory/staging.py
 A  backend/app/content_factory/task_state.py
-A  docs/M1/FACTORY_SKELETON_AND_RECALL_DESIGN_V0_1.md
 A  tests/test_factory_brief.py
 A  tests/test_factory_recall.py
+A  docs/M1/FACTORY_SKELETON_AND_RECALL_DESIGN_V0_1.md
+A  M1_W0_5_MODEL_ROUTER_QODER_REVIEW_REPORT_V1.md
 ```
+
+**recall 子包口径**：`content_factory/recall/` 共 7 个文件（6 个功能文件 + 1 个 `__init__.py`）：
+- `__init__.py`（子包入口）
+- `client.py`（9080 只读召回客户端）
+- `results.py`（召回结果结构）
+- `filters.py`（白名单/黑名单过滤）
+- `binding.py`（used_materials 绑定）
+- `source_refs.py`（素材溯源）
+- `recall_log.py`（召回日志）
 
 ---
 
