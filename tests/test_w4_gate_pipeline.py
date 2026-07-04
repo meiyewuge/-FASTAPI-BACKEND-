@@ -383,3 +383,62 @@ class TestFactoryE2E:
         r = f.process_brief(Brief(raw_text="奢华油科普", target_platform="xiaohongshu"))
         assert r.state == FactoryTaskState.PACKAGED
         assert r.gate_report is None  # 未注入 pipeline
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Qoder 补强测试
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestGateBlockedTerminal:
+    """GATE_BLOCKED 是终态，不可再转换。"""
+
+    def test_gate_blocked_is_terminal(self):
+        from backend.app.content_factory.task_state import StateMachine, InvalidTransition
+        sm = StateMachine()
+        sm.transition(FactoryTaskState.PRODUCING, operator="factory")
+        sm.transition(FactoryTaskState.GATED, operator="factory")
+        sm.transition(FactoryTaskState.GATE_BLOCKED, operator="factory")
+        assert sm.is_terminal
+        with pytest.raises(InvalidTransition):
+            sm.transition(FactoryTaskState.PACKAGED, operator="factory")
+
+
+class TestReviewPackageSlots:
+    """审读包前置结构的槽位与版本一一对应。"""
+
+    def test_review_package_has_3_slots(self):
+        report = GatePipeline().run(make_candidate(), platform="xiaohongshu",
+                                    g3_materials=CLEAN_MATERIALS)
+        pkg = build_review_package_pre(make_candidate(), report)
+        assert len(pkg.version_slots) == 3
+        kinds = {s.version_kind for s in pkg.version_slots}
+        assert kinds == {"professional", "state_aesthetic", "platform_rewrite"}
+
+    def test_review_package_slot_gate_summary(self):
+        report = GatePipeline().run(make_candidate(), platform="xiaohongshu",
+                                    g3_materials=CLEAN_MATERIALS)
+        pkg = build_review_package_pre(make_candidate(), report)
+        for slot in pkg.version_slots:
+            # 每版槽位应有 6 门摘要
+            assert len(slot.gate_summary) == 6
+            assert slot.is_reviewable is True
+
+
+class TestFactoryE2ENeedsHumanReview:
+    """factory E2E：conditional_pass → NEEDS_HUMAN_REVIEW + must_sign + PACKAGED。"""
+
+    def test_conditional_e2e_packaged_with_must_sign(self):
+        # 含谨慎词“修护” → G1 conditional_pass → NEEDS_HUMAN_REVIEW
+        text = ("标题：奢华油。正文：润养安肤奢华油为普通化妆品，有助于修护肌肤状态，"
+                "体外法检测报告编号XYJCR241029-005，检测机构为广东欣研检验检测有限公司。标签：护肤。")
+        f = make_factory(text, CLEAN_MATERIALS)
+        r = f.process_brief(Brief(raw_text="奢华油科普", target_platform="xiaohongshu"))
+        assert r.state == FactoryTaskState.PACKAGED
+        assert r.gate_report is not None
+        assert r.gate_report.review_status == CandidateReviewStatus.NEEDS_HUMAN_REVIEW
+        assert r.gate_report.must_sign is True
+        # conditional_pass 不自动发布
+        assert r.gate_report.publish_allowed is False
+        # staging 应有写入（PACKAGED 正常路径）
+        assert f.staging.count() == 1
