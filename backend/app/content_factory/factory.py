@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from .recall.client import RecallClient
     from .drafting.generator import DraftGenerator
     from .drafting.schemas import DraftCandidate
+    from .gates.pipeline import GatePipeline
+    from .gates.schemas import CandidateGateReport
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -45,6 +47,7 @@ class FactoryResult:
     error: Optional[str] = None
     missing_report: Optional[MissingMaterialReport] = None
     draft_candidate: Optional["DraftCandidate"] = None   # W3：三版稿候选（生成器接入时）
+    gate_report: Optional["CandidateGateReport"] = None  # W4：六硬门候选裁决（pipeline 接入时）
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -61,6 +64,7 @@ class ContentFactory:
     recall_client: Optional["RecallClient"] = None
     staging: ContentStaging = field(default_factory=ContentStaging)
     draft_generator: Optional["DraftGenerator"] = None   # W3：注入即启用三版稿生成
+    gate_pipeline: Optional["GatePipeline"] = None       # W4：注入即启用六硬门裁决
 
     def process_brief(self, brief: Brief) -> FactoryResult:
         """处理单条 Brief → FactoryResult（骨架编排 + 缺料停单）。
@@ -180,12 +184,40 @@ class ContentFactory:
             ok = draft_candidate.ok_versions
             text = ok[0].text if ok else None
 
-        # Step 4: 六硬门质检（W4 工单实现后激活，当前冻结）
-        # TODO(W4): gate_results = gate_pipeline(text, task)
+        # Step 4: 六硬门候选裁决（W4）
+        # 未注入 gate_pipeline → 保持 W3 骨架行为（直接进 GATED→PACKAGED）；
+        # 注入后 → 对三版稿逐版跑 G1-G6 + ≤3 圈 loop，按裁决结论决定去向。
         sm.transition(FactoryTaskState.GATED, operator="factory")
+        gate_report: Optional["CandidateGateReport"] = None
+        if self.gate_pipeline is not None and draft_candidate is not None:
+            from .gates.schemas import CandidateReviewStatus
+            gate_report = self.gate_pipeline.run(
+                draft_candidate,
+                platform=brief.target_platform,
+                line=brief.line,
+                g3_materials=bound.materials,
+            )
+            if gate_report.review_status == CandidateReviewStatus.BLOCKED:
+                # 六硬门后无任何可用版本 → 门拦截终态，不写 staging、不打包
+                sm.transition(
+                    FactoryTaskState.GATE_BLOCKED,
+                    operator="factory",
+                    note="六硬门后无可用版本",
+                )
+                return FactoryResult(
+                    content_id=content_id,
+                    state=sm.current,
+                    brief_id=brief.brief_id,
+                    trace_id=trace.trace_id,
+                    text=None,
+                    used_materials_ids=used_materials_ids,
+                    recall_summary=recall_summary,
+                    draft_candidate=draft_candidate,
+                    gate_report=gate_report,
+                )
 
-        # Step 5: 打包
-        # TODO(W5): package = pack_for_review(text, gate_results, used_materials)
+        # Step 5: 打包（conditional_pass/needs_human_review 仍进人审，不自动发布）
+        # TODO(W5): package = pack_for_review(...) — 审读包前置结构见 gates.review_package
         sm.transition(FactoryTaskState.PACKAGED, operator="factory")
 
         # Step 6: 写入 staging（候选态，绝不写 approved / 不发布）
@@ -208,4 +240,5 @@ class ContentFactory:
             used_materials_ids=used_materials_ids,
             recall_summary=recall_summary,
             draft_candidate=draft_candidate,
+            gate_report=gate_report,
         )

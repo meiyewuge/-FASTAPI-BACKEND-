@@ -26,14 +26,15 @@ def _new_id(prefix: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 任务状态（7 态，含缺料停单态）
+# 任务状态（9 态，含缺料停单态 + 候选拦截态 + 门拦截态）
 # ──────────────────────────────────────────────────────────────────────
 class FactoryTaskState(str, Enum):
-    """文案加工厂任务状态机 — 8 态流转（含停单态 + 候选拦截态）。
+    """文案加工厂任务状态机 — 9 态流转（含停单态 + 候选拦截态 + 门拦截态）。
 
     正常链路：queued → producing → gated → packaged → in_review → closed
     缺料停单：producing → halted_missing_materials（终态）
     候选拦截：producing → blocked_draft（终态，W3：三版稿全被无源/新增事实拦截）
+    门拦截：  gated → gate_blocked（终态，W4：六硬门后无任何可用版本）
     不允许跳态（如 queued → closed）。
     """
 
@@ -41,7 +42,8 @@ class FactoryTaskState(str, Enum):
     PRODUCING = "producing"      # 模型生成中（Brief 理解 + 召回 + 出稿）
     HALTED_MISSING_MATERIALS = "halted_missing_materials"  # 缺料停单（终态）
     BLOCKED_DRAFT = "blocked_draft"  # 三版稿全被拦（无源事实句/模型新增事实）（终态）
-    GATED = "gated"              # 六硬门质检中（W4 工单实现后激活）
+    GATED = "gated"              # 六硬门质检中（W4）
+    GATE_BLOCKED = "gate_blocked"  # 六硬门后无可用版本（终态，W4）
     PACKAGED = "packaged"        # 打包完成，等待人审
     IN_REVIEW = "in_review"      # 人工审读中
     CLOSED = "closed"            # 终态：签发或拒绝

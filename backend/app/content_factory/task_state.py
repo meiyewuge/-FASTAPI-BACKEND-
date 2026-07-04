@@ -1,9 +1,11 @@
-"""任务状态机 — 8 态流转 + 合法转换约束。
+"""任务状态机 — 9 态流转 + 合法转换约束。
 
 设计依据：M1 W1 服务骨架。
 
 正常链路：queued → producing → gated → packaged → in_review → closed
 缺料停单：producing → halted_missing_materials（终态）
+候选拦截：producing → blocked_draft（终态，W3）
+门拦截：  gated → gate_blocked（终态，W4）
 不允许跳态（如 queued → closed），不允许倒退。
 每次转换记录时间戳和操作人（history）。
 """
@@ -31,7 +33,11 @@ _ALLOWED_TRANSITIONS = {
     },
     FactoryTaskState.HALTED_MISSING_MATERIALS: set(),  # 终态：缺料停单
     FactoryTaskState.BLOCKED_DRAFT: set(),             # 终态：三版稿全被拦（W3）
-    FactoryTaskState.GATED: {FactoryTaskState.PACKAGED},
+    FactoryTaskState.GATED: {
+        FactoryTaskState.PACKAGED,
+        FactoryTaskState.GATE_BLOCKED,
+    },
+    FactoryTaskState.GATE_BLOCKED: set(),              # 终态：六硬门后无可用版本（W4）
     FactoryTaskState.PACKAGED: {FactoryTaskState.IN_REVIEW},
     FactoryTaskState.IN_REVIEW: {FactoryTaskState.CLOSED},
     FactoryTaskState.CLOSED: set(),  # 终态
@@ -87,11 +93,12 @@ class StateMachine:
 
     @property
     def is_terminal(self) -> bool:
-        """是否已到终态（closed / 缺料停单 / 候选拦截）。"""
+        """是否已到终态（closed / 缺料停单 / 候选拦截 / 门拦截）。"""
         return self.current in (
             FactoryTaskState.CLOSED,
             FactoryTaskState.HALTED_MISSING_MATERIALS,
             FactoryTaskState.BLOCKED_DRAFT,
+            FactoryTaskState.GATE_BLOCKED,
         )
 
     @property
