@@ -210,6 +210,7 @@ class TestStaging:
 # ──────────────────────────────────────────────────────────────────────
 class TestFactorySkeleton:
     def test_process_brief_without_recall(self):
+        """Patch D: 默认 ContentFactory() 无 recall_client → 停单。"""
         factory = ContentFactory()
         brief = Brief(raw_text="写一篇品牌科普", target_platform="brand_site")
         result = factory.process_brief(brief)
@@ -218,15 +219,36 @@ class TestFactorySkeleton:
         assert result.content_id.startswith("content_")
         assert result.brief_id == brief.brief_id
         assert result.trace_id == brief.trace_id
-        assert result.state == FactoryTaskState.PACKAGED
-        assert result.text is None  # mock 阶段不出稿
-        assert result.recall_summary == {"status": "mock", "materials_count": 0}
+        assert result.state == FactoryTaskState.HALTED_MISSING_MATERIALS
+        assert result.text is None
+        assert result.used_materials_ids == []
+        assert result.missing_report is not None
+        assert "recall_client_not_configured" in result.missing_report.missing_material_types
+        # staging 不写入候选态
+        assert factory.staging.count() == 0
 
     def test_process_brief_writes_staging(self):
-        factory = ContentFactory()
+        """显式 mock recall_client + 素材充分时才允许 PACKAGED + staging。"""
+        from backend.app.content_factory.recall import (
+            MockRecallClient, RecallResult, RecallStatus, RecallMetadata,
+        )
+        mock_client = MockRecallClient(
+            scripted_results=[
+                RecallResult(
+                    materials=[
+                        {"id": "m1", "content": "事实卡",
+                         "material_type": "fact_card",
+                         "source_type": "9080_approved", "status": "active"},
+                    ],
+                    status=RecallStatus.APPROVED,
+                ),
+            ]
+        )
+        factory = ContentFactory(recall_client=mock_client)
         brief = Brief(raw_text="写一篇品牌科普", target_platform="brand_site")
         result = factory.process_brief(brief)
 
+        assert result.state == FactoryTaskState.PACKAGED
         entry = factory.staging.get(result.content_id)
         assert entry is not None
         assert entry.brief_id == brief.brief_id
@@ -392,3 +414,101 @@ class TestBriefBoundaryFields:
         # used_materials_ids 只含素材 ID，不含 direction_hint
         assert "热门话题" not in result.used_materials_ids
         assert result.used_materials_ids == ["m1"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Patch D: 默认构造不得绕过缺料停单
+# ──────────────────────────────────────────────────────────────────────
+class TestPatchD:
+    def test_default_factory_halts(self):
+        """默认 ContentFactory() → HALTED_MISSING_MATERIALS。"""
+        factory = ContentFactory()
+        brief = Brief(raw_text="品牌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+        assert result.state == FactoryTaskState.HALTED_MISSING_MATERIALS
+
+    def test_default_factory_no_staging(self):
+        """默认 ContentFactory() → 不写 staging。"""
+        factory = ContentFactory()
+        brief = Brief(raw_text="品牌科普", target_platform="brand_site")
+        factory.process_brief(brief)
+        assert factory.staging.count() == 0
+
+    def test_default_factory_missing_report_reason(self):
+        """默认 ContentFactory() → missing_report 原因 = recall_client_not_configured。"""
+        factory = ContentFactory()
+        brief = Brief(raw_text="品牌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+        assert result.missing_report is not None
+        assert "recall_client_not_configured" in result.missing_report.missing_material_types
+
+    def test_default_factory_used_materials_empty(self):
+        """默认 ContentFactory() → used_materials_ids=[]。"""
+        factory = ContentFactory()
+        brief = Brief(raw_text="品牌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+        assert result.used_materials_ids == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 编排层黑名单注入端到端测试
+# ──────────────────────────────────────────────────────────────────────
+class TestBlacklistInjectionE2E:
+    def test_blacklist_materials_filtered_and_halted(self):
+        """kimi_expansion / platform_inspiration_as_fact / raw_draft 注入召回结果
+        → 过滤后素材不足 → 停单。"""
+        from backend.app.content_factory.recall import (
+            MockRecallClient, RecallResult, RecallStatus,
+        )
+        mock_client = MockRecallClient(
+            scripted_results=[
+                RecallResult(
+                    materials=[
+                        {"id": "bad1", "material_type": "kimi_expansion",
+                         "source_type": "9080_approved", "status": "active"},
+                        {"id": "bad2", "material_type": "platform_inspiration_as_fact",
+                         "source_type": "9080_approved", "status": "active"},
+                        {"id": "bad3", "material_type": "raw_draft",
+                         "source_type": "9080_approved", "status": "active"},
+                    ],
+                    status=RecallStatus.APPROVED,
+                ),
+            ]
+        )
+        factory = ContentFactory(recall_client=mock_client)
+        brief = Brief(raw_text="品牌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+
+        # 所有素材被黑名单过滤 → 缺料停单
+        assert result.state == FactoryTaskState.HALTED_MISSING_MATERIALS
+        assert result.used_materials_ids == []
+        assert "bad1" not in result.used_materials_ids
+        assert "bad2" not in result.used_materials_ids
+        assert "bad3" not in result.used_materials_ids
+
+    def test_mixed_materials_only_whitelisted_pass(self):
+        """混合素材：只有白名单且非黑名单的素材进入 used_materials。"""
+        from backend.app.content_factory.recall import (
+            MockRecallClient, RecallResult, RecallStatus,
+        )
+        mock_client = MockRecallClient(
+            scripted_results=[
+                RecallResult(
+                    materials=[
+                        {"id": "good1", "material_type": "fact_card",
+                         "source_type": "9080_approved", "status": "active"},
+                        {"id": "bad1", "material_type": "kimi_expansion",
+                         "source_type": "9080_approved", "status": "active"},
+                    ],
+                    status=RecallStatus.APPROVED,
+                ),
+            ]
+        )
+        factory = ContentFactory(recall_client=mock_client)
+        brief = Brief(raw_text="品牌科普", target_platform="brand_site")
+        result = factory.process_brief(brief)
+
+        # good1 通过，bad1 被过滤；素材充分(1≥1)→ 正常 PACKAGED
+        assert result.state == FactoryTaskState.PACKAGED
+        assert result.used_materials_ids == ["good1"]
+        assert "bad1" not in result.used_materials_ids

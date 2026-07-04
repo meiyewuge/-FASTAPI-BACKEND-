@@ -74,52 +74,72 @@ class ContentFactory:
         # Step 2: 9080 只读召回（W2 实现）
         recall_summary: Dict[str, Any] = {"status": "mock", "materials_count": 0}
         used_materials_ids: List[str] = []
-        recall_result = None
 
-        if self.recall_client is not None:
-            from .recall.client import RecallQuery
-            query = RecallQuery(
-                brief_id=brief.brief_id,
-                keywords=brief.raw_text.split()[:5],
-                material_types=None,
-                max_results=10,
+        # Patch D: recall_client=None 时直接停单，不绕过缺料判定
+        if self.recall_client is None:
+            sm.transition(
+                FactoryTaskState.HALTED_MISSING_MATERIALS,
+                operator="factory",
+                note="缺料停单：未配置召回客户端",
             )
-            recall_result = self.recall_client.recall(query)
+            return FactoryResult(
+                content_id=content_id,
+                state=sm.current,
+                brief_id=brief.brief_id,
+                trace_id=trace.trace_id,
+                text=None,
+                used_materials_ids=[],
+                recall_summary={"status": "recall_client_not_configured", "materials_count": 0},
+                missing_report=MissingMaterialReport(
+                    content_id=f"pending_{brief.brief_id}",
+                    task_type=brief.task_type,
+                    missing_material_types=["recall_client_not_configured"],
+                    suggested_recall_keywords=[],
+                ),
+            )
 
-            # Patch C: 对召回素材应用白名单/黑名单过滤
-            filtered_materials = apply_filters(recall_result.materials)
-            recall_result.materials = filtered_materials
+        from .recall.client import RecallQuery
+        query = RecallQuery(
+            brief_id=brief.brief_id,
+            keywords=brief.raw_text.split()[:5],
+            material_types=None,
+            max_results=10,
+        )
+        recall_result = self.recall_client.recall(query)
 
-            recall_summary = {
-                "status": recall_result.status.value,
-                "materials_count": len(recall_result.materials),
-            }
+        # Patch C: 对召回素材应用白名单/黑名单过滤
+        filtered_materials = apply_filters(recall_result.materials)
+        recall_result.materials = filtered_materials
 
-            # TODO(W6): 接入 RecallLog 记录每次召回
-            # TODO(W3): 完成 source_refs 句级溯源契约
+        recall_summary = {
+            "status": recall_result.status.value,
+            "materials_count": len(recall_result.materials),
+        }
+
+        # TODO(W6): 接入 RecallLog 记录每次召回
+        # TODO(W3): 完成 source_refs 句级溯源契约
+        # TODO(W3): 补黑名单前缀匹配 daily_*/webintel_*/crawl_* + 自定义白名单场景测试
 
         # Step 2.5: 缺料停单判定（Patch A）
-        if recall_result is not None:
-            bound = bind_materials(recall_result, brief)
-            if not bound.is_sufficient:
-                # 缺料停单：不进 GATED / PACKAGED / staging 候选态
-                sm.transition(
-                    FactoryTaskState.HALTED_MISSING_MATERIALS,
-                    operator="factory",
-                    note="缺料停单：素材不足，不出稿",
-                )
-                return FactoryResult(
-                    content_id=content_id,
-                    state=sm.current,
-                    brief_id=brief.brief_id,
-                    trace_id=trace.trace_id,
-                    text=None,
-                    used_materials_ids=[],
-                    recall_summary=recall_summary,
-                    missing_report=bound.missing_report,
-                )
-            used_materials_ids = bound.material_ids
-        # else: recall_client=None 时跳过召回/绑定（mock 阶段默认行为）
+        bound = bind_materials(recall_result, brief)
+        if not bound.is_sufficient:
+            # 缺料停单：不进 GATED / PACKAGED / staging 候选态
+            sm.transition(
+                FactoryTaskState.HALTED_MISSING_MATERIALS,
+                operator="factory",
+                note="缺料停单：素材不足，不出稿",
+            )
+            return FactoryResult(
+                content_id=content_id,
+                state=sm.current,
+                brief_id=brief.brief_id,
+                trace_id=trace.trace_id,
+                text=None,
+                used_materials_ids=[],
+                recall_summary=recall_summary,
+                missing_report=bound.missing_report,
+            )
+        used_materials_ids = bound.material_ids
 
         # Step 3: 模型路由出稿（W0.5 已实现，此处骨架调用）
         # TODO(W3): draft = model_router.generate_draft(DraftTask(...))
