@@ -5,7 +5,7 @@
 本层职责边界：
 - 纯数据结构定义，不含任何网络调用或持久化逻辑；
 - task_type 复用 model_router.TaskType，保证下游无缝衔接；
-- FactoryTaskState 为 7 态枚举（含缺料停单态），状态流转逻辑在 task_state.py。
+- FactoryTaskState 为 8 态枚举（含缺料停单态 + 候选拦截态），状态流转逻辑在 task_state.py。
 """
 from __future__ import annotations
 

@@ -298,6 +298,81 @@ class TestNoPublishNoApproved:
 # ──────────────────────────────────────────────────────────────────────
 # 端到端：不注入 generator 时保持 W1/W2 行为（向后兼容）
 # ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────
+# Qoder 补强测试
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestPartialBlock:
+    """部分版本被拦、仍有 OK 版 → 候选整体仍为 DRAFT_CANDIDATE。"""
+
+    def test_partial_block_still_candidate(self):
+        """三版中一版被拦（新增事实），另两版 OK → 整体仍为候选。"""
+        # 用 per_role_text 让 REWRITE 版编造数字，PRIMARY 版干净
+        from backend.app.model_router.schemas import ModelRole as MR
+        per_role = {
+            MR.PRIMARY: CLEAN_DRAFT,        # 干净 → OK
+            MR.REWRITE: "有效率99%。",       # 新增事实 → BLOCKED_NEW_FACT
+        }
+        r = make_router(per_role_text=per_role)
+        f = make_factory(r, CLEAN_MATERIALS)
+        res = f.process_brief(brief())
+        assert res.draft_candidate.status == DraftCandidateStatus.DRAFT_CANDIDATE
+        assert len(res.draft_candidate.ok_versions) >= 1
+        # REWRITE 版被拦
+        rw = next(v for v in res.draft_candidate.versions
+                  if v.kind == DraftVersionKind.PLATFORM_REWRITE)
+        assert rw.status == DraftVersionStatus.BLOCKED_NEW_FACT
+
+
+class TestBlockedDraftTerminal:
+    """BLOCKED_DRAFT 是终态，不可再转换。"""
+
+    def test_blocked_draft_is_terminal(self):
+        from backend.app.content_factory.task_state import StateMachine, InvalidTransition
+        sm = StateMachine()
+        sm.transition(FactoryTaskState.PRODUCING, operator="factory")
+        sm.transition(FactoryTaskState.BLOCKED_DRAFT, operator="factory")
+        assert sm.is_terminal
+        # 任何后续转换都应失败
+        with pytest.raises(InvalidTransition):
+            sm.transition(FactoryTaskState.GATED, operator="factory")
+
+
+class TestDirectionHintNotInPrompt:
+    """direction_hint 不得进入模型提示词的素材区。"""
+
+    def test_direction_hint_not_in_model_materials(self):
+        """direction_hint 是平台灵感，不能成为模型的事实来源。"""
+        from backend.app.model_router.router import build_prompt
+        from backend.app.model_router.schemas import DraftTask, TaskType
+        task = DraftTask(
+            content_id="c1",
+            task_type=TaskType.FACT_STRICT,
+            brief="品牌科普",
+            used_materials=CLEAN_MATERIALS,
+            platform="brand_site",
+        )
+        prompt = build_prompt(task)
+        # direction_hint 不应出现在提示词中（它由 brief 层隔离，不进素材）
+        assert "小红书热点" not in prompt
+        assert "平台灵感" not in prompt
+
+
+class TestAllVersionsBlockedIsBlockedDraft:
+    """三版全被拦 → 整份 BLOCKED → factory 转 BLOCKED_DRAFT。"""
+
+    def test_all_blocked_unsourced_fact(self):
+        """所有版本都含无源事实句 → BLOCKED_DRAFT 终态。"""
+        r = make_router(reply_text="临床数据显示99%有效率。无源事实句。")
+        f = make_factory(r, CLEAN_MATERIALS)
+        res = f.process_brief(brief())
+        assert res.state == FactoryTaskState.BLOCKED_DRAFT
+        assert res.draft_candidate.status == DraftCandidateStatus.BLOCKED
+        # 不写 staging
+        assert f.staging.count() == 0
+
+
 class TestBackwardCompatNoGenerator:
     def test_no_generator_keeps_skeleton_behavior(self):
         client = MockRecallClient(scripted_results=[
