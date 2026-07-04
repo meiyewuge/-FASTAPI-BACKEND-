@@ -42,6 +42,18 @@ DEFAULT_BLACKLIST = [
     "platform_inspiration_as_fact",  # 平台灵感不得当事实
 ]
 
+# ── 黑名单前缀（W3 Patch：daily_* / webintel_* / crawl_* 任意变体禁入）──
+# material_type 或 source_type 以任一前缀开头即拒绝，不依赖穷举具名值。
+DEFAULT_BLACKLIST_PREFIXES = [
+    "daily_",
+    "webintel_",
+    "crawl_",
+]
+
+
+def _hits_blacklist_prefix(value: str, prefixes: List[str]) -> bool:
+    return bool(value) and any(value.startswith(p) for p in prefixes)
+
 
 def apply_filters(
     materials: List[Dict[str, Any]],
@@ -84,6 +96,12 @@ def apply_filters(
 
         # 黑名单过滤：material_type 或 status 在黑名单中则排除
         if bl and (mtype in bl or mstatus in bl):
+            continue
+
+        # 黑名单前缀过滤：daily_* / webintel_* / crawl_*（material_type 或 source_type）
+        if _hits_blacklist_prefix(mtype, DEFAULT_BLACKLIST_PREFIXES) or _hits_blacklist_prefix(
+            msource, DEFAULT_BLACKLIST_PREFIXES
+        ):
             continue
 
         result.append(m)

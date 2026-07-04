@@ -27,8 +27,10 @@ _ALLOWED_TRANSITIONS = {
     FactoryTaskState.PRODUCING: {
         FactoryTaskState.GATED,
         FactoryTaskState.HALTED_MISSING_MATERIALS,
+        FactoryTaskState.BLOCKED_DRAFT,
     },
     FactoryTaskState.HALTED_MISSING_MATERIALS: set(),  # 终态：缺料停单
+    FactoryTaskState.BLOCKED_DRAFT: set(),             # 终态：三版稿全被拦（W3）
     FactoryTaskState.GATED: {FactoryTaskState.PACKAGED},
     FactoryTaskState.PACKAGED: {FactoryTaskState.IN_REVIEW},
     FactoryTaskState.IN_REVIEW: {FactoryTaskState.CLOSED},
@@ -85,10 +87,11 @@ class StateMachine:
 
     @property
     def is_terminal(self) -> bool:
-        """是否已到终态（closed 或缺料停单）。"""
+        """是否已到终态（closed / 缺料停单 / 候选拦截）。"""
         return self.current in (
             FactoryTaskState.CLOSED,
             FactoryTaskState.HALTED_MISSING_MATERIALS,
+            FactoryTaskState.BLOCKED_DRAFT,
         )
 
     @property

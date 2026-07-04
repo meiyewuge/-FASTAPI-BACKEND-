@@ -24,6 +24,8 @@ from .recall.filters import apply_filters
 
 if TYPE_CHECKING:
     from .recall.client import RecallClient
+    from .drafting.generator import DraftGenerator
+    from .drafting.schemas import DraftCandidate
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -42,6 +44,7 @@ class FactoryResult:
     recall_summary: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
     missing_report: Optional[MissingMaterialReport] = None
+    draft_candidate: Optional["DraftCandidate"] = None   # W3：三版稿候选（生成器接入时）
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -57,6 +60,7 @@ class ContentFactory:
 
     recall_client: Optional["RecallClient"] = None
     staging: ContentStaging = field(default_factory=ContentStaging)
+    draft_generator: Optional["DraftGenerator"] = None   # W3：注入即启用三版稿生成
 
     def process_brief(self, brief: Brief) -> FactoryResult:
         """处理单条 Brief → FactoryResult（骨架编排 + 缺料停单）。
@@ -117,8 +121,6 @@ class ContentFactory:
         }
 
         # TODO(W6): 接入 RecallLog 记录每次召回
-        # TODO(W3): 完成 source_refs 句级溯源契约
-        # TODO(W3): 补黑名单前缀匹配 daily_*/webintel_*/crawl_* + 自定义白名单场景测试
 
         # Step 2.5: 缺料停单判定（Patch A）
         bound = bind_materials(recall_result, brief)
@@ -141,11 +143,44 @@ class ContentFactory:
             )
         used_materials_ids = bound.material_ids
 
-        # Step 3: 模型路由出稿（W0.5 已实现，此处骨架调用）
-        # TODO(W3): draft = model_router.generate_draft(DraftTask(...))
-        text = None
+        # Step 3: 草稿生成与模型路由接线（W3）
+        # 未注入 draft_generator → 保持 W1/W2 骨架行为（text=None）；
+        # 注入后 → 生成三版稿候选，且只有 used_materials 充分时才走到这里。
+        text: Optional[str] = None
+        draft_candidate: Optional["DraftCandidate"] = None
+        if self.draft_generator is not None:
+            draft_candidate = self.draft_generator.generate(
+                content_id=content_id,
+                brief_id=brief.brief_id,
+                trace_id=trace.trace_id,
+                brief_text=brief.raw_text,
+                used_materials=bound.materials,
+                platform=brief.target_platform,
+                risk_hint=brief.risk_hint,
+            )
+            from .drafting.schemas import DraftCandidateStatus
+            if draft_candidate.status == DraftCandidateStatus.BLOCKED:
+                # 三版稿全被无源事实句/模型新增事实拦截 → 候选拦截终态，不写 staging
+                sm.transition(
+                    FactoryTaskState.BLOCKED_DRAFT,
+                    operator="factory",
+                    note="三版稿全被拦：无源事实句/模型新增事实",
+                )
+                return FactoryResult(
+                    content_id=content_id,
+                    state=sm.current,
+                    brief_id=brief.brief_id,
+                    trace_id=trace.trace_id,
+                    text=None,
+                    used_materials_ids=used_materials_ids,
+                    recall_summary=recall_summary,
+                    draft_candidate=draft_candidate,
+                )
+            # 至少一版 OK：取首个 OK 版作为主展示文本
+            ok = draft_candidate.ok_versions
+            text = ok[0].text if ok else None
 
-        # Step 4: 六硬门质检（W4 工单实现后激活）
+        # Step 4: 六硬门质检（W4 工单实现后激活，当前冻结）
         # TODO(W4): gate_results = gate_pipeline(text, task)
         sm.transition(FactoryTaskState.GATED, operator="factory")
 
@@ -153,7 +188,7 @@ class ContentFactory:
         # TODO(W5): package = pack_for_review(text, gate_results, used_materials)
         sm.transition(FactoryTaskState.PACKAGED, operator="factory")
 
-        # Step 6: 写入 staging
+        # Step 6: 写入 staging（候选态，绝不写 approved / 不发布）
         entry = ContentStagingEntry(
             content_id=content_id,
             brief_id=brief.brief_id,
@@ -172,4 +207,5 @@ class ContentFactory:
             text=text,
             used_materials_ids=used_materials_ids,
             recall_summary=recall_summary,
+            draft_candidate=draft_candidate,
         )
