@@ -225,3 +225,55 @@ class TestReadOnly:
         before_state = r.state
         ProductionLineObserver().observe(r)
         assert r.state == before_state  # 观测不改动 result
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Qoder 补强测试
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestBriefCountDedup:
+    """brief_count 以 brief_id 去重计数。"""
+
+    def test_same_brief_observed_twice_counts_once(self):
+        obs = ProductionLineObserver()
+        # 直接构造同 brief_id 的观测切片（factory 每次生成 UUID，故绕过 factory）
+        obs.observations.append(RunObservation(
+            content_id="c1", brief_id="brief_dup", trace_id="t1", outcome=RunOutcome.PACKAGED))
+        obs.observations.append(RunObservation(
+            content_id="c2", brief_id="brief_dup", trace_id="t2", outcome=RunOutcome.PACKAGED))
+        assert obs.brief_count == 1
+        assert obs.run_count == 2  # run_count 不去重
+
+
+class TestG1G3FailRateDenominator:
+    """G1/G3 fail 高发按"过门运行"比例计算，非全部运行。"""
+
+    def test_g1g3_rate_only_counts_gated_runs(self):
+        obs = ProductionLineObserver()
+        # 2 次干净 packaged（过门、G1/G3 pass）
+        obs.observe(run(CLEAN_XHS, CLEAN_MATERIALS))
+        obs.observe(run(CLEAN_XHS, CLEAN_MATERIALS))
+        # 1 次 G3 检测完整性 fail（过门）
+        obs.observe(run(G3_DETECTION_FAIL, CLEAN_MATERIALS))
+        # 1 次缺料停单（不过门，loop_rounds_used=0）
+        obs.observe(run(CLEAN_XHS, []))
+        rep = build_daily_report(obs)
+        # 过门运行 3 次，其中 1 次 G3 fail → 1/3 ≈ 0.33 ≥ 0.30 → 触发
+        kinds = {a.kind for a in rep.anomalies}
+        assert AnomalyKind.HIGH_G1_G3_FAIL in kinds
+
+
+class TestDraftVsGateBlockedIndependence:
+    """draft_blocked_count 与 gate_blocked_count 独立计数，不重复。"""
+
+    def test_draft_and_gate_blocked_counted_separately(self):
+        obs = ProductionLineObserver()
+        # W3 草稿拦截（无源事实句）
+        obs.observe(run("临床数据显示99%有效率。无源事实句。", CLEAN_MATERIALS))
+        # W4 门检拦截（串品牌）
+        obs.observe(run("标题：油。正文：润养安肤奢华油为普通化妆品，对比雅诗兰黛更好。标签：护肤。", CLEAN_MATERIALS))
+        rep = build_daily_report(obs)
+        assert rep.metrics["draft_blocked_count"] == 1
+        assert rep.metrics["gate_blocked_count"] == 1
+        assert rep.metrics["draft_candidate_count"] == 0
