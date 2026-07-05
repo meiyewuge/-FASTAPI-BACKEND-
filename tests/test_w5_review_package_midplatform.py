@@ -262,3 +262,52 @@ class TestNoPublishNoApproved:
             ReviewPackageDetail(content_id="c", brief_id="b", trace_id="t",
                                 review_state=CandidateReviewState.READY_FOR_REVIEW,
                                 must_sign=False, loop_rounds_used=1, publish_allowed=True)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Qoder 补强测试
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestMarkedReadyIsTerminal:
+    """MARKED_READY_TO_PUBLISH 是终态，不可再转换。"""
+
+    def test_marked_ready_cannot_transition(self):
+        pre, _, _ = make_pre()
+        mp = MidPlatformMock()
+        entry = mp.queue.enqueue(pre)
+        mp.action_mark_ready(entry.content_id, operator="小编")
+        assert entry.state == CandidateReviewState.MARKED_READY_TO_PUBLISH
+        # 任何后续动作都应失败
+        with pytest.raises(InvalidReviewAction):
+            mp.action_reject(entry.content_id, operator="小编", reason="反悔")
+
+
+class TestBlockedDraftFrontdeskNotice:
+    """BLOCKED_DRAFT 也应产生前台提示，不入审读队列。"""
+
+    def test_blocked_draft_notice(self):
+        # 构造一个 W3 层全拦的 factory 结果（无源事实句 → BLOCKED_DRAFT）
+        f = make_factory("临床数据显示99%有效率。无源事实句。", CLEAN_MATERIALS)
+        r = f.process_brief(Brief(raw_text="x", target_platform="xiaohongshu"))
+        assert r.state == FactoryTaskState.BLOCKED_DRAFT
+        mp = MidPlatformMock()
+        notice = mp.ingest_factory_result(r)
+        assert isinstance(notice, FrontdeskNotice) and notice.kind == "blocked"
+        assert mp.queue.count() == 0  # 不入审读队列
+
+
+class TestActionLogAccumulation:
+    """人审动作留痕应累积记录。"""
+
+    def test_action_log_records_all_transitions(self):
+        text = CLEAN_XHS.replace("为普通化妆品", "为普通化妆品，有助于修护肌肤状态")
+        pre, _, _ = make_pre(text=text)
+        mp = MidPlatformMock()
+        entry = mp.queue.enqueue(pre)
+        mp.action_submit_signoff(entry.content_id, operator="小编")
+        mp.action_mark_ready(entry.content_id, operator="吴哥")
+        # 应有 3 条留痕：裁决落位 + 提交签发 + 备发标记
+        assert len(entry.action_log) == 3
+        assert entry.action_log[1]["note"] == "提交吴哥签发"
+        assert "≠发布" in entry.action_log[2]["note"]
