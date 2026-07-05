@@ -28,8 +28,7 @@ class FeatureFlags:
     REAL_OBSERVABILITY_ENABLED: bool = False      # 真实 DB/调度/监控
 
     def any_enabled(self) -> bool:
-        return any(getattr(self, f.name) for f in self.__dataclass_fields__.values()
-                   if isinstance(getattr(self, f.name), bool))
+        return any(getattr(self, k) for k in self.__dataclass_fields__)
 
     def as_dict(self) -> Dict[str, bool]:
         return {k: getattr(self, k) for k in self.__dataclass_fields__}

@@ -210,3 +210,58 @@ class TestReadinessChecklists:
         c = default_checklists()
         dep = {i.key: i for i in c.service_dependency}
         assert dep["dep_9200_unreachable"].blocking is True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Qoder 补强测试
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestRulePackTamperDetection:
+    """rulepack 防篡改：规则变动后 verify_md5 应失败。"""
+
+    def test_keyword_change_invalidates_md5(self):
+        p = RulePack("rp", "0.1.0", "G1", rules=[Rule("r1", "d", ["治疗"])])
+        p.seal()
+        assert p.verify_md5()
+        # 修改关键词 → md5 应失效
+        p.rules[0].keywords.append("治愈")
+        assert not p.verify_md5()
+
+
+class TestG3FailClosedComplete:
+    """G3 正式契约 fail_closed 完整覆盖：无源 + 检测三要素任意缺失。"""
+
+    def test_detection_missing_report_no_fails(self):
+        adj = MockFormalG3Adjudicator()
+        claim = FactClaim(
+            fact_claim="体外法检测", source_ref="ref_001",
+            evidence_type=EvidenceType.DETECTION_REPORT,
+            detection_method="体外法", report_no=None,  # 缺报告编号
+            institution="广东欣研",
+        )
+        res = adj.adjudicate_claims([claim])
+        assert res.passed is False
+        assert any("报告编号" in v.reason for v in res.claim_verdicts)
+
+
+class TestFeatureFlagsAnyEnabledFixed:
+    """any_enabled 应正确反映非全 False 状态（Qoder 修补）。"""
+
+    def test_any_enabled_when_one_flag_true(self):
+        f = FeatureFlags(M1_ENABLED=True)
+        assert f.any_enabled() is True  # 修补前恒 False
+
+    def test_all_false_still_returns_false(self):
+        f = FeatureFlags()
+        assert f.any_enabled() is False
+
+
+class TestReadinessReadyWhenAllDone:
+    """is_ready 应在全部阻塞项完成后返回 True。"""
+
+    def test_ready_when_all_blocking_done(self):
+        c = default_checklists()
+        for item in c.all_items():
+            item.done = True
+        assert c.is_ready is True
