@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     # ── 基础配置 ───────────────────────────────────────────────────
     app_env: str = "development"
     public_base_url: str = "http://localhost:8000"
+    # 经营诊断 H5 跳转域名（webview-token 返回 URL 前缀）。真实值经环境变量 H5_BASE_URL 注入。
+    h5_base_url: str = "https://wuyou.beautypeaceai.com"
     database_url: str = "sqlite:///./storecoach.db"
     admin_key: str = "dev_admin_key"
 

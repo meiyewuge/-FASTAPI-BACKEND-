@@ -385,6 +385,6 @@ def coach_webview_token(req: WebviewTokenRequest, authorization: Optional[str] =
         "monthly": "/monthly/start",
         "history": "/monthly/history",
     }
-    h5_base_url = "https://beautypeaceai.com"
+    h5_base_url = settings.h5_base_url.rstrip("/")
     url = f"{h5_base_url}{path_map.get(req.target, '/diagnosis/start')}?ticket={ticket}&source=weapp"
     return ApiResponse(data={"url": url, "ticket": ticket})
