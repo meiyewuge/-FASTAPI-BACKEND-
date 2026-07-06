@@ -27,9 +27,9 @@ def _post(target="diagnosis"):
 
 
 def test_default_returns_wuyou():
-    """默认配置：URL 以 wuyou 子域 + /diagnosis/start?ticket= 开头。"""
+    """默认配置：URL 以 wuyou 子域 + /diagnosis/form?ticket= 开头。"""
     url, ticket = _post("diagnosis")
-    assert url.startswith("https://wuyou.beautypeaceai.com/diagnosis/start?ticket="), url
+    assert url.startswith("https://wuyou.beautypeaceai.com/diagnosis/form?ticket="), url
     assert ticket and ticket in url
 
 
@@ -37,14 +37,14 @@ def test_reads_config_not_hardcoded(monkeypatch):
     """设置 settings.h5_base_url 后，返回 URL 按配置走（证明读配置而非硬编码）。"""
     monkeypatch.setattr(settings, "h5_base_url", "https://custom-h5.example.com")
     url, _ = _post("diagnosis")
-    assert url.startswith("https://custom-h5.example.com/diagnosis/start?ticket="), url
+    assert url.startswith("https://custom-h5.example.com/diagnosis/form?ticket="), url
 
 
 def test_rstrip_trailing_slash(monkeypatch):
     """配置带尾斜杠时 rstrip 生效，不产生双斜杠。"""
     monkeypatch.setattr(settings, "h5_base_url", "https://wuyou.beautypeaceai.com/")
     url, _ = _post("diagnosis")
-    assert url.startswith("https://wuyou.beautypeaceai.com/diagnosis/start?ticket="), url
+    assert url.startswith("https://wuyou.beautypeaceai.com/diagnosis/form?ticket="), url
     assert "beautypeaceai.com//diagnosis" not in url, url
 
 

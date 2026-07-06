@@ -381,10 +381,11 @@ def coach_webview_token(req: WebviewTokenRequest, authorization: Optional[str] =
     ticket = make_id("wv")
     WEBVIEW_TICKETS[ticket] = {"target": req.target, "store_id": req.store_id, "created_at": time.time()}
     path_map = {
-        "diagnosis": "/diagnosis/start",
-        "monthly": "/monthly/start",
-        "history": "/monthly/history",
+        "diagnosis": "/diagnosis/form",
+        "monthly": "/monthly/form",
+        # history: H5 当前无通用历史报告页，指向首页避免伪造路由
+        "history": "/",
     }
     h5_base_url = settings.h5_base_url.rstrip("/")
-    url = f"{h5_base_url}{path_map.get(req.target, '/diagnosis/start')}?ticket={ticket}&source=weapp"
+    url = f"{h5_base_url}{path_map.get(req.target, '/diagnosis/form')}?ticket={ticket}&source=weapp"
     return ApiResponse(data={"url": url, "ticket": ticket})

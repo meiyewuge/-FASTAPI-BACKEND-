@@ -1,0 +1,30 @@
+===== P2B-A V1.1 自测结果 =====
+日期: 2026-06-28
+Commit: 6287c1e
+分支: qoder/v4-frontend-workbench
+
+[1] tsc --noEmit: PASS
+[2] vite build: PASS (701ms, 39 modules)
+
+===== V1.1 修复验证 =====
+[3] getAllPlans() 兼容 execution_plans:
+    BEFORE: data.plans > data.groups[].plans
+    AFTER:  data.execution_plans > data.plans > data.groups[].plans
+[4] by-production-order 兼容 execution_plans:
+    BEFORE: r.data.items || r.data.plans
+    AFTER:  r.data.execution_plans || r.data.items || r.data.plans
+[5] 展开详情 variant_plan 读取:
+    BEFORE: 仅读 p.rhythm_plan 等顶层字段
+    AFTER:  p.rhythm_plan || vp?.rhythm_plan (vp = getVariantPlan(p))
+    getVariantPlan() 优先读 p.variant_plan 对象，fallback p.variant_plan_json
+[6] 安全渲染 renderPlanValue():
+    string/number/boolean → String()
+    object → <pre>{JSON.stringify()}</pre>
+    null → "暂无"
+    不会出现 React object child error
+[7] localStorage 写入: handleReadPO 成功后 setItem("p2b_last_po_id", ...)
+[8] group 宽容计算: groups.length > Set(group_type).size > 0
+[9] dedup_rate 兼容: dedup_report.dedup_rate > dedup_rate > "100%"
+[10] 禁止项不退化: 无 execute/remixer/火山 按钮
+[11] A台/B台/P2A/Admin/登录不退化
+[12] partial_done 逻辑不退化
