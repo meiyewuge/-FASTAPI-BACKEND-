@@ -380,11 +380,13 @@ def coach_webview_token(req: WebviewTokenRequest, authorization: Optional[str] =
     """生成 webview ticket（生产环境应写入 Redis 并设 5 分钟有效期）。"""
     ticket = make_id("wv")
     WEBVIEW_TICKETS[ticket] = {"target": req.target, "store_id": req.store_id, "created_at": time.time()}
+    # 指向 H5 当前实际存在的路由（history 模式）：
+    #  diagnosis/monthly → 对应 form 页；history 暂无通用历史报告页，安全落地首页，不伪造未验证路由。
     path_map = {
-        "diagnosis": "/diagnosis/start",
-        "monthly": "/monthly/start",
-        "history": "/monthly/history",
+        "diagnosis": "/diagnosis/form",
+        "monthly": "/monthly/form",
+        "history": "/",
     }
     h5_base_url = settings.h5_base_url.rstrip("/")
-    url = f"{h5_base_url}{path_map.get(req.target, '/diagnosis/start')}?ticket={ticket}&source=weapp"
+    url = f"{h5_base_url}{path_map.get(req.target, '/diagnosis/form')}?ticket={ticket}&source=weapp"
     return ApiResponse(data={"url": url, "ticket": ticket})
