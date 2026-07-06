@@ -63,7 +63,21 @@ async def create_monthly_checkup(payload: MonthlyCheckupCreate, db: Session = De
         db.flush()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="该门店该月份已提交月度体检")
+        # 查询已有记录，返回 existing_checkup_id 供前端跳转
+        existing = db.query(models.MonthlyCheckup).filter(
+            models.MonthlyCheckup.store_id == store.id,
+            models.MonthlyCheckup.check_month == payload.check_month
+        ).first()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "该门店该月份已提交月度体检",
+                "existing_checkup_id": existing.id if existing else None,
+                "store_id": existing.store_id if existing else store.id,
+                "check_month": payload.check_month,
+                "report_url": existing.report_url if existing else None,
+            }
+        )
 
     mba = monthly_mba_analysis(scored, payload.form_data)
     ai_payload = {

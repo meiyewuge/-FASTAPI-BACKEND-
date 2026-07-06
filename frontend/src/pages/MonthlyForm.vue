@@ -53,10 +53,19 @@ async function submit() {
     const { check_month, ...form_data } = form
     const payload: any = { check_month, form_data }
     if (storeId.value) payload.store_id = Number(storeId.value); else payload.store_info = store
-    const res = await api.post('/api/monthly-checkups', payload)
+    const res = await api.post('monthly-checkups', payload)
     localStorage.setItem('lastStoreId', String(res.data.data.store_id))
     showToast('月度报告已生成')
     router.push(`/monthly/result/${res.data.data.checkup_id}`)
-  } catch(e:any) { showToast(e?.response?.data?.detail || '提交失败') } finally { loading.value = false }
+  } catch(e:any) {
+    const status = e?.response?.status
+    const detail = e?.response?.data?.detail
+    if (status === 409 && detail?.existing_checkup_id) {
+      showToast('该月份已有报告，正在打开已有报告')
+      router.push(`/monthly/result/${detail.existing_checkup_id}`)
+    } else {
+      showToast(typeof detail === 'string' ? detail : detail?.message || '提交失败')
+    }
+  } finally { loading.value = false }
 }
 </script>
