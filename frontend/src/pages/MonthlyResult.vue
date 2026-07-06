@@ -2,6 +2,10 @@
   <div class="page">
     <van-nav-bar title="月度体检结果" left-text="首页" left-arrow @click-left="$router.push('/')" />
     <van-loading v-if="loading" vertical style="padding-top: 80px;">正在读取报告...</van-loading>
+    <div v-else-if="error" style="padding-top: 80px; text-align: center;">
+      <van-empty image="error" description="报告读取失败，请返回重试" />
+      <van-button type="primary" round style="margin-top: 16px;" @click="$router.back()">返回重试</van-button>
+    </div>
     <template v-else-if="data">
       <!-- Score Card -->
       <div class="card card-elevated" style="text-align: center;">
@@ -75,11 +79,18 @@ import RadarChart from '../components/RadarChart.vue'
 const route = useRoute()
 const loading = ref(true)
 const data = ref<any>(null)
+const error = ref(false)
 
 onMounted(async () => {
-  const res = await api.get(`/api/monthly-checkups/${route.params.id}`)
-  data.value = res.data.data
-  loading.value = false
+  try {
+    const res = await api.get(`monthly-checkups/${route.params.id}`)
+    data.value = res.data.data
+  } catch (err) {
+    console.error('月度结果加载失败:', err)
+    error.value = true
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 

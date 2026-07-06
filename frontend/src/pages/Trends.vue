@@ -15,5 +15,5 @@ import { useRoute } from 'vue-router'
 import { api } from '../api'
 import TrendChart from '../components/TrendChart.vue'
 const route = useRoute(); const loading = ref(true); const data = ref<any>({ months: [], revenue: [], scores: [], repurchase_rate: [] })
-onMounted(async () => { const res = await api.get(`/api/monthly-checkups/store/${route.params.storeId}/trends?months=6`); data.value = res.data.data; loading.value = false })
+onMounted(async () => { try { const res = await api.get(`monthly-checkups/store/${route.params.storeId}/trends?months=6`); data.value = res.data.data } catch (e) { console.error('趋势加载失败:', e) } finally { loading.value = false } })
 </script>

@@ -101,15 +101,15 @@ function saveKey() {
 async function load() {
   try {
     if (tab.value === 0) {
-      const r = await adminApi.get('/api/admin/stores')
+      const r = await adminApi.get('admin/stores')
       stores.value = r.data.data.items
     }
     if (tab.value === 1) {
-      const r = await adminApi.get('/api/admin/diagnoses')
+      const r = await adminApi.get('admin/diagnoses')
       diagnoses.value = r.data.data.items
     }
     if (tab.value === 2) {
-      const r = await adminApi.get('/api/admin/monthly-checkups')
+      const r = await adminApi.get('admin/monthly-checkups')
       monthly.value = r.data.data.items
     }
   } catch (e: any) {
@@ -124,7 +124,7 @@ async function load() {
 }
 
 async function openStore(id: number) {
-  const r = await adminApi.get(`/api/admin/stores/${id}`)
+  const r = await adminApi.get(`admin/stores/${id}`)
   const s = r.data.data.store
   showDialog({
     title: s.store_name,
