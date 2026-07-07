@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from ..ai import call_llm
 from ..report import render_pdf
 from .diagnoses import store_to_dict
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/monthly-checkups", tags=["monthly-checkups"])
 
 
@@ -63,7 +65,23 @@ async def create_monthly_checkup(payload: MonthlyCheckupCreate, db: Session = De
         db.flush()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="该门店该月份已提交月度体检")
+        # 查询已有记录，返回 existing_checkup_id 供前端跳转
+        existing = db.query(models.MonthlyCheckup).filter(
+            models.MonthlyCheckup.store_id == store.id,
+            models.MonthlyCheckup.check_month == payload.check_month
+        ).first()
+        logger.warning("Duplicate monthly: store_id=%s, month=%s, existing_id=%s",
+                       store.id, payload.check_month, existing.id if existing else None)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "该门店该月份已提交月度体检",
+                "existing_checkup_id": existing.id if existing else None,
+                "store_id": existing.store_id if existing else store.id,
+                "check_month": payload.check_month,
+                "report_url": existing.report_url if existing else None,
+            }
+        )
 
     mba = monthly_mba_analysis(scored, payload.form_data)
     ai_payload = {
@@ -88,6 +106,7 @@ async def create_monthly_checkup(payload: MonthlyCheckupCreate, db: Session = De
     checkup.report_url = report_url
     db.commit()
     db.refresh(checkup)
+    logger.info("Monthly checkup created: id=%s, store=%s", checkup.id, store.store_name)
     return {"code": 200, "message": "月度体检提交成功", "data": {"checkup_id": checkup.id, "store_id": store.id, "total_score": checkup.total_score, "report_url": report_url}}
 
 
