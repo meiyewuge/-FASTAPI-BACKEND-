@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     coze_content_enabled: bool = False         # 灰度开关，默认关闭走模板
     coze_content_workflow_id: str | None = None  # ← 环境变量 COZE_CONTENT_WORKFLOW_ID
 
+    # ── 报告签名（P0A-4 预留字段，P0B 启用）──────────────────────
+    # TODO(P0B): 上线前轮换为真实密钥（≥32字符），并补强启动校验 field_validator
+    report_sign_secret: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

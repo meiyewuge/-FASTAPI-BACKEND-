@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
@@ -10,7 +11,14 @@ from ..mba_models import diagnosis_mba_analysis
 from ..ai import call_llm
 from ..report import render_pdf
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
+
+
+def mask_phone(phone: str | None) -> str | None:
+    if not phone or len(phone) < 7:
+        return phone
+    return phone[:3] + "****" + phone[-4:]
 
 
 def store_to_dict(store: models.Store) -> dict:
@@ -19,7 +27,7 @@ def store_to_dict(store: models.Store) -> dict:
         "store_name": store.store_name,
         "city": store.city,
         "contact_person": store.contact_person,
-        "contact_phone": store.contact_phone,
+        "contact_phone": mask_phone(store.contact_phone),
         "store_type": store.store_type,
         "source_channel": store.source_channel,
     }
@@ -90,6 +98,7 @@ async def create_diagnosis(payload: DiagnosisCreate, db: Session = Depends(get_d
     db.commit()
     db.refresh(diagnosis)
 
+    logger.info("Diagnosis created: id=%s, store=%s", diagnosis.id, store.store_name)
     return {"code": 200, "message": "诊断创建成功", "data": {"diagnosis_id": diagnosis.id, "store_id": store.id, "total_score": diagnosis.total_score, "rating": diagnosis.rating, "report_url": report_url}}
 
 
