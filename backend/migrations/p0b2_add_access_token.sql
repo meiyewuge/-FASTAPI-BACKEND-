@@ -20,8 +20,8 @@ ALTER TABLE diagnoses ADD COLUMN access_token VARCHAR(64);
 ALTER TABLE monthly_checkups ADD COLUMN access_token VARCHAR(64);
 
 -- 3. Create index for faster token lookups (optional but recommended)
-CREATE INDEX idx_diagnoses_access_token ON diagnoses(access_token);
-CREATE INDEX idx_monthly_checkups_access_token ON monthly_checkups(access_token);
+CREATE INDEX IF NOT EXISTS idx_diagnoses_access_token ON diagnoses(access_token);
+CREATE INDEX IF NOT EXISTS idx_monthly_checkups_access_token ON monthly_checkups(access_token);
 
 -- Verification queries (run after migration):
 -- SELECT COUNT(*) FROM diagnoses WHERE access_token IS NULL;

@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import secrets
 from typing import Optional
@@ -124,7 +125,7 @@ def verify_result_auth(
 
     # token 校验
     if token:
-        if record.access_token == token:
+        if hmac.compare_digest(record.access_token or "", token):
             logger.info("result_auth: PASS_TOKEN | type=%s | id=%s", record_type, record_id)
             return record
         logger.warning("result_auth: DENY_TOKEN | type=%s | id=%s", record_type, record_id)
