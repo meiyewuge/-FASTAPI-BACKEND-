@@ -19,7 +19,7 @@ import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 
-from ..config import settings
+from .config import settings
 
 logger = logging.getLogger("redis_client")
 
