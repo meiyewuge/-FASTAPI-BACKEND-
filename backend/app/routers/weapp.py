@@ -94,6 +94,8 @@ class FeedbackRequest(BaseModel):
 class WebviewTokenRequest(BaseModel):
     target: str = "diagnosis"
     store_id: Optional[str] = None
+    report_id: Optional[str] = None    # diagnosis_result / monthly_result 必填
+    openid: Optional[str] = None       # 小程序 openid 或匿名标识
 
 
 class PrivateGenerateRequest(BaseModel):
@@ -426,18 +428,90 @@ def feedback_content(content_id: str, req: FeedbackRequest, authorization: Optio
 
 
 # ──────────────────────────────────────────────────────────────────────
-# WebView Token（经营诊断 H5 跳转）
+# WebView Token（经营诊断 H5 跳转）— P0B-1 改造
 # ──────────────────────────────────────────────────────────────────────
+
+# 5 项合法 target 枚举
+VALID_WEBVIEW_TARGETS = frozenset({
+    "diagnosis",
+    "monthly",
+    "history",
+    "diagnosis_result",
+    "monthly_result",
+})
+
+# 需要 report_id 的 target
+_RESULT_TARGETS = frozenset({"diagnosis_result", "monthly_result"})
+
+# target → H5 路径模板
+WEBVIEW_PATH_MAP: Dict[str, str] = {
+    "diagnosis":        "/diagnosis/form",
+    "monthly":          "/monthly/form",
+    "history":          "/",
+    "diagnosis_result": "/diagnosis/result/{report_id}",
+    "monthly_result":   "/monthly/result/{report_id}",
+}
+
+
 @router.post("/coach/webview-token", response_model=ApiResponse)
 def coach_webview_token(req: WebviewTokenRequest, authorization: Optional[str] = Header(default=None)):
-    """生成 webview ticket（生产环境应写入 Redis 并设 5 分钟有效期）。"""
+    """生成 webview ticket（P0B-1：Redis 存储 + 5 分钟 TTL + 5 项 target 枚举）。"""
+
+    # ── 1. target 枚举校验 ──
+    if req.target not in VALID_WEBVIEW_TARGETS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 target: {req.target}，合法值: {sorted(VALID_WEBVIEW_TARGETS)}",
+        )
+
+    # ── 2. result target 必须提供 report_id ──
+    if req.target in _RESULT_TARGETS:
+        if not req.report_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"target={req.target} 必须提供 report_id",
+            )
+
+    # ── 3. 生成 ticket ──
     ticket = make_id("wv")
-    WEBVIEW_TICKETS[ticket] = {"target": req.target, "store_id": req.store_id, "created_at": time.time()}
-    path_map = {
-        "diagnosis": "/diagnosis/form",
-        "monthly": "/monthly/form",
-        "history": "/",
+
+    # ── 4. ticket 数据绑定 ──
+    ticket_data = {
+        "target": req.target,
+        "report_id": req.report_id,
+        "store_id": req.store_id,
+        "openid": req.openid or "anonymous",
+        "created_at": time.time(),
     }
+
+    # ── 5. 写入 Redis（或降级内存），TTL = 300s ──
+    from ..redis_client import ticket_set
+    ticket_set(ticket, ticket_data, ttl=300)
+
+    # ── 6. 构建 H5 URL ──
     h5_base_url = settings.h5_base_url.rstrip("/")
-    url = f"{h5_base_url}{path_map.get(req.target, '/diagnosis/form')}?ticket={ticket}&source=weapp"
+    path_template = WEBVIEW_PATH_MAP[req.target]
+
+    if req.target in _RESULT_TARGETS:
+        path = path_template.format(report_id=req.report_id)
+    else:
+        path = path_template
+
+    url = f"{h5_base_url}{path}?ticket={ticket}&source=weapp"
+
+    logger.info(
+        "webview-token | target=%s | store_id=%s | report_id=%s | ticket_mode=%s",
+        req.target, req.store_id, req.report_id,
+        "redis" if _is_redis_available() else "memory",
+    )
+
     return ApiResponse(data={"url": url, "ticket": ticket})
+
+
+def _is_redis_available() -> bool:
+    """检查 Redis 是否可用（仅用于日志标记，不影响业务逻辑）。"""
+    try:
+        from ..redis_client import get_redis
+        return get_redis() is not None
+    except Exception:
+        return False
