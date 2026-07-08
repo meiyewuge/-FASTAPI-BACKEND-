@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
@@ -10,6 +11,7 @@ from ..scoring import score_diagnosis
 from ..mba_models import diagnosis_mba_analysis
 from ..ai import call_llm
 from ..report import render_pdf
+from ..auth import generate_access_token, verify_result_auth
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/diagnoses", tags=["diagnoses"])
@@ -40,6 +42,8 @@ async def create_diagnosis(payload: DiagnosisCreate, db: Session = Depends(get_d
     db.flush()
 
     scored = score_diagnosis(payload.form_data)
+    # P0B-2: 生成 access_token
+    access_token = generate_access_token()
     diagnosis = models.Diagnosis(
         store_id=store.id,
         total_score=scored["total_score"],
@@ -54,6 +58,7 @@ async def create_diagnosis(payload: DiagnosisCreate, db: Session = Depends(get_d
         warning_level=scored["warning_level"],
         confidence_level=scored["confidence_level"],
         ai_status="generating",
+        access_token=access_token,  # P0B-2: 存储 access_token
     )
     db.add(diagnosis)
     db.flush()
@@ -98,15 +103,35 @@ async def create_diagnosis(payload: DiagnosisCreate, db: Session = Depends(get_d
     db.commit()
     db.refresh(diagnosis)
 
-    logger.info("Diagnosis created: id=%s, store=%s", diagnosis.id, store.store_name)
-    return {"code": 200, "message": "诊断创建成功", "data": {"diagnosis_id": diagnosis.id, "store_id": store.id, "total_score": diagnosis.total_score, "rating": diagnosis.rating, "report_url": report_url}}
+    # P0B-2: 日志脱敏（仅输出 token 前 8 字符）
+    logger.info("Diagnosis created: id=%s, store=%s, token=%s****", diagnosis.id, store.store_name, diagnosis.access_token[:8] if diagnosis.access_token else "None")
+    # P0B-2: 返回 access_token 给前端
+    return {"code": 200, "message": "诊断创建成功", "data": {
+        "diagnosis_id": diagnosis.id,
+        "store_id": store.id,
+        "total_score": diagnosis.total_score,
+        "rating": diagnosis.rating,
+        "report_url": report_url,
+        "access_token": diagnosis.access_token,  # P0B-2: 返回 token
+    }}
 
 
 @router.get("/{diagnosis_id}")
-def get_diagnosis(diagnosis_id: int, db: Session = Depends(get_db)):
-    diagnosis = db.get(models.Diagnosis, diagnosis_id)
-    if not diagnosis:
-        raise HTTPException(status_code=404, detail="诊断不存在")
+def get_diagnosis(
+    diagnosis_id: int,
+    token: Optional[str] = Query(None, description="P0B-2: access_token"),
+    ticket: Optional[str] = Query(None, description="P0B-2: Redis ticket"),
+    db: Session = Depends(get_db),
+):
+    # P0B-2: 鉴权
+    diagnosis = verify_result_auth(
+        record_id=diagnosis_id,
+        record_type="diagnosis",
+        model=models.Diagnosis,
+        token=token,
+        ticket=ticket,
+        db=db,
+    )
     form = db.query(models.DiagnosisForm).filter_by(diagnosis_id=diagnosis_id).first()
     ai = db.query(models.AIReport).filter_by(report_type="diagnosis", target_id=diagnosis_id).order_by(models.AIReport.id.desc()).first()
     dimensions = [
@@ -118,7 +143,8 @@ def get_diagnosis(diagnosis_id: int, db: Session = Depends(get_db)):
         {"key": "product", "name": "产品力", "score": diagnosis.product_score, "max_score": 15},
         {"key": "digital", "name": "数字化力", "score": diagnosis.digital_score, "max_score": 10},
     ]
-    return {"code": 200, "message": "success", "data": {
+    # P0B-2: 如果 ticket 通过，返回 access_token 供前端升级 URL
+    response_data = {
         "diagnosis_id": diagnosis.id,
         "store": store_to_dict(diagnosis.store),
         "total_score": diagnosis.total_score,
@@ -129,4 +155,8 @@ def get_diagnosis(diagnosis_id: int, db: Session = Depends(get_db)):
         "ai_report": ai.structured_content if ai else {},
         "report_url": diagnosis.report_url,
         "created_at": diagnosis.created_at.isoformat() if diagnosis.created_at else None,
-    }}
+    }
+    # ticket 通过后返回 access_token（用于 URL 升级）
+    if ticket and diagnosis.access_token:
+        response_data["access_token"] = diagnosis.access_token
+    return {"code": 200, "message": "success", "data": response_data}

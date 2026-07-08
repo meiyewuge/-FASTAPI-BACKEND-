@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./storecoach.db"
     admin_key: str = "dev_admin_key"  # ← P0B-1 子项：上线前轮换 ADMIN_KEY（.env 注入）
 
+    # ── P0B-2 兼容期开关 ──────────────────────────────────────────────
+    # True: 旧记录（access_token=NULL）允许无凭证访问（LEGACY_PASS_BY_COMPAT）
+    # False: 所有记录必须有凭证（P0B-5 关闭）
+    allow_unauthenticated_results: bool = True
+
     # ── LLM 配置 ──────────────────────────────────────────────────
     llm_provider: str = "local"
     llm_api_key: str | None = None
