@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..config import settings
 from .. import models
 from ..schemas import FollowupCreate
+from .diagnoses import mask_phone
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
@@ -56,7 +59,7 @@ def get_store_detail(store_id: int, db: Session = Depends(get_db)):
     monthly = db.query(models.MonthlyCheckup).filter_by(store_id=store_id).order_by(models.MonthlyCheckup.check_month.desc()).all()
     followups = db.query(models.Followup).filter_by(store_id=store_id).order_by(models.Followup.id.desc()).all()
     return {"code": 200, "data": {
-        "store": {"id": s.id, "store_name": s.store_name, "city": s.city, "contact_person": s.contact_person, "contact_phone": s.contact_phone, "store_type": s.store_type},
+        "store": {"id": s.id, "store_name": s.store_name, "city": s.city, "contact_person": s.contact_person, "contact_phone": mask_phone(s.contact_phone), "store_type": s.store_type},
         "diagnoses": [{"id": d.id, "total_score": d.total_score, "rating": d.rating, "report_url": d.report_url, "created_at": d.created_at.isoformat() if d.created_at else None} for d in diagnoses],
         "monthly_checkups": [{"id": m.id, "check_month": m.check_month, "total_score": m.total_score, "revenue": float(m.revenue or 0), "report_url": m.report_url} for m in monthly],
         "followups": [{"id": f.id, "admin_name": f.admin_name, "followup_status": f.followup_status, "followup_note": f.followup_note, "recommended_service": f.recommended_service, "created_at": f.created_at.isoformat() if f.created_at else None} for f in followups]
@@ -71,6 +74,7 @@ def create_followup(store_id: int, payload: FollowupCreate, db: Session = Depend
     db.add(f)
     db.commit()
     db.refresh(f)
+    logger.info("Followup created: id=%s, store_id=%s", f.id, store_id)
     return {"code": 200, "message": "跟进记录已保存", "data": {"id": f.id}}
 
 
