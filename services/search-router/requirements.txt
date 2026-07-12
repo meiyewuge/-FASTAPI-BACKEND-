@@ -1,0 +1,22 @@
+# WUGE Search Router P0.2 — locked dependencies
+# Versions pinned to the origin engineering freeze (requirements_freeze.txt, 2026-07-13).
+# Only the packages actually imported by this package are listed (the origin
+# freeze was a full-host snapshot of ~87 unrelated services).
+
+# ---- Runtime ----
+aiohttp==3.13.5
+python-dotenv==1.0.1          # optional-but-used: config.from_env(env_file=...) loads .env
+
+# aiohttp transitive chain (locked for reproducible installs)
+aiohappyeyeballs==2.6.1
+aiosignal==1.4.0
+attrs==26.1.0
+frozenlist==1.8.0
+multidict==6.7.1
+propcache==0.5.2
+yarl==1.23.0
+idna==3.13
+
+# ---- Test ----
+pytest==8.4.2
+pytest-asyncio==0.26.0
