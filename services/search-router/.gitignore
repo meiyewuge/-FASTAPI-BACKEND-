@@ -1,0 +1,129 @@
+# === 敏感文件 ===
+.env
+.env.*
+!.env.example
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === 测试 / 覆盖率 ===
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# === 数据库 ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === 日志 ===
+logs/
+*.log
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === 操作系统 ===
+.DS_Store
+Thumbs.db
+
+# === SR P0.2 Final Closure Denylist ===
+
+# Credentials
+.env.shadow
+.env.bak.*
+
+# Run scripts (one-off)
+g2_micro_shadow.py
+g3_strict_real_provider_micro_shadow_v1.py
+g3c_router_strict_real_entry_v1.py
+c_micro_shadow_verify.py
+
+# Run results / evidence
+phase1_*.json
+phase1_*.py
+phase2_*.json
+phase2_*.py
+phase3_*.json
+publish_time_safe_fetch_stack_offline_machine_result_*.json
+router_contract_gate_ecs_machine_result_*.json
+STAGE2_P0_PREP_*.json
+
+# Shadow run evidence
+shadow_runs/
+
+# Staging residuals
+_staging/
+
+# Backup directories
+backups/
+v1_backup/
+enricher_review_v1/
+enricher_review_v1_1/
+
+# Code backups
+*.bak
+*.v1*_backup_*
+*.b2-v13-backup-*
+*.pre_contract_gate
+*.pre_v12
+*.v11bak
+*.v_pre_real_dns_backup
+
+# Large artifacts
+patch.diff
+
+# Reports and patches
+WUYOU_*.md
+WUYOU_*.zip
+TEST_REPORT.md
+
+# NOTE: search_router/cost_tracker.py and search_router/dual_review.py are
+# required runtime modules (imported by search_router/router.py) and MUST be
+# tracked. They were previously excluded here in error.
+
+# Allowlist/denylist files themselves
+FINAL_GIT_FILE_ALLOWLIST.txt
+FINAL_GIT_FILE_DENYLIST.txt
+
+# Additional backup patterns
+*.bak.g0
+scripts/*.bak.*
+search_router/enrichers/__init__.py.v_pre_real_dns_backup
+# More backup patterns
+router.py.bak.*
+test_config.py.pre_safe_isolation_*
+test_enhancer_e2e.py.permissive_injected
+test_router_e2e.py.permissive_injected
+search_router/router.py.pre_*
+search_router/merger.py.v11bak
+search_router/enrichers/real_transport.py.v1.2_backup_*
+search_router/enrichers/safe_transport.py.b2-v13-backup-*
