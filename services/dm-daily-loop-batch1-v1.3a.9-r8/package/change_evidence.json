@@ -1,48 +1,36 @@
 {
   "report_type": "CHANGE_EVIDENCE",
-  "version": "V1.3A.9-R8-R1",
-  "build_id": "r8r1-20260717T080700Z",
+  "version": "V1.3A.9-R8-R1a",
+  "build_id": "r8r1a-20260717T092132Z",
   "baseline_source": "r7_baseline_manifest.json (R7 SHA 12c7bdf68a21d77cbd5046c12e5ba9e8f9caba39b9ac3030ce387232eee41eb3)",
   "changed_vs_r7_baseline": {
     "PROVENANCE.md": {
       "baseline_sha": "7062faefc7959aeca148e0ebf8f319663a5f6e6e65e19e66ab49da4754616d24",
-      "current_sha": "03ac4a2535cd01495f6b399226d412d6382e835abb3bd947f68beb3a933ed33b",
-      "changed": true,
-      "present": true
-    },
-    "build_execution_report.json": {
-      "baseline_sha": "321e6be18a2eb89f8d4e4718f8e5427e06c6f15907e6edca4e89422910563370",
-      "current_sha": "8b3580fabdefa658bb8ae06f84d2212d4a68444af8f2995f7b9dc4017d2e1658",
+      "current_sha": "78e8b25a622a3733854f6938afa25318fa9d1794ee2d1a3bad2894245db269de",
       "changed": true,
       "present": true
     },
     "build_release.py": {
       "baseline_sha": "4fd79ef88269f0834ba0c8af0dbb8237ff974188f29548a242f4e806e77361da",
-      "current_sha": "6fb55de457afa904aaa34c4626ed3216956541cba2b8d6d67bd9c0ce8fd0c59a",
-      "changed": true,
-      "present": true
-    },
-    "change_evidence.json": {
-      "baseline_sha": "054799e4ed17b519022810d026ea1860f0c412da29a567702ca027fc33c77205",
-      "current_sha": "d5dc35291accfdc1e5bc70e3703f7229fdc240d5b01924744d84b2483973d9eb",
+      "current_sha": "87bba0cc9d423c46b384bab67ea1fb32ac994bb4af3608224c273444a394448e",
       "changed": true,
       "present": true
     },
     "machine_test_report.json": {
       "baseline_sha": "74cb4f3b89f4d821928894697c077ca2a0fc6a29f6613dafcd89bcca6957d064",
-      "current_sha": "44612c597a9380540848e4f15f701599a1f6400183c8ec95d1d451d8f17ddf47",
+      "current_sha": "7afc4be783f22c2c4f2cd700e3106cc4c7fa7bab9ae79a6c50202e00c61efc31",
       "changed": true,
       "present": true
     },
     "mutation_report.json": {
       "baseline_sha": "86414a13873049321acd34812c600bd08341d29879fa53571bffdbf618dc00eb",
-      "current_sha": "2b395b781d502f3a7f60e0812c4b741aa75dec5dff16631badf330d4da8d4f96",
+      "current_sha": "759c1e9c0b6f8a94a2a46fefa6957c16b50831387f2b761f2d18b49fb85b11d1",
       "changed": true,
       "present": true
     },
     "restore_fault_injection_report.json": {
       "baseline_sha": "583d5621c19dbacd0bdafdc3a7a518bf89ad15e09453b19b6ffc049f4b5a8781",
-      "current_sha": "d74a77424007012d3eed9ca2ec70120fa36b2fb03d0586ee79d3fb1a7b6f13bb",
+      "current_sha": "6e9b518b244862b86d04f332ef68c1a3a35361b0fe925b9a11f62a1f00f7d355",
       "changed": true,
       "present": true
     },
@@ -60,7 +48,7 @@
     },
     "security_invariants_report.json": {
       "baseline_sha": "01a4d22370437663cccc676fd411789faa8710ef12a00808f2a6178abdb9d78f",
-      "current_sha": "82612cf392db80f1a0e6b438b4c73e184cfc0895cabbbc8ddd8158df031c96c2",
+      "current_sha": "bc14fdea22f6814b9932e032da3ebc360b7a570387afeb13d384b289a062dd5e",
       "changed": true,
       "present": true
     },
@@ -71,9 +59,14 @@
       "present": true
     }
   },
-  "changed_count": 11,
+  "changed_count": 9,
   "new_files": [
     "V1.3A.9_R7_TO_R8_DIFF.md",
     "r7_baseline_manifest.json"
-  ]
+  ],
+  "generated_artifacts": {
+    "change_evidence.json": "self — SHA cannot be recorded inside itself; bound by final manifest exclusion",
+    "build_execution_report.json": "written at build end (after this file); bound by attestation ZIP SHA",
+    "manifest.json": "regenerated last; self-referential integrity root"
+  }
 }

@@ -1,7 +1,7 @@
 {
   "report_type": "SECURITY_INVARIANTS_REPORT",
-  "version": "V1.3A.9-R8-R1",
-  "build_id": "r8r1-20260717T080700Z",
+  "version": "V1.3A.9-R8-R1a",
+  "build_id": "r8r1a-20260717T092132Z",
   "source": "live run_truth_gate.py --checks vault",
   "total_invariants": 24,
   "key_set_is_1_to_24": true,

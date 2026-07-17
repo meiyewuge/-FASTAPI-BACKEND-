@@ -48,13 +48,20 @@ def parse_unittest(out, err):
     return ran, ok
 
 STEPS = []
+BUILD_LOG_DIR = BASE / 'evidence' / 'logs' / 'build'
 def run_step(name, cmd, timeout=1200):
     started = utc(); t0 = time.monotonic()
     r = subprocess.run(cmd, cwd=BASE, capture_output=True, text=True, timeout=timeout)
     dt = round((time.monotonic() - t0) * 1000, 1)
     log = (r.stdout or '') + (r.stderr or '')
+    # P1 (Option A): persist each step's raw log into the ZIP so its SHA is
+    # recomputable from the final artifact.
+    BUILD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_rel = f'evidence/logs/build/{name}.log'
+    (BASE / log_rel).write_text(log)
     STEPS.append({'name': name, 'command': cmd, 'started_at': started, 'ended_at': utc(),
-                  'duration_ms': dt, 'exit_code': r.returncode, 'log_sha256': sha256_text(log)})
+                  'duration_ms': dt, 'exit_code': r.returncode,
+                  'log_path': log_rel, 'log_sha256': sha256_text(log)})
     print(f"[{name}] exit={r.returncode} ({dt:.0f}ms)")
     return r
 
@@ -185,19 +192,33 @@ def main():
                     'build_id': args.build_id, 'ran': fault_ran, 'ok': fault_ok, 'exit_code': r_fault.returncode}
     (BASE / 'restore_fault_injection_report.json').write_text(json.dumps(fault_report, indent=2, ensure_ascii=False))
 
-    # change evidence vs SEALED R7 baseline (P0-6): full before/after SHAs
+    # change evidence vs SEALED R7 baseline (P0/R1a): only record current_sha for
+    # files that are STABLE at this point and will not be rewritten afterward.
+    # Self-referential / post-generated artifacts (change_evidence.json itself,
+    # build_execution_report.json written at build end, and the regenerated
+    # manifest.json) are listed separately in generated_artifacts and bound by the
+    # final manifest / the attestation's ZIP SHA — never as a recomputable pre-hash.
+    NON_RECOMPUTABLE = {'change_evidence.json', 'build_execution_report.json', 'manifest.json'}
     changed = {}
     for rel in sorted(baseline.keys()):
+        if rel in NON_RECOMPUTABLE:
+            continue
         fp = BASE / rel
         cur = sha256_file(fp) if fp.exists() else None
         if cur != baseline.get(rel):
             changed[rel] = {'baseline_sha': baseline.get(rel), 'current_sha': cur,
                             'changed': True, 'present': fp.exists()}
-    new_files = sorted(set(f for f in _list_tracked() if f not in baseline))
+    new_files = sorted(set(f for f in _list_tracked() if f not in baseline and f not in NON_RECOMPUTABLE))
+    generated_artifacts = {
+        'change_evidence.json': 'self — SHA cannot be recorded inside itself; bound by final manifest exclusion',
+        'build_execution_report.json': 'written at build end (after this file); bound by attestation ZIP SHA',
+        'manifest.json': 'regenerated last; self-referential integrity root',
+    }
     (BASE / 'change_evidence.json').write_text(json.dumps(
         {'report_type': 'CHANGE_EVIDENCE', 'version': args.release_version, 'build_id': args.build_id,
          'baseline_source': baseline_source, 'changed_vs_r7_baseline': changed,
-         'changed_count': len(changed), 'new_files': new_files}, indent=2, ensure_ascii=False))
+         'changed_count': len(changed), 'new_files': new_files,
+         'generated_artifacts': generated_artifacts}, indent=2, ensure_ascii=False))
 
     # 5: verify required deliverables present
     for req in ['.env.example', '.env.recovery.example', 'PROVENANCE.md', 'requirements-lock.txt',
@@ -230,6 +251,26 @@ def main():
     build['end_time'] = utc()
     build['all_passed'] = True
     (BASE / 'build_execution_report.json').write_text(json.dumps(build, indent=2, ensure_ascii=False))
+
+    # 7b: change-evidence FINAL SHA closure (R1a P0) — every recorded current_sha
+    # must recompute exactly against the on-disk final file; new_files must be
+    # truly new and present. Any mismatch aborts before packaging.
+    ce = json.loads((BASE / 'change_evidence.json').read_text())
+    ce_errors = []
+    for rel, it in ce['changed_vs_r7_baseline'].items():
+        fp = BASE / rel
+        got = sha256_file(fp) if fp.exists() else None
+        if got != it['current_sha']:
+            ce_errors.append((rel, it['current_sha'], got))
+    if 'change_evidence.json' in ce['changed_vs_r7_baseline']:
+        ce_errors.append(('change_evidence.json', 'self-reference', 'must not be present'))
+    for nf in ce['new_files']:
+        if nf in baseline or not (BASE / nf).exists():
+            ce_errors.append((nf, 'new_file_invalid', f'in_baseline={nf in baseline},exists={(BASE / nf).exists()}'))
+    if ce_errors:
+        print(f"FATAL: change_evidence final-SHA closure failed: {ce_errors}"); sys.exit(1)
+    print(f"CHANGE_EVIDENCE_FINAL_SHA_CLOSURE_PASS ({len(ce['changed_vs_r7_baseline'])} recomputable, {len(ce['new_files'])} new)")
+
     print("\n" + "=" * 60); print("BUILD COMPLETE — all steps passed"); print("=" * 60)
 
     # 8: package

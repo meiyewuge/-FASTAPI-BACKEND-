@@ -1,5 +1,11 @@
 # PROVENANCE — DM Daily Loop Batch 1
 
+## V1.3A.9-R8-R1a (GPT short final audit → Claude evidence-layer closure)
+GPT 短终审：核心代码 GO，证据包 1×P0 + 1×P1。本轮**仅改证据/构建层**（生产代码、Truth Gate、mutation、业务测试均不动）：
+- **P0（change_evidence 自引用/过期 SHA）**：`changed_vs_r7_baseline` 只记录稳定可回算文件（9 项）；移除 `change_evidence.json` 自身及 `build_execution_report.json`/`manifest.json`（改列入 `generated_artifacts`，由最终 manifest / attestation ZIP SHA 绑定）；构建结束机器校验每项 current_sha 可回算 + new_files 有效，否则 FATAL 不打包。
+- **P1（日志可回算）**：`run_step` 将每步 stdout+stderr 写入 `evidence/logs/build/<step>.log`（随 ZIP，7/7 可回算）；外置 replay 每步日志写入 companion `..._R8_R1A_REPLAY_EVIDENCE.zip`（8/8），attestation 记录相对路径 + SHA。
+- 旧 ZIP `e1aabb13…` 标记 **superseded**；新 ZIP + attestation 用新 SHA。
+
 ## V1.3A.9-R8-R1 (GPT independent re-audit → Claude final closure)
 GPT 独立复审 PR #3 后给出 NO-GO + 7 项 P0，本轮定点闭合（仅证据/检测器/构建层，冻结生产代码不动）：
 1. **P0-2** `check_manifest` 改用上下文管理器 + `_sha256_file` helper，`PYTHONWARNINGS=always` 下 ResourceWarning=0（machine report 记录真实计数）
