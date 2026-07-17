@@ -1,0 +1,741 @@
+{
+  "report_type": "MUTATION_TEST_REPORT",
+  "version": "V1.3A.9-R8-R1a",
+  "build_id": "r8r1a-20260717T092132Z",
+  "generated_at": "2026-07-17T09:23:03.491365+00:00",
+  "total_mutations": 13,
+  "blocked": 13,
+  "false_green": 0,
+  "error_count": 0,
+  "sequence_pass": true,
+  "normal_before_exit": 0,
+  "normal_after_exit": 0,
+  "normal_before_log": "evidence/logs/normal_before.stdout.log",
+  "normal_after_log": "evidence/logs/normal_after.stdout.log",
+  "normal_before_stdout_sha256": "36130f6d790c96117eca5973c3552e04df8ceaaecdf82eb2207777f1a6350db1",
+  "normal_after_stdout_sha256": "36130f6d790c96117eca5973c3552e04df8ceaaecdf82eb2207777f1a6350db1",
+  "selector_selftest": {
+    "pass": true,
+    "exit_code": 0,
+    "per_selector": {
+      "main_tests": true,
+      "smoke": true,
+      "vendor": true,
+      "tri_consistency": true,
+      "cross_store": true,
+      "security": true,
+      "assertion_linter": true,
+      "vault": true,
+      "manifest": true,
+      "aad_class_binding": true
+    }
+  },
+  "total_duration_seconds": 70.5,
+  "results": [
+    {
+      "name": "m1_dataclass_drift",
+      "result": "BLOCKED",
+      "detector_id": "main_tests",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "main_tests"
+      ],
+      "expected_failure_code": "E-MAIN-TESTS-FAIL",
+      "observed_failure_codes": [
+        "E-MAIN-TESTS-FAIL"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 2,
+      "actual_hits": 2,
+      "hits_match": true,
+      "target_file": "app/daily_loop/services/repository.py",
+      "sha_before": "1a576dfe36437f07e1789c2915d83247e62380bccb4319b1630cb177b40e0ca5",
+      "sha_after": "99263526be51ab71f3fea9cab789f13235543b187f6e04214bdaf839bdf862ba",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:10.700891+00:00",
+      "ended_at": "2026-07-17T09:22:19.814364+00:00",
+      "duration_ms": 9113.4,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m1_dataclass_drift.stdout.log",
+      "stdout_sha256": "34569638f54e7b031068ac3cf3fa43f30e3fb76fee553ab01e0e8b40734c1a4f",
+      "stderr_log": "evidence/logs/m1_dataclass_drift.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m2_trigger_neutered",
+      "result": "BLOCKED",
+      "detector_id": "cross_store",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "cross_store"
+      ],
+      "expected_failure_code": "E-CROSS-STORE-SEMANTIC-BYPASS",
+      "observed_failure_codes": [
+        "E-CROSS-STORE-SEMANTIC-BYPASS"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 7,
+      "actual_hits": 7,
+      "hits_match": true,
+      "target_file": "app/daily_loop/migrations/001_initial_schema.sql",
+      "sha_before": "d432fcfde2f91379d07b299e01fbda6bc2d46f41401acb19fac402a5e9cdb5c7",
+      "sha_after": "fe3b0b6c206ee0bd55a680635a6b321ce160050f0581799b2ffb43cc219b0002",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:19.815813+00:00",
+      "ended_at": "2026-07-17T09:22:20.010820+00:00",
+      "duration_ms": 195.0,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m2_trigger_neutered.stdout.log",
+      "stdout_sha256": "b717d67ea422b3a0bc4e1ee4886cd99561226806cba2f672324ffe73dd319c65",
+      "stderr_log": "evidence/logs/m2_trigger_neutered.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m3_syntax_error",
+      "result": "BLOCKED",
+      "detector_id": "assertion_linter",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "assertion_linter"
+      ],
+      "expected_failure_code": "E-TEST-SYNTAX-ERROR",
+      "observed_failure_codes": [
+        "E-TEST-SYNTAX-ERROR"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": "tests/run_tests.py",
+      "sha_before": "989eafd5ec2c39b84e8feb8ab6d2d861feb849f5fbe68c3377a523ebb101e865",
+      "sha_after": "5b6769b75647a40df5d95b45e5393cc75fe5f05262f9a48839664e73ce7df0e6",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:20.012042+00:00",
+      "ended_at": "2026-07-17T09:22:20.076403+00:00",
+      "duration_ms": 64.4,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m3_syntax_error.stdout.log",
+      "stdout_sha256": "3a57dfe2926d2ac77e1b185b417e918379eed4d28998becd251775414d3ba265",
+      "stderr_log": "evidence/logs/m3_syntax_error.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m4_unlisted_file",
+      "result": "BLOCKED",
+      "detector_id": "manifest",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "manifest"
+      ],
+      "expected_failure_code": "E-MANIFEST-UNLISTED",
+      "observed_failure_codes": [
+        "E-MANIFEST-UNLISTED"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": ".hidden_mutation_test",
+      "sha_before": "",
+      "sha_after": "2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:20.077331+00:00",
+      "ended_at": "2026-07-17T09:22:20.129817+00:00",
+      "duration_ms": 52.5,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m4_unlisted_file.stdout.log",
+      "stdout_sha256": "0aa9c7e9c651d9e76ed16264bd4b436f5ea6ed2ad641f2078e272895dc299cae",
+      "stderr_log": "evidence/logs/m4_unlisted_file.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m5_vault_spoof",
+      "result": "BLOCKED",
+      "detector_id": "vault",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "vault"
+      ],
+      "expected_failure_code": "E-VAULT-WRITE-AUTH-BYPASS",
+      "observed_failure_codes": [
+        "E-VAULT-RESTORE-SUCCESS-BROKEN",
+        "E-VAULT-WRITE-AUTH-BYPASS"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": "app/daily_loop/services/vault_repository.py",
+      "sha_before": "af8c2d40cf1c2e7938319e68c044822f486cd143450830c28e7ea84198d37ab1",
+      "sha_after": "d474ccd8838b4c76051aaac8f26d43f354ebe8629ce199c1dff5f01d889463aa",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:20.130670+00:00",
+      "ended_at": "2026-07-17T09:22:21.239761+00:00",
+      "duration_ms": 1109.1,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m5_vault_spoof.stdout.log",
+      "stdout_sha256": "a9fac9d51c3b527586f676704139a0922e2422dd00542c3f00f46c1a0d68b0c2",
+      "stderr_log": "evidence/logs/m5_vault_spoof.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m6_delete_trigger",
+      "result": "BLOCKED",
+      "detector_id": "cross_store",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "cross_store"
+      ],
+      "expected_failure_code": "E-CROSS-STORE-TRIGGER-MISSING",
+      "observed_failure_codes": [
+        "E-CROSS-STORE-SEMANTIC-BYPASS",
+        "E-CROSS-STORE-TRIGGER-MISSING"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": "app/daily_loop/migrations/001_initial_schema.sql",
+      "sha_before": "d432fcfde2f91379d07b299e01fbda6bc2d46f41401acb19fac402a5e9cdb5c7",
+      "sha_after": "9331b05f8d638acb38454c07bd8205b9d0a830e6505ea8eb4d827f8962be022d",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:21.241105+00:00",
+      "ended_at": "2026-07-17T09:22:21.439000+00:00",
+      "duration_ms": 197.9,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m6_delete_trigger.stdout.log",
+      "stdout_sha256": "cf91faf8dcd376f017796443170298c301745ac04339286d5d3d0c745582c9e9",
+      "stderr_log": "evidence/logs/m6_delete_trigger.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m7_manifest_missing",
+      "result": "BLOCKED",
+      "detector_id": "manifest",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "manifest"
+      ],
+      "expected_failure_code": "E-MANIFEST-MISSING",
+      "observed_failure_codes": [
+        "E-MANIFEST-MISSING"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": "manifest.json",
+      "sha_before": "2add02b147f5f49d67ec36ae33db947aca05ba0f52ba9b7da274e8a01330cbf8",
+      "sha_after": "0d43918f780d4d8acd33b3ed4a57b839e3d4e71e14411277f14c898bae47aaa1",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:21.440225+00:00",
+      "ended_at": "2026-07-17T09:22:21.493940+00:00",
+      "duration_ms": 53.7,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m7_manifest_missing.stdout.log",
+      "stdout_sha256": "26c12895687aa008ac373d9c886cc6e24ebcc74a371cb4cdd31fca768b75f3e2",
+      "stderr_log": "evidence/logs/m7_manifest_missing.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m8_tautology",
+      "result": "BLOCKED",
+      "detector_id": "assertion_linter",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "assertion_linter"
+      ],
+      "expected_failure_code": "E-ASSERTION-TAUTOLOGY",
+      "observed_failure_codes": [
+        "E-ASSERTION-TAUTOLOGY"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 2,
+      "actual_hits": 2,
+      "hits_match": true,
+      "target_file": "tests/run_tests.py",
+      "sha_before": "989eafd5ec2c39b84e8feb8ab6d2d861feb849f5fbe68c3377a523ebb101e865",
+      "sha_after": "914c90f36a688e7616b59734818cbbe72958bbfcab518de97286231b6c3ae967",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:21.494846+00:00",
+      "ended_at": "2026-07-17T09:22:21.575827+00:00",
+      "duration_ms": 81.0,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m8_tautology.stdout.log",
+      "stdout_sha256": "5a52aaf69ae5ed8ff72579972eaa10bdefcf6bf264e802dfebabdbdaaa21c28f",
+      "stderr_log": "evidence/logs/m8_tautology.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m9_rotate_auth_bypass",
+      "result": "BLOCKED",
+      "detector_id": "vault",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "vault"
+      ],
+      "expected_failure_code": "E-VAULT-ROTATE-AUTH-BYPASS",
+      "observed_failure_codes": [
+        "E-VAULT-ROTATE-AUTH-BYPASS"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": "app/daily_loop/services/vault_repository.py",
+      "sha_before": "af8c2d40cf1c2e7938319e68c044822f486cd143450830c28e7ea84198d37ab1",
+      "sha_after": "d8578a7750422daa6cebe4b984c7c6e3b89a23a244faca1b41093b660b1cc423",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:21.576784+00:00",
+      "ended_at": "2026-07-17T09:22:22.704474+00:00",
+      "duration_ms": 1127.7,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m9_rotate_auth_bypass.stdout.log",
+      "stdout_sha256": "3a3612a3ee4127556aac41868600bfae7cb22659baeefb016d88b8a739dd77a5",
+      "stderr_log": "evidence/logs/m9_rotate_auth_bypass.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m10_verifier_mix",
+      "result": "BLOCKED",
+      "detector_id": "vault",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "vault"
+      ],
+      "expected_failure_code": "E-RECOVERY-PROVIDER-VERIFY-BYPASS",
+      "observed_failure_codes": [
+        "E-RECOVERY-PROVIDER-VERIFY-BYPASS"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 2,
+      "actual_hits": 2,
+      "hits_match": true,
+      "target_file": "app/daily_loop/services/vault_recovery_service.py",
+      "sha_before": "31a745cbc6496db1dd3d06664b6b257e957560ab4db960ae7e43ff74e5ae8394",
+      "sha_after": "23a96a064a8122f29fee92d9a05183631626a93d1cf95bd9a822a11680b19818",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:22.705707+00:00",
+      "ended_at": "2026-07-17T09:22:23.882422+00:00",
+      "duration_ms": 1176.7,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m10_verifier_mix.stdout.log",
+      "stdout_sha256": "65218495f4c5afd985fe28e50d7233ebce57d9da099fea523e9fd7aa94d08880",
+      "stderr_log": "evidence/logs/m10_verifier_mix.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m11_duplicate_reconnect",
+      "result": "BLOCKED",
+      "detector_id": "vault",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "vault"
+      ],
+      "expected_failure_code": "E-VAULT-RECONNECT-COUNT",
+      "observed_failure_codes": [
+        "E-VAULT-RECONNECT-COUNT"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 2,
+      "actual_hits": 2,
+      "hits_match": true,
+      "target_file": "app/daily_loop/services/vault_recovery_service.py",
+      "sha_before": "31a745cbc6496db1dd3d06664b6b257e957560ab4db960ae7e43ff74e5ae8394",
+      "sha_after": "b0171fae587068fbc4e552be2fb1dc21fb457ef7b690818f9432b6cd5bcc517d",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:23.883538+00:00",
+      "ended_at": "2026-07-17T09:22:24.907066+00:00",
+      "duration_ms": 1023.5,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m11_duplicate_reconnect.stdout.log",
+      "stdout_sha256": "82273902e3bf02803b1d0fef28e3534ebc394a2b00667b3e8fb4605bbd495eee",
+      "stderr_log": "evidence/logs/m11_duplicate_reconnect.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m12_unique_tautology",
+      "result": "BLOCKED",
+      "detector_id": "assertion_linter",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "assertion_linter"
+      ],
+      "expected_failure_code": "E-ASSERTION-TAUTOLOGY",
+      "observed_failure_codes": [
+        "E-ASSERTION-TAUTOLOGY"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": "tests/run_tests.py",
+      "sha_before": "989eafd5ec2c39b84e8feb8ab6d2d861feb849f5fbe68c3377a523ebb101e865",
+      "sha_after": "f213636fdd924f3eddc054de730aeed746b4474016c44cf77a2d91d4da4c4eb1",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:24.908571+00:00",
+      "ended_at": "2026-07-17T09:22:24.989371+00:00",
+      "duration_ms": 80.8,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m12_unique_tautology.stdout.log",
+      "stdout_sha256": "29e3f49fa363544d0392e08dd8806109b0a7a797f6c9e557aec8d80bc6521bde",
+      "stderr_log": "evidence/logs/m12_unique_tautology.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "m13_aad_bypass",
+      "result": "BLOCKED",
+      "detector_id": "aad_class_binding",
+      "detector_command": [
+        "python3",
+        "run_truth_gate.py",
+        "--checks",
+        "aad_class_binding"
+      ],
+      "expected_failure_code": "E-AAD-BINDING-BROKEN",
+      "observed_failure_codes": [
+        "E-AAD-BINDING-BROKEN"
+      ],
+      "observed_status": "FAIL",
+      "expected_hits": 1,
+      "actual_hits": 1,
+      "hits_match": true,
+      "target_file": "app/daily_loop/services/keyring.py",
+      "sha_before": "409a3f992fdd84cd65ba16da81352f9f63e54836570ac1508aa64e083985847e",
+      "sha_after": "78f3917324977f02419be3f4e9585a6cd904cc5f25887bb7a9b00937ec84adce",
+      "sha_changed": true,
+      "exit_code": 1,
+      "started_at": "2026-07-17T09:22:24.990349+00:00",
+      "ended_at": "2026-07-17T09:22:25.184557+00:00",
+      "duration_ms": 194.2,
+      "timed_out": false,
+      "signal": null,
+      "stdout_log": "evidence/logs/m13_aad_bypass.stdout.log",
+      "stdout_sha256": "dbd070d1453c19aa379f882c6d1c5621e19f0b0bca85fc4965e943c74b6fa8d6",
+      "stderr_log": "evidence/logs/m13_aad_bypass.stderr.log",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "stable_signature": {
+    "total_mutations": 13,
+    "blocked": 13,
+    "false_green": 0,
+    "error_count": 0,
+    "sequence_pass": true,
+    "normal_before_exit": 0,
+    "normal_after_exit": 0,
+    "selector_selftest_pass": true,
+    "signatures": [
+      {
+        "name": "m1_dataclass_drift",
+        "detector_id": "main_tests",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "main_tests"
+        ],
+        "expected_failure_code": "E-MAIN-TESTS-FAIL",
+        "observed_failure_codes": [
+          "E-MAIN-TESTS-FAIL"
+        ],
+        "expected_hits": 2,
+        "actual_hits": 2,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m2_trigger_neutered",
+        "detector_id": "cross_store",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "cross_store"
+        ],
+        "expected_failure_code": "E-CROSS-STORE-SEMANTIC-BYPASS",
+        "observed_failure_codes": [
+          "E-CROSS-STORE-SEMANTIC-BYPASS"
+        ],
+        "expected_hits": 7,
+        "actual_hits": 7,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m3_syntax_error",
+        "detector_id": "assertion_linter",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "assertion_linter"
+        ],
+        "expected_failure_code": "E-TEST-SYNTAX-ERROR",
+        "observed_failure_codes": [
+          "E-TEST-SYNTAX-ERROR"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m4_unlisted_file",
+        "detector_id": "manifest",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "manifest"
+        ],
+        "expected_failure_code": "E-MANIFEST-UNLISTED",
+        "observed_failure_codes": [
+          "E-MANIFEST-UNLISTED"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m5_vault_spoof",
+        "detector_id": "vault",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "vault"
+        ],
+        "expected_failure_code": "E-VAULT-WRITE-AUTH-BYPASS",
+        "observed_failure_codes": [
+          "E-VAULT-RESTORE-SUCCESS-BROKEN",
+          "E-VAULT-WRITE-AUTH-BYPASS"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m6_delete_trigger",
+        "detector_id": "cross_store",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "cross_store"
+        ],
+        "expected_failure_code": "E-CROSS-STORE-TRIGGER-MISSING",
+        "observed_failure_codes": [
+          "E-CROSS-STORE-SEMANTIC-BYPASS",
+          "E-CROSS-STORE-TRIGGER-MISSING"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m7_manifest_missing",
+        "detector_id": "manifest",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "manifest"
+        ],
+        "expected_failure_code": "E-MANIFEST-MISSING",
+        "observed_failure_codes": [
+          "E-MANIFEST-MISSING"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m8_tautology",
+        "detector_id": "assertion_linter",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "assertion_linter"
+        ],
+        "expected_failure_code": "E-ASSERTION-TAUTOLOGY",
+        "observed_failure_codes": [
+          "E-ASSERTION-TAUTOLOGY"
+        ],
+        "expected_hits": 2,
+        "actual_hits": 2,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m9_rotate_auth_bypass",
+        "detector_id": "vault",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "vault"
+        ],
+        "expected_failure_code": "E-VAULT-ROTATE-AUTH-BYPASS",
+        "observed_failure_codes": [
+          "E-VAULT-ROTATE-AUTH-BYPASS"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m10_verifier_mix",
+        "detector_id": "vault",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "vault"
+        ],
+        "expected_failure_code": "E-RECOVERY-PROVIDER-VERIFY-BYPASS",
+        "observed_failure_codes": [
+          "E-RECOVERY-PROVIDER-VERIFY-BYPASS"
+        ],
+        "expected_hits": 2,
+        "actual_hits": 2,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m11_duplicate_reconnect",
+        "detector_id": "vault",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "vault"
+        ],
+        "expected_failure_code": "E-VAULT-RECONNECT-COUNT",
+        "observed_failure_codes": [
+          "E-VAULT-RECONNECT-COUNT"
+        ],
+        "expected_hits": 2,
+        "actual_hits": 2,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m12_unique_tautology",
+        "detector_id": "assertion_linter",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "assertion_linter"
+        ],
+        "expected_failure_code": "E-ASSERTION-TAUTOLOGY",
+        "observed_failure_codes": [
+          "E-ASSERTION-TAUTOLOGY"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      },
+      {
+        "name": "m13_aad_bypass",
+        "detector_id": "aad_class_binding",
+        "result": "BLOCKED",
+        "detector_command": [
+          "python3",
+          "run_truth_gate.py",
+          "--checks",
+          "aad_class_binding"
+        ],
+        "expected_failure_code": "E-AAD-BINDING-BROKEN",
+        "observed_failure_codes": [
+          "E-AAD-BINDING-BROKEN"
+        ],
+        "expected_hits": 1,
+        "actual_hits": 1,
+        "hits_match": true,
+        "exit_code": 1,
+        "sha_changed": true
+      }
+    ]
+  }
+}

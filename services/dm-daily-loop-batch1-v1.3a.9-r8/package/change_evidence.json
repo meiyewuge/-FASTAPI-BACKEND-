@@ -1,0 +1,72 @@
+{
+  "report_type": "CHANGE_EVIDENCE",
+  "version": "V1.3A.9-R8-R1a",
+  "build_id": "r8r1a-20260717T092132Z",
+  "baseline_source": "r7_baseline_manifest.json (R7 SHA 12c7bdf68a21d77cbd5046c12e5ba9e8f9caba39b9ac3030ce387232eee41eb3)",
+  "changed_vs_r7_baseline": {
+    "PROVENANCE.md": {
+      "baseline_sha": "7062faefc7959aeca148e0ebf8f319663a5f6e6e65e19e66ab49da4754616d24",
+      "current_sha": "78e8b25a622a3733854f6938afa25318fa9d1794ee2d1a3bad2894245db269de",
+      "changed": true,
+      "present": true
+    },
+    "build_release.py": {
+      "baseline_sha": "4fd79ef88269f0834ba0c8af0dbb8237ff974188f29548a242f4e806e77361da",
+      "current_sha": "87bba0cc9d423c46b384bab67ea1fb32ac994bb4af3608224c273444a394448e",
+      "changed": true,
+      "present": true
+    },
+    "machine_test_report.json": {
+      "baseline_sha": "74cb4f3b89f4d821928894697c077ca2a0fc6a29f6613dafcd89bcca6957d064",
+      "current_sha": "7afc4be783f22c2c4f2cd700e3106cc4c7fa7bab9ae79a6c50202e00c61efc31",
+      "changed": true,
+      "present": true
+    },
+    "mutation_report.json": {
+      "baseline_sha": "86414a13873049321acd34812c600bd08341d29879fa53571bffdbf618dc00eb",
+      "current_sha": "759c1e9c0b6f8a94a2a46fefa6957c16b50831387f2b761f2d18b49fb85b11d1",
+      "changed": true,
+      "present": true
+    },
+    "restore_fault_injection_report.json": {
+      "baseline_sha": "583d5621c19dbacd0bdafdc3a7a518bf89ad15e09453b19b6ffc049f4b5a8781",
+      "current_sha": "6e9b518b244862b86d04f332ef68c1a3a35361b0fe925b9a11f62a1f00f7d355",
+      "changed": true,
+      "present": true
+    },
+    "run_mutation_tests.py": {
+      "baseline_sha": "200441f9a0cf9e15725f457f9d0c55f55b2a98b1b6c80f50b7bbb9e8a560fe09",
+      "current_sha": "4c22819800071855657e353d740466928a6b001b63dd66c44b503382608cd40b",
+      "changed": true,
+      "present": true
+    },
+    "run_truth_gate.py": {
+      "baseline_sha": "cb8e0246907acf47cb89c13fe7b1669e46e64e162e7e80de16942e7872e31fca",
+      "current_sha": "dfd78cdbf11a96408d06eabd2b1f64b8810eebe5238c06b98af34ddd0977edd1",
+      "changed": true,
+      "present": true
+    },
+    "security_invariants_report.json": {
+      "baseline_sha": "01a4d22370437663cccc676fd411789faa8710ef12a00808f2a6178abdb9d78f",
+      "current_sha": "bc14fdea22f6814b9932e032da3ebc360b7a570387afeb13d384b289a062dd5e",
+      "changed": true,
+      "present": true
+    },
+    "tests/run_tests.py": {
+      "baseline_sha": "e1a6159d2608bad984a9a1013a1aa7891d7feeab1b027a1eb53c8e7ec011c851",
+      "current_sha": "989eafd5ec2c39b84e8feb8ab6d2d861feb849f5fbe68c3377a523ebb101e865",
+      "changed": true,
+      "present": true
+    }
+  },
+  "changed_count": 9,
+  "new_files": [
+    "V1.3A.9_R7_TO_R8_DIFF.md",
+    "r7_baseline_manifest.json"
+  ],
+  "generated_artifacts": {
+    "change_evidence.json": "self — SHA cannot be recorded inside itself; bound by final manifest exclusion",
+    "build_execution_report.json": "written at build end (after this file); bound by attestation ZIP SHA",
+    "manifest.json": "regenerated last; self-referential integrity root"
+  }
+}
