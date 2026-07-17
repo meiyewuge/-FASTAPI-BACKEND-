@@ -195,8 +195,11 @@ def stable_signature(report):
             'hits_match': r['hits_match'], 'exit_code': r['exit_code'],
             'sha_changed': r['sha_changed'],
         })
+    # NOTE: 'version' and 'build_id' are deliberately excluded — the stable
+    # signature captures mutation BEHAVIOUR (results/codes/hits), not labels, so
+    # a default-mode replay reproduces it without needing --version/--build-id.
     return {
-        'version': report['version'], 'total_mutations': report['total_mutations'],
+        'total_mutations': report['total_mutations'],
         'blocked': report['blocked'], 'false_green': report['false_green'],
         'error_count': report['error_count'], 'sequence_pass': report['sequence_pass'],
         'normal_before_exit': report['normal_before_exit'], 'normal_after_exit': report['normal_after_exit'],

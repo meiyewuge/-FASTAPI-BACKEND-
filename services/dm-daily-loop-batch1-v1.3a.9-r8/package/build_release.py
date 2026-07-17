@@ -58,6 +58,17 @@ def run_step(name, cmd, timeout=1200):
     print(f"[{name}] exit={r.returncode} ({dt:.0f}ms)")
     return r
 
+def _list_tracked():
+    out = []
+    for root, dirs, filenames in os.walk(BASE):
+        dirs[:] = [d for d in dirs if d not in WALK_EXCLUDED_DIRS]
+        for fname in sorted(filenames):
+            rel = str(Path(root) / fname).replace(str(BASE) + '/', '')
+            if rel in MANIFEST_EXCLUDED: continue
+            if fname.endswith('.db') or fname.endswith('.pyc'): continue
+            out.append(rel)
+    return out
+
 def regenerate_manifest():
     files = {}
     for root, dirs, filenames in os.walk(BASE):
@@ -91,13 +102,15 @@ def main():
     build = {'report_type': 'BUILD_EXECUTION_REPORT', 'version': args.release_version,
              'build_id': args.build_id, 'start_time': utc(), 'steps': STEPS}
 
-    # 1: snapshot input baseline manifest (for change evidence vs R7), then
+    # 1: load the SEALED R7 baseline manifest (P0-6): change evidence must be vs
+    #    the frozen R7 input, never vs the live/already-R8 output dir. Then
     #    regenerate an EARLY manifest so the mutation runner's internal
-    #    normal-before/after gate (which checks manifest closure) passes on the
-    #    edited source. The manifest is regenerated again as the LAST step (6).
-    baseline = {}
-    if (BASE / 'manifest.json').exists():
-        baseline = json.loads((BASE / 'manifest.json').read_text()).get('files', {})
+    #    normal-before/after gate passes; regenerated again as the LAST step (6).
+    r7_baseline_path = BASE / 'r7_baseline_manifest.json'
+    if not r7_baseline_path.exists():
+        print("FATAL: r7_baseline_manifest.json (sealed R7 baseline) missing"); sys.exit(1)
+    baseline = json.loads(r7_baseline_path.read_text()).get('files', {})
+    baseline_source = "r7_baseline_manifest.json (R7 SHA 12c7bdf68a21d77cbd5046c12e5ba9e8f9caba39b9ac3030ce387232eee41eb3)"
     regenerate_manifest()
 
     # 2: tests (real counts)
@@ -121,7 +134,17 @@ def main():
         print("FATAL: mutation tests did not fully pass"); sys.exit(1)
     mutation_report = json.loads((BASE / 'mutation_report.json').read_text())
 
-    # 4: reports from actual results
+    # 4: ResourceWarning sweep (P0-2) — real count under PYTHONWARNINGS=always
+    rw_total = 0
+    rw_env = dict(os.environ, PYTHONWARNINGS='always')
+    for cmd in [[sys.executable, 'run_truth_gate.py'],
+                [sys.executable, '-m', 'unittest', 'tests.run_tests'],
+                [sys.executable, '-m', 'unittest', 'tests.test_repo_smoke'],
+                [sys.executable, '-m', 'unittest', 'tests.test_restore_fault_injection']]:
+        rr = subprocess.run(cmd, cwd=BASE, capture_output=True, text=True, timeout=300, env=rw_env)
+        rw_total += (rr.stdout + rr.stderr).count('ResourceWarning')
+
+    # 4b: reports from actual results
     machine = {'report_type': 'MACHINE_TEST_REPORT', 'version': args.release_version, 'build_id': args.build_id,
                'python_version': sys.version.split()[0],
                'main_tests': {'ran': main_ran, 'ok': main_ok},
@@ -131,45 +154,69 @@ def main():
                'total_base_tests': main_ran + smoke_ran + vendor_ran,
                'mutation_blocked': f"{mutation_report['blocked']}/{mutation_report['total_mutations']}",
                'mutation_sequence_pass': mutation_report['sequence_pass'],
-               'selector_selftest_pass': mutation_report['selector_selftest']['pass']}
+               'selector_selftest_pass': mutation_report['selector_selftest']['pass'],
+               'resource_warnings': rw_total}
     (BASE / 'machine_test_report.json').write_text(json.dumps(machine, indent=2, ensure_ascii=False))
+    if rw_total != 0:
+        print(f"FATAL: ResourceWarning count {rw_total} != 0"); sys.exit(1)
 
-    # security invariants derived from the LIVE vault detector (not hardcoded)
+    # security invariants derived from the LIVE vault detector's 1..24 items (P0-7)
     r_vault = run_step('vault_detector', [sys.executable, 'run_truth_gate.py', '--checks', 'vault'])
     vault_result = None
     for line in r_vault.stdout.splitlines():
         if line.startswith('RESULT_JSON: '):
             vault_result = json.loads(line[len('RESULT_JSON: '):])
-    security = {'report_type': 'SECURITY_INVARIANTS_REPORT', 'version': args.release_version,
+    items = {str(it['test_id']): it for it in (vault_result or {}).get('details', [])}
+    expected_keys = {str(i) for i in range(1, 25)}
+    key_set_ok = set(items.keys()) == expected_keys
+    all_pass = key_set_ok and all(items[k]['status'] == 'PASS' for k in expected_keys)
+    security = {'report_type': 'SECURITY_INVARIANTS_REPORT', 'version': args.release_version, 'build_id': args.build_id,
                 'source': 'live run_truth_gate.py --checks vault',
-                'vault_detector_status': (vault_result or {}).get('status'),
-                'vault_detector_exit_code': (vault_result or {}).get('exit_code'),
-                'total_invariants': 24,
-                'all_held': (vault_result or {}).get('status') == 'PASS',
-                'raw_detector_result': vault_result}
+                'total_invariants': 24, 'key_set_is_1_to_24': key_set_ok, 'all_held': all_pass,
+                'invariants': {k: {'expected': items[k]['expected'], 'observed': items[k]['observed'],
+                                   'status': items[k]['status'], 'failure_code': items[k].get('failure_code')}
+                               for k in sorted(expected_keys, key=int)} if key_set_ok else {},
+                'raw_detector_status': (vault_result or {}).get('status')}
     (BASE / 'security_invariants_report.json').write_text(json.dumps(security, indent=2, ensure_ascii=False))
+    if not all_pass:
+        print(f"FATAL: security invariants not 1..24 all-PASS (key_set_ok={key_set_ok})"); sys.exit(1)
 
     fault_report = {'report_type': 'RESTORE_FAULT_INJECTION_REPORT', 'version': args.release_version,
-                    'ran': fault_ran, 'ok': fault_ok, 'exit_code': r_fault.returncode}
+                    'build_id': args.build_id, 'ran': fault_ran, 'ok': fault_ok, 'exit_code': r_fault.returncode}
     (BASE / 'restore_fault_injection_report.json').write_text(json.dumps(fault_report, indent=2, ensure_ascii=False))
 
-    # change evidence vs input baseline (non-hardcoded)
+    # change evidence vs SEALED R7 baseline (P0-6): full before/after SHAs
     changed = {}
     for rel in sorted(baseline.keys()):
         fp = BASE / rel
-        if fp.exists():
-            cur = sha256_file(fp)
-            if cur != baseline.get(rel):
-                changed[rel] = {'baseline_sha': baseline.get(rel), 'current_sha': cur}
+        cur = sha256_file(fp) if fp.exists() else None
+        if cur != baseline.get(rel):
+            changed[rel] = {'baseline_sha': baseline.get(rel), 'current_sha': cur,
+                            'changed': True, 'present': fp.exists()}
+    new_files = sorted(set(f for f in _list_tracked() if f not in baseline))
     (BASE / 'change_evidence.json').write_text(json.dumps(
-        {'report_type': 'CHANGE_EVIDENCE', 'version': args.release_version,
-         'changed_vs_input_baseline': changed, 'changed_count': len(changed)}, indent=2, ensure_ascii=False))
+        {'report_type': 'CHANGE_EVIDENCE', 'version': args.release_version, 'build_id': args.build_id,
+         'baseline_source': baseline_source, 'changed_vs_r7_baseline': changed,
+         'changed_count': len(changed), 'new_files': new_files}, indent=2, ensure_ascii=False))
 
     # 5: verify required deliverables present
     for req in ['.env.example', '.env.recovery.example', 'PROVENANCE.md', 'requirements-lock.txt',
-                'mutation_report.json', 'security_invariants_report.json', 'machine_test_report.json']:
+                'r7_baseline_manifest.json', 'mutation_report.json',
+                'security_invariants_report.json', 'machine_test_report.json',
+                'restore_fault_injection_report.json', 'change_evidence.json']:
         if not (BASE / req).exists():
             print(f"FATAL: required deliverable missing: {req}"); sys.exit(1)
+
+    # 5b: single build_id must be present and identical across every formal report (P0-5)
+    id_reports = ['machine_test_report.json', 'mutation_report.json', 'security_invariants_report.json',
+                  'restore_fault_injection_report.json', 'change_evidence.json']
+    seen = {}
+    for rep in id_reports:
+        bid = json.loads((BASE / rep).read_text()).get('build_id')
+        seen[rep] = bid
+    if any(v != args.build_id for v in seen.values()):
+        print(f"FATAL: build_id mismatch across reports: {seen}"); sys.exit(1)
+    print(f"build_id consistent across {len(id_reports)} reports: {args.build_id}")
 
     # 6: regenerate manifest LAST
     n = regenerate_manifest()
@@ -187,9 +234,10 @@ def main():
 
     # 8: package
     if args.package:
-        zip_name = ("ZHIPU_DM_DAILY_LOOP_BATCH1_V1_3A_9_R8_EVIDENCE_INTEGRITY_FINAL_CLOSURE.zip")
+        vtag = args.release_version.replace('.', '_').replace('-', '_')  # V1_3A_9_R8_R1
+        zip_name = f"ZHIPU_DM_DAILY_LOOP_BATCH1_{vtag}_EVIDENCE_INTEGRITY_FINAL_CLOSURE.zip"
         zip_path = BASE.parent / zip_name
-        arc_root = "dm_daily_loop_batch1_v1_3a_9_r8"
+        arc_root = f"dm_daily_loop_batch1_{vtag.lower()}"
         if zip_path.exists(): zip_path.unlink()
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
             for root, dirs, filenames in os.walk(BASE):

@@ -466,8 +466,10 @@ class TestVaultClosure(unittest.TestCase):
         os.environ['DM_VAULT_MASTER_KEY'] = 'different_valid_key_at_least_16_chars'
         wrong_kr = KeyRing()
         os.environ['DM_VAULT_MASTER_KEY'] = old_env
-        # Use assertRaises to avoid swallowing AssertionError from self.fail
-        with self.assertRaises((InvalidTag, ValueError, Exception)):
+        # Wrong master key must fail with the precise contract exception InvalidTag
+        # (AES-GCM auth-tag mismatch). A broad tuple with Exception would false-green
+        # on unrelated errors, so it is intentionally NOT used.
+        with self.assertRaises(InvalidTag):
             restore_vault(bpath, self.vpath + '.x', wrong_kr.get_master())
 
     def test_11_rotation_old_key_cannot_decrypt(self):

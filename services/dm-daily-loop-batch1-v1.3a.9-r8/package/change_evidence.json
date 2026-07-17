@@ -1,15 +1,79 @@
 {
   "report_type": "CHANGE_EVIDENCE",
-  "version": "V1.3A.9-R8",
-  "changed_vs_input_baseline": {
+  "version": "V1.3A.9-R8-R1",
+  "build_id": "r8r1-20260717T080700Z",
+  "baseline_source": "r7_baseline_manifest.json (R7 SHA 12c7bdf68a21d77cbd5046c12e5ba9e8f9caba39b9ac3030ce387232eee41eb3)",
+  "changed_vs_r7_baseline": {
+    "PROVENANCE.md": {
+      "baseline_sha": "7062faefc7959aeca148e0ebf8f319663a5f6e6e65e19e66ab49da4754616d24",
+      "current_sha": "03ac4a2535cd01495f6b399226d412d6382e835abb3bd947f68beb3a933ed33b",
+      "changed": true,
+      "present": true
+    },
+    "build_execution_report.json": {
+      "baseline_sha": "321e6be18a2eb89f8d4e4718f8e5427e06c6f15907e6edca4e89422910563370",
+      "current_sha": "8b3580fabdefa658bb8ae06f84d2212d4a68444af8f2995f7b9dc4017d2e1658",
+      "changed": true,
+      "present": true
+    },
+    "build_release.py": {
+      "baseline_sha": "4fd79ef88269f0834ba0c8af0dbb8237ff974188f29548a242f4e806e77361da",
+      "current_sha": "6fb55de457afa904aaa34c4626ed3216956541cba2b8d6d67bd9c0ce8fd0c59a",
+      "changed": true,
+      "present": true
+    },
+    "change_evidence.json": {
+      "baseline_sha": "054799e4ed17b519022810d026ea1860f0c412da29a567702ca027fc33c77205",
+      "current_sha": "d5dc35291accfdc1e5bc70e3703f7229fdc240d5b01924744d84b2483973d9eb",
+      "changed": true,
+      "present": true
+    },
     "machine_test_report.json": {
-      "baseline_sha": "0cf529a0adab523ac56daa3318305eb3cf934752a78da8c5504234aa0bfbd4e1",
-      "current_sha": "cbf298ec6f1695c5189f40470163e3cfbcf63b174fe8f6311ea53741eb42bac8"
+      "baseline_sha": "74cb4f3b89f4d821928894697c077ca2a0fc6a29f6613dafcd89bcca6957d064",
+      "current_sha": "44612c597a9380540848e4f15f701599a1f6400183c8ec95d1d451d8f17ddf47",
+      "changed": true,
+      "present": true
+    },
+    "mutation_report.json": {
+      "baseline_sha": "86414a13873049321acd34812c600bd08341d29879fa53571bffdbf618dc00eb",
+      "current_sha": "2b395b781d502f3a7f60e0812c4b741aa75dec5dff16631badf330d4da8d4f96",
+      "changed": true,
+      "present": true
+    },
+    "restore_fault_injection_report.json": {
+      "baseline_sha": "583d5621c19dbacd0bdafdc3a7a518bf89ad15e09453b19b6ffc049f4b5a8781",
+      "current_sha": "d74a77424007012d3eed9ca2ec70120fa36b2fb03d0586ee79d3fb1a7b6f13bb",
+      "changed": true,
+      "present": true
     },
     "run_mutation_tests.py": {
-      "baseline_sha": "99401fb039a1ba04ccea1d9395fec28f6ea2d115e616e3776fb4b35984b16c2d",
-      "current_sha": "116718056f9cfe7363c2b7367a8edbc7338372b51ba6fa1b7806cb0154d18831"
+      "baseline_sha": "200441f9a0cf9e15725f457f9d0c55f55b2a98b1b6c80f50b7bbb9e8a560fe09",
+      "current_sha": "4c22819800071855657e353d740466928a6b001b63dd66c44b503382608cd40b",
+      "changed": true,
+      "present": true
+    },
+    "run_truth_gate.py": {
+      "baseline_sha": "cb8e0246907acf47cb89c13fe7b1669e46e64e162e7e80de16942e7872e31fca",
+      "current_sha": "dfd78cdbf11a96408d06eabd2b1f64b8810eebe5238c06b98af34ddd0977edd1",
+      "changed": true,
+      "present": true
+    },
+    "security_invariants_report.json": {
+      "baseline_sha": "01a4d22370437663cccc676fd411789faa8710ef12a00808f2a6178abdb9d78f",
+      "current_sha": "82612cf392db80f1a0e6b438b4c73e184cfc0895cabbbc8ddd8158df031c96c2",
+      "changed": true,
+      "present": true
+    },
+    "tests/run_tests.py": {
+      "baseline_sha": "e1a6159d2608bad984a9a1013a1aa7891d7feeab1b027a1eb53c8e7ec011c851",
+      "current_sha": "989eafd5ec2c39b84e8feb8ab6d2d861feb849f5fbe68c3377a523ebb101e865",
+      "changed": true,
+      "present": true
     }
   },
-  "changed_count": 2
+  "changed_count": 11,
+  "new_files": [
+    "V1.3A.9_R7_TO_R8_DIFF.md",
+    "r7_baseline_manifest.json"
+  ]
 }

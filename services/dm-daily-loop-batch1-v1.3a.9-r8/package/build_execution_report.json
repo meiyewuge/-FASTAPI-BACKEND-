@@ -1,8 +1,8 @@
 {
   "report_type": "BUILD_EXECUTION_REPORT",
-  "version": "V1.3A.9-R8",
-  "build_id": "9b3933c9-aff6-413a-b3c3-bb2d02b8c09c",
-  "start_time": "2026-07-17T07:20:07.961627+00:00",
+  "version": "V1.3A.9-R8-R1",
+  "build_id": "r8r1-20260717T080700Z",
+  "start_time": "2026-07-17T08:07:00.430743+00:00",
   "steps": [
     {
       "name": "main_tests",
@@ -13,11 +13,11 @@
         "tests.run_tests",
         "-v"
       ],
-      "started_at": "2026-07-17T07:20:07.963664+00:00",
-      "ended_at": "2026-07-17T07:20:21.121466+00:00",
-      "duration_ms": 13157.8,
+      "started_at": "2026-07-17T08:07:00.435582+00:00",
+      "ended_at": "2026-07-17T08:07:13.317506+00:00",
+      "duration_ms": 12881.9,
       "exit_code": 0,
-      "log_sha256": "fe520714320211c2c819abfc71ea706794cc08d52010b008aae3657a1b5a3115"
+      "log_sha256": "ec8b612f920d1dacf3f596a1311c7833468cb191bf3ce9b2544bd2b15f8c8334"
     },
     {
       "name": "smoke_tests",
@@ -28,11 +28,11 @@
         "tests.test_repo_smoke",
         "-v"
       ],
-      "started_at": "2026-07-17T07:20:21.121560+00:00",
-      "ended_at": "2026-07-17T07:20:23.469413+00:00",
-      "duration_ms": 2347.8,
+      "started_at": "2026-07-17T08:07:13.317600+00:00",
+      "ended_at": "2026-07-17T08:07:15.761773+00:00",
+      "duration_ms": 2444.2,
       "exit_code": 0,
-      "log_sha256": "4267ccdacd95b324b387f6617d933c22b4b3efb695edf072420f86e98bc415ca"
+      "log_sha256": "5b4420ce61a8d715e57abab7af55c9665b92ba1616a20f4cd3c7b1f9b319d750"
     },
     {
       "name": "vendor_tests",
@@ -45,11 +45,11 @@
         "/tmp/claude-0/-home-user/d683fa3b-010e-5c3c-bc3a-57078c27f608/scratchpad/audit_r8/audit_copy/vendor/dm_customer_holdings/tests",
         "-v"
       ],
-      "started_at": "2026-07-17T07:20:23.469553+00:00",
-      "ended_at": "2026-07-17T07:20:25.932289+00:00",
-      "duration_ms": 2462.7,
+      "started_at": "2026-07-17T08:07:15.761875+00:00",
+      "ended_at": "2026-07-17T08:07:18.031256+00:00",
+      "duration_ms": 2269.4,
       "exit_code": 0,
-      "log_sha256": "67def1ee60321c9bf668d34d2311f9b66660c02e27ea5726b2d68f4b2ff2826b"
+      "log_sha256": "bb6b78ab53f86a4ee8fad8c17e11f1b1da3b1cd6cf23e5016e2bb429a4ca976c"
     },
     {
       "name": "fault_injection",
@@ -60,11 +60,11 @@
         "tests.test_restore_fault_injection",
         "-v"
       ],
-      "started_at": "2026-07-17T07:20:25.932359+00:00",
-      "ended_at": "2026-07-17T07:20:28.667120+00:00",
-      "duration_ms": 2734.7,
+      "started_at": "2026-07-17T08:07:18.031331+00:00",
+      "ended_at": "2026-07-17T08:07:20.875157+00:00",
+      "duration_ms": 2843.8,
       "exit_code": 0,
-      "log_sha256": "e60549daa3d21fe36b68c4e7054539db3b79bc120e717f6d248eabb1cd2ce386"
+      "log_sha256": "e8810bed1c3046f210d7c1cfaee37283d8fc30a95088ec93bdd95a1d45589f8a"
     },
     {
       "name": "mutation_tests",
@@ -73,15 +73,15 @@
         "run_mutation_tests.py",
         "--write-report",
         "--build-id",
-        "9b3933c9-aff6-413a-b3c3-bb2d02b8c09c",
+        "r8r1-20260717T080700Z",
         "--version",
-        "V1.3A.9-R8"
+        "V1.3A.9-R8-R1"
       ],
-      "started_at": "2026-07-17T07:20:28.667508+00:00",
-      "ended_at": "2026-07-17T07:21:41.326777+00:00",
-      "duration_ms": 72659.1,
+      "started_at": "2026-07-17T08:07:20.875500+00:00",
+      "ended_at": "2026-07-17T08:08:33.173866+00:00",
+      "duration_ms": 72298.3,
       "exit_code": 0,
-      "log_sha256": "0e4ec0199a24b8a0afc5a527734d8690b8ddb64bd0394caba17ebe9c92abf128"
+      "log_sha256": "ea0a457c739dfdae4399dcead8a75bf5354b333eb8503dc101a5a77dff67fbf2"
     },
     {
       "name": "vault_detector",
@@ -91,11 +91,11 @@
         "--checks",
         "vault"
       ],
-      "started_at": "2026-07-17T07:21:41.329991+00:00",
-      "ended_at": "2026-07-17T07:21:42.297082+00:00",
-      "duration_ms": 967.0,
+      "started_at": "2026-07-17T08:09:09.035070+00:00",
+      "ended_at": "2026-07-17T08:09:10.102304+00:00",
+      "duration_ms": 1067.1,
       "exit_code": 0,
-      "log_sha256": "fe74275aed7d41b080e9e69d17c881fe18b774e4a6d8cc44f50240546e1f6e7f"
+      "log_sha256": "52bb102f7289bff1b1c38e53e7e27b43c7f245b4399b34901e05472858106e22"
     },
     {
       "name": "final_truth_gate",
@@ -103,13 +103,13 @@
         "/tmp/claude-0/-home-user/d683fa3b-010e-5c3c-bc3a-57078c27f608/scratchpad/audit_r8/audit_copy/../r8venv/bin/python",
         "run_truth_gate.py"
       ],
-      "started_at": "2026-07-17T07:21:42.303072+00:00",
-      "ended_at": "2026-07-17T07:22:00.980900+00:00",
-      "duration_ms": 18677.8,
+      "started_at": "2026-07-17T08:09:10.108242+00:00",
+      "ended_at": "2026-07-17T08:09:28.240317+00:00",
+      "duration_ms": 18132.0,
       "exit_code": 0,
       "log_sha256": "36130f6d790c96117eca5973c3552e04df8ceaaecdf82eb2207777f1a6350db1"
     }
   ],
-  "end_time": "2026-07-17T07:22:00.980963+00:00",
+  "end_time": "2026-07-17T08:09:28.240373+00:00",
   "all_passed": true
 }

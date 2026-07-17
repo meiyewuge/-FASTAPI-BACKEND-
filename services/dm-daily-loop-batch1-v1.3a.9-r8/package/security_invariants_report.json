@@ -1,23 +1,156 @@
 {
   "report_type": "SECURITY_INVARIANTS_REPORT",
-  "version": "V1.3A.9-R8",
+  "version": "V1.3A.9-R8-R1",
+  "build_id": "r8r1-20260717T080700Z",
   "source": "live run_truth_gate.py --checks vault",
-  "vault_detector_status": "PASS",
-  "vault_detector_exit_code": 0,
   "total_invariants": 24,
+  "key_set_is_1_to_24": true,
   "all_held": true,
-  "raw_detector_result": {
-    "check_id": "vault",
-    "status": "PASS",
-    "exit_code": 0,
-    "failure_codes": [],
-    "details": [
-      {
-        "info": "24/24 vault invariants held"
-      }
-    ],
-    "executed_checks": [
-      "vault"
-    ]
-  }
+  "invariants": {
+    "1": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "2": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "3": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "4": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "5": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "6": {
+      "expected": "succeed",
+      "observed": "op_succeeded",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "7": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "8": {
+      "expected": "invariant_holds",
+      "observed": "token_ids_differ=True",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "9": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "10": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "11": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "12": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "13": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "14": {
+      "expected": "reject",
+      "observed": "blocked,0_rows",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "15": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "16": {
+      "expected": "succeed",
+      "observed": "op_succeeded",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "17": {
+      "expected": "reject_all",
+      "observed": "all_blocked",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "18": {
+      "expected": "reject",
+      "observed": "PermissionError",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "19": {
+      "expected": "invariant_holds",
+      "observed": "business_verify_platform=False",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "20": {
+      "expected": "invariant_holds",
+      "observed": "platform_verify_business=False",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "21": {
+      "expected": "reject",
+      "observed": "both_blocked",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "22": {
+      "expected": "invariant_holds",
+      "observed": "exit=2",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "23": {
+      "expected": "succeed",
+      "observed": "restored,reconnect=1,rows=1",
+      "status": "PASS",
+      "failure_code": null
+    },
+    "24": {
+      "expected": "reject_invalidtag_invariant",
+      "observed": "InvalidTag,rows&sha_unchanged",
+      "status": "PASS",
+      "failure_code": null
+    }
+  },
+  "raw_detector_status": "PASS"
 }

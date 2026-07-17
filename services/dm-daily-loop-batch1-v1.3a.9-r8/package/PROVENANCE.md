@@ -1,5 +1,15 @@
 # PROVENANCE — DM Daily Loop Batch 1
 
+## V1.3A.9-R8-R1 (GPT independent re-audit → Claude final closure)
+GPT 独立复审 PR #3 后给出 NO-GO + 7 项 P0，本轮定点闭合（仅证据/检测器/构建层，冻结生产代码不动）：
+1. **P0-2** `check_manifest` 改用上下文管理器 + `_sha256_file` helper，`PYTHONWARNINGS=always` 下 ResourceWarning=0（machine report 记录真实计数）
+2. **P0-3** wrong-key 精确异常：`tests/run_tests.py` 单一断言改 `assertRaises(InvalidTag)`；vault item 24 只接受 `InvalidTag` 并验证行数+SHA 不变
+3. **P0-4** vault 正/负向 item runner 分离：第 6/16/23 正向不变量不再把 `PermissionError` 当 PASS
+4. **P0-5** 单一 build_id 贯穿 machine/mutation/security/fault/change 全部报告 + attestation，构建结束校验一致，否则非零退出不打包
+5. **P0-6** change_evidence 基线改用封存 R7 `r7_baseline_manifest.json`（R7 SHA `12c7bdf6…`），逐文件 before/after SHA + new_files
+6. **P0-7** `security_invariants_report` 由 vault detector 实时 1—24 结构化 items 派生；构建校验键集精确 1..24 且全 PASS
+7. **P0-1/P1** 重新构建新 ZIP（版本 V1.3A.9-R8-R1，新 SHA），交付 ZIP 本体 + 新 attestation；终审报告以新 ZIP 真实值重写
+
 ## V1.3A.9-R8 (Stage C — Claude Code independent final audit + fix)
 - 输入基线 R7 (完整生产基线): SHA-256 `12c7bdf68a21d77cbd5046c12e5ba9e8f9caba39b9ac3030ce387232eee41eb3`
 - 智谱阶段 B-R1 证据包 (仅两脚本作为候选补丁): SHA-256 `89cecde53925ec4719147bc721a97ad6fc4805f9c2bd65981f3dd50b5d233768`

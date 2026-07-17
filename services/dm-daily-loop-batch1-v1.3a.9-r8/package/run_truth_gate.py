@@ -59,6 +59,14 @@ def run_subprocess(label, cmd, cwd=None, timeout=120):
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd or BASE)
     return result.returncode, result.stdout, result.stderr
 
+def _sha256_file(path):
+    """Stream a file's SHA-256 through a context manager (no leaked handles)."""
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
 # ── Subprocess-backed detectors ──────────────────────
 # unittest returns rc!=0 for BOTH failures and errors; for mutation detection a
 # mutated production/test file that makes the suite non-green is a real detection
@@ -237,35 +245,27 @@ def check_assertion_linter():
 # 24 negative invariants, each isolated: a per-item unexpected exception is
 # recorded as an item ERROR (does not abort the gate, is not counted as BLOCKED).
 # Aggregation: any security violation -> FAIL(1); else any item error -> ERROR(3); else PASS(0).
-_VAULT_CODE = {
-    '1': 'E-VAULT-READ-AUTH-BYPASS', '2': 'E-VAULT-WRITE-AUTH-BYPASS', '3': 'E-VAULT-ROTATE-AUTH-BYPASS',
-    '4': 'E-VAULT-FORGERY-ACCEPTED', '5': 'E-VAULT-CLAIMS-TAMPER-ACCEPTED',
-    '6': 'E-VAULT-TOKEN-VALID-WINDOW', '7': 'E-VAULT-TOKEN-EXPIRY', '8': 'E-VAULT-TOKEN-UNIQUENESS',
-    '9': 'E-VAULT-DISABLED-TOKEN', '10': 'E-VAULT-LEFT-TOKEN', '11': 'E-VAULT-ROLE-DOWNGRADE-TOKEN',
-    '12': 'E-VAULT-STORE-DRIFT-TOKEN', '13': 'E-VAULT-STAFF-READ',
-    '14': 'E-VAULT-WRITE-AUTH-BYPASS', '14-persisted': 'E-VAULT-WRITE-AUTH-BYPASS',
-    '15': 'E-VAULT-ROTATE-AUTH-BYPASS', '16': 'E-VAULT-OWNER-ROTATE-BROKEN',
-    '17-read': 'E-VAULT-CROSS-STORE-READ', '17-write': 'E-VAULT-WRITE-AUTH-BYPASS', '17-rotate': 'E-VAULT-ROTATE-AUTH-BYPASS',
-    '18': 'E-VAULT-SYSTEM-AS-PLATFORM', '19': 'E-VAULT-SIGNING-ROOT-BYPASS', '20': 'E-VAULT-SIGNING-ROOT-BYPASS',
-    '21-backup': 'E-RECOVERY-PROVIDER-VERIFY-BYPASS', '21-restore': 'E-RECOVERY-PROVIDER-VERIFY-BYPASS',
-    '23-restore': 'E-VAULT-RESTORE-SUCCESS-BROKEN', '23-reconnect': 'E-VAULT-RECONNECT-COUNT',
-    '23-rows': 'E-VAULT-RESTORE-SUCCESS-BROKEN', '23-ext': 'E-VAULT-RESTORE-SUCCESS-BROKEN',
-    '24': 'E-VAULT-RESTORE-FAILURE-MUTATED', '24-rows': 'E-VAULT-RESTORE-FAILURE-MUTATED',
-}
-def _vault_code(tag):
-    if tag in _VAULT_CODE: return _VAULT_CODE[tag]
-    base = tag.split('-')[0].split('=')[0]
-    return _VAULT_CODE.get(base, 'E-VAULT-INVARIANT-' + base)
+VAULT_ITEM_IDS = [str(i) for i in range(1, 25)]
 
 def check_vault():
-    violations, item_errors = _check_vault_impl()
-    if violations:
-        codes = sorted({_vault_code(t) for t in violations})
-        return _fail('vault', codes, [{'test_id': t, 'code': _vault_code(t)} for t in violations])
-    if item_errors:
-        # Unexpected exceptions -> ERROR (exit 3), never a security BLOCKED.
-        return DetectorResult('vault', 'ERROR', ['E-VAULT-EXECUTION-ERROR'], item_errors[:8])
-    return _ok('vault', [{'info': '24/24 vault invariants held'}])
+    items, item_errors = _check_vault_impl()
+    # items: {tid: {expected, observed, status, failure_code}}
+    fail_codes, details = [], []
+    any_fail = any_error = False
+    for tid in VAULT_ITEM_IDS:
+        it = items.get(tid, {'expected': '?', 'observed': 'not_run', 'status': 'ERROR', 'failure_code': 'E-VAULT-ITEM-NOT-RUN'})
+        details.append({'test_id': tid, **it})
+        if it['status'] == 'FAIL':
+            any_fail = True
+            if it.get('failure_code'): fail_codes.append(it['failure_code'])
+        elif it['status'] == 'ERROR':
+            any_error = True
+            if it.get('failure_code'): fail_codes.append(it['failure_code'])
+    if any_fail:
+        return _fail('vault', sorted(set(fail_codes)), details)
+    if any_error:
+        return DetectorResult('vault', 'ERROR', sorted(set(fail_codes)) or ['E-VAULT-EXECUTION-ERROR'], details)
+    return _ok('vault', details)
 
 def _check_vault_impl():
     from app.daily_loop.services.repository import AuthRepository
@@ -275,18 +275,42 @@ def _check_vault_impl():
     from app.daily_loop.services.platform_recovery import PlatformRecoveryContext, PlatformRecoveryProvider
     from app.daily_loop.services.keyring import KeyRing
     from app.daily_loop.services.vault_recovery_service import VaultRecoveryService
+    from cryptography.exceptions import InvalidTag
     import sqlite3 as _sqlite3
-    violations, item_errors = [], []
+    items, item_errors = {}, []
 
-    def item(tid, fn):
-        """Run one invariant. fn() returns True on VIOLATION, False if secure.
-        PermissionError inside fn == secure. Any other exception == item ERROR."""
+    def deny(tid, code, action, succeeded=lambda r: r is not None):
+        """Negative invariant: the op MUST be rejected. If it goes through -> FAIL."""
         try:
-            if fn(): violations.append(tid)
+            r = action()
+            if succeeded(r):
+                items[tid] = {'expected': 'reject', 'observed': 'op_succeeded', 'status': 'FAIL', 'failure_code': code}
+            else:
+                items[tid] = {'expected': 'reject', 'observed': 'blocked', 'status': 'PASS', 'failure_code': None}
         except PermissionError:
-            pass
+            items[tid] = {'expected': 'reject', 'observed': 'PermissionError', 'status': 'PASS', 'failure_code': None}
         except Exception as e:
+            items[tid] = {'expected': 'reject', 'observed': type(e).__name__, 'status': 'ERROR', 'failure_code': 'E-VAULT-EXECUTION-ERROR'}
             item_errors.append({'test_id': tid, 'error': f'{type(e).__name__}: {e}'})
+
+    def allow(tid, code, action, succeeded=lambda r: r is not None):
+        """Positive invariant: the op MUST succeed. PermissionError / blocked -> FAIL.
+        This is the P0-4 fix: a PermissionError is NOT treated as pass here."""
+        try:
+            r = action()
+            if succeeded(r):
+                items[tid] = {'expected': 'succeed', 'observed': 'op_succeeded', 'status': 'PASS', 'failure_code': None}
+            else:
+                items[tid] = {'expected': 'succeed', 'observed': 'blocked', 'status': 'FAIL', 'failure_code': code}
+        except PermissionError:
+            items[tid] = {'expected': 'succeed', 'observed': 'PermissionError', 'status': 'FAIL', 'failure_code': code}
+        except Exception as e:
+            items[tid] = {'expected': 'succeed', 'observed': type(e).__name__, 'status': 'ERROR', 'failure_code': 'E-VAULT-EXECUTION-ERROR'}
+            item_errors.append({'test_id': tid, 'error': f'{type(e).__name__}: {e}'})
+
+    def assert_(tid, code, held, observed):
+        items[tid] = {'expected': 'invariant_holds', 'observed': observed,
+                      'status': 'PASS' if held else 'FAIL', 'failure_code': None if held else code}
 
     class MockClock:
         def __init__(self): self._t = 1000000.0
@@ -314,117 +338,170 @@ def _check_vault_impl():
     ctx_platform = recovery_provider.create('platform_admin', os.environ['DM_PLATFORM_RECOVERY_SECRET'])
     vrepo.insert_vault(vault_id='V-001', subject_type='customer', subject_id='C-001', store_id='S001', plaintext_phone='13800138000', plaintext_name='ZhangSan', ctx=ctx_owner)
 
-    def _read(vid, ctx, reason):
-        r = vrepo.read_vault(vid, ctx, reason); return r is not None
-    # 1-3 ctx=None
-    item('1', lambda: _read('V-001', None, 'null'))
-    item('2', lambda: (vrepo.insert_vault(vault_id='V-002', subject_type='customer', subject_id='C-002', store_id='S001', plaintext_phone='x', ctx=None) or True))
-    item('3', lambda: (vrepo.rotate_key('V-001', 'v2', None) or True))
-    # 4 forgery
-    item('4', lambda: _read('V-001', CallerContext('M-FAKE', 'S001', 'owner', token=b'fake'), 'spoof'))
-    # 5 claims tampering
+    _wrote = lambda r: True  # any non-exception return from a write == it went through
+    _rotated = lambda r: bool(r and r.get('rotated'))
+    # 1-3 ctx=None (deny)
+    deny('1', 'E-VAULT-READ-AUTH-BYPASS', lambda: vrepo.read_vault('V-001', None, 'null'))
+    deny('2', 'E-VAULT-WRITE-AUTH-BYPASS', lambda: vrepo.insert_vault(vault_id='V-002', subject_type='customer', subject_id='C-002', store_id='S001', plaintext_phone='x', ctx=None), _wrote)
+    deny('3', 'E-VAULT-ROTATE-AUTH-BYPASS', lambda: vrepo.rotate_key('V-001', 'v2', None), _rotated)
+    # 4 forgery / 5 claims tampering (deny read)
+    deny('4', 'E-VAULT-FORGERY-ACCEPTED', lambda: vrepo.read_vault('V-001', CallerContext('M-FAKE', 'S001', 'owner', token=b'fake'), 'spoof'))
     import copy
-    def _tamper():
-        t = copy.copy(ctx_owner); object.__setattr__(t, '_member_id', 'M-TAMPERED')
-        return _read('V-001', t, 'tamper')
-    item('5', _tamper)
-    # 6-7 token expiry (exact boundary via mock clock)
+    def _tamper_ctx():
+        t = copy.copy(ctx_owner); object.__setattr__(t, '_member_id', 'M-TAMPERED'); return t
+    deny('5', 'E-VAULT-CLAIMS-TAMPER-ACCEPTED', lambda: vrepo.read_vault('V-001', _tamper_ctx(), 'tamper'))
+    # 6 expires_at-1 valid window (ALLOW: token must still read) -- P0-4
     ctx_ttl = provider.create('U001', 'S001', ttl_seconds=60)
-    def _valid_window():
+    def _valid_window_read():
         clock.set(ctx_ttl._expires_at - 1)
-        try: r = vrepo.read_vault('V-001', ctx_ttl, 'near'); return r is None  # must be readable
+        try: return vrepo.read_vault('V-001', ctx_ttl, 'near')
         finally: clock.set(1000000.0)
-    item('6', _valid_window)
-    def _expired():
+    allow('6', 'E-VAULT-TOKEN-VALID-WINDOW', _valid_window_read)
+    # 7 expires_at expired (deny)
+    def _expired_read():
         clock.set(ctx_ttl._expires_at)
-        try: return _read('V-001', ctx_ttl, 'exp')
+        try: return vrepo.read_vault('V-001', ctx_ttl, 'exp')
         finally: clock.set(1000000.0)
-    item('7', _expired)
-    # 8 uniqueness
-    item('8', lambda: provider.create('U001','S001')._token_id == provider.create('U001','S001')._token_id)
-    # 9 disabled / 10 left / 11 role-downgrade / 12 store-drift
+    deny('7', 'E-VAULT-TOKEN-EXPIRY', _expired_read)
+    # 8 token uniqueness (assert)
+    _a = provider.create('U001','S001'); _b = provider.create('U001','S001')
+    assert_('8', 'E-VAULT-TOKEN-UNIQUENESS', _a._token_id != _b._token_id, f'token_ids_differ={_a._token_id != _b._token_id}')
+    # 9-12 revoked-context reads (deny)
     def _mutate_member(uid, mid, sql):
         r = AuthRepository(apath); r.init_schema()
         r.insert_member(StoreMember(member_id=mid, store_id='S001', auth_user_id=uid, role='manager', display_alias=mid, status='active')); r.close()
         ctx = provider.create(uid, 'S001')
         c = _sqlite3.connect(apath); c.execute(sql); c.commit(); c.close()
         return ctx
-    item('9', lambda: _read('V-001', _mutate_member('U030','M-030',"UPDATE dl_store_member SET status='disabled' WHERE member_id='M-030'"), 'disabled'))
-    item('10', lambda: _read('V-001', _mutate_member('U031','M-031',"UPDATE dl_store_member SET status='left' WHERE member_id='M-031'"), 'left'))
-    item('11', lambda: _read('V-001', _mutate_member('U040','M-040',"UPDATE dl_store_member SET role='staff' WHERE member_id='M-040'"), 'downgrade'))
-    item('12', lambda: _read('V-001', _mutate_member('U050','M-050',"UPDATE dl_store_member SET store_id='S002' WHERE member_id='M-050'"), 'drift'))
-    # 13 staff read
-    item('13', lambda: _read('V-001', ctx_staff, 'staff'))
-    # 14 staff write (+ persistence check)
-    item('14', lambda: (vrepo.insert_vault(vault_id='V-005', subject_type='customer', subject_id='C-005', store_id='S001', plaintext_phone='x', ctx=ctx_staff) or True))
-    def _persisted():
-        ec = _sqlite3.connect(vpath); n = ec.execute("SELECT count(*) FROM dl_identity_vault WHERE vault_id='V-005'").fetchone()[0]; ec.close(); return n > 0
-    item('14-persisted', _persisted)
-    # 15 manager rotate
-    item('15', lambda: bool(vrepo.rotate_key('V-001', 'v3', ctx_manager).get('rotated')))
-    # 16 owner rotate MUST succeed (violation if it does not)
-    def _owner_rotate():
-        try: return not bool(vrepo.rotate_key('V-001', 'v2', ctx_owner).get('rotated'))
-        except PermissionError: return True  # unexpected denial == violation for item 16
-    item('16', _owner_rotate)
-    # 17 cross-store read/write/rotate
-    item('17-read', lambda: _read('V-001', ctx_s2_owner, 'cross'))
-    item('17-write', lambda: (vrepo.insert_vault(vault_id='V-003', subject_type='customer', subject_id='C-003', store_id='S001', plaintext_phone='x', ctx=ctx_s2_owner) or True))
-    item('17-rotate', lambda: bool(vrepo.rotate_key('V-001', 'v4', ctx_s2_owner).get('rotated')))
-    # 18 system context as platform recovery
+    deny('9', 'E-VAULT-DISABLED-TOKEN', lambda: vrepo.read_vault('V-001', _mutate_member('U030','M-030',"UPDATE dl_store_member SET status='disabled' WHERE member_id='M-030'"), 'disabled'))
+    deny('10', 'E-VAULT-LEFT-TOKEN', lambda: vrepo.read_vault('V-001', _mutate_member('U031','M-031',"UPDATE dl_store_member SET status='left' WHERE member_id='M-031'"), 'left'))
+    deny('11', 'E-VAULT-ROLE-DOWNGRADE-TOKEN', lambda: vrepo.read_vault('V-001', _mutate_member('U040','M-040',"UPDATE dl_store_member SET role='staff' WHERE member_id='M-040'"), 'downgrade'))
+    deny('12', 'E-VAULT-STORE-DRIFT-TOKEN', lambda: vrepo.read_vault('V-001', _mutate_member('U050','M-050',"UPDATE dl_store_member SET store_id='S002' WHERE member_id='M-050'"), 'drift'))
+    # 13 staff read (deny)
+    deny('13', 'E-VAULT-STAFF-READ', lambda: vrepo.read_vault('V-001', ctx_staff, 'staff'))
+    # 14 staff write denied AND not persisted (deny + persistence assert)
+    def _staff_write_and_check():
+        wrote = False
+        try:
+            vrepo.insert_vault(vault_id='V-005', subject_type='customer', subject_id='C-005', store_id='S001', plaintext_phone='x', ctx=ctx_staff)
+            wrote = True
+        except PermissionError:
+            wrote = False
+        ec = _sqlite3.connect(vpath); n = ec.execute("SELECT count(*) FROM dl_identity_vault WHERE vault_id='V-005'").fetchone()[0]; ec.close()
+        if wrote or n > 0:
+            items['14'] = {'expected': 'reject', 'observed': f'wrote={wrote},persisted_rows={n}', 'status': 'FAIL', 'failure_code': 'E-VAULT-WRITE-AUTH-BYPASS'}
+        else:
+            items['14'] = {'expected': 'reject', 'observed': 'blocked,0_rows', 'status': 'PASS', 'failure_code': None}
+    try: _staff_write_and_check()
+    except Exception as e:
+        items['14'] = {'expected': 'reject', 'observed': type(e).__name__, 'status': 'ERROR', 'failure_code': 'E-VAULT-EXECUTION-ERROR'}; item_errors.append({'test_id': '14', 'error': str(e)})
+    # 15 manager rotate (deny)
+    deny('15', 'E-VAULT-ROTATE-AUTH-BYPASS', lambda: vrepo.rotate_key('V-001', 'v3', ctx_manager), _rotated)
+    # 16 owner rotate (ALLOW) -- P0-4
+    allow('16', 'E-VAULT-OWNER-ROTATE-BROKEN', lambda: vrepo.rotate_key('V-001', 'v2', ctx_owner), _rotated)
+    # 17 cross-store read/write/rotate all denied (composite deny, code by first breach)
+    def _cross_store():
+        breaches = []
+        for sub, act, ok, code in [
+            ('read', lambda: vrepo.read_vault('V-001', ctx_s2_owner, 'cross'), (lambda r: r is not None), 'E-VAULT-CROSS-STORE-READ'),
+            ('write', lambda: vrepo.insert_vault(vault_id='V-003', subject_type='customer', subject_id='C-003', store_id='S001', plaintext_phone='x', ctx=ctx_s2_owner), _wrote, 'E-VAULT-WRITE-AUTH-BYPASS'),
+            ('rotate', lambda: vrepo.rotate_key('V-001', 'v4', ctx_s2_owner), _rotated, 'E-VAULT-ROTATE-AUTH-BYPASS')]:
+            try:
+                if ok(act()): breaches.append((sub, code))
+            except PermissionError:
+                pass
+        return breaches
+    try:
+        b = _cross_store()
+        if b:
+            items['17'] = {'expected': 'reject_all', 'observed': ','.join(s for s, _ in b), 'status': 'FAIL', 'failure_code': b[0][1]}
+        else:
+            items['17'] = {'expected': 'reject_all', 'observed': 'all_blocked', 'status': 'PASS', 'failure_code': None}
+    except Exception as e:
+        items['17'] = {'expected': 'reject_all', 'observed': type(e).__name__, 'status': 'ERROR', 'failure_code': 'E-VAULT-EXECUTION-ERROR'}; item_errors.append({'test_id': '17', 'error': str(e)})
+    # 18 system context as platform recovery (deny)
     ctx_sys = provider.create_system('daily_loop_orchestrator', os.environ['DM_SERVICE_PRINCIPAL_SECRET'])
-    item('18', lambda: (recovery_service.backup(vpath + '.bak3', ctx_sys) or True))
-    # 19 business verifies platform / 20 platform verifies business (bidirectional root isolation)
-    item('19', lambda: bool(provider.verify(ctx_platform)))
-    item('20', lambda: bool(recovery_provider.verify(ctx_owner)))
-    # 21 recovery token expired -> backup & restore rejected
+    deny('18', 'E-VAULT-SYSTEM-AS-PLATFORM', lambda: recovery_service.backup(vpath + '.bak3', ctx_sys), _wrote)
+    # 19 business verifies platform / 20 platform verifies business (assert: verify must be False)
+    assert_('19', 'E-VAULT-SIGNING-ROOT-BYPASS', not provider.verify(ctx_platform), 'business_verify_platform=False')
+    assert_('20', 'E-VAULT-SIGNING-ROOT-BYPASS', not recovery_provider.verify(ctx_owner), 'platform_verify_business=False')
+    # 21 expired recovery token -> backup AND restore both denied (composite deny)
     ctx_plat_exp = recovery_provider.create('platform_admin', os.environ['DM_PLATFORM_RECOVERY_SECRET'])
-    def _exp_backup():
-        clock.set(ctx_plat_exp._expires_at)
-        try: return (recovery_service.backup(vpath + '.bak4', ctx_plat_exp) or True)
-        finally: clock.set(1000000.0)
-    item('21-backup', _exp_backup)
-    def _exp_restore():
-        clock.set(ctx_plat_exp._expires_at)
-        try: return (recovery_service.restore(vpath + '.bak4', ctx_plat_exp) or True)
-        finally: clock.set(1000000.0)
-    item('21-restore', _exp_restore)
-    # 22 missing platform signing key -> subprocess exit 2 (isolated; not a vault violation but a config invariant)
+    def _exp_recovery():
+        breaches = []
+        for sub, act in [('backup', lambda: recovery_service.backup(vpath + '.bak4', ctx_plat_exp)),
+                         ('restore', lambda: recovery_service.restore(vpath + '.bak4', ctx_plat_exp))]:
+            clock.set(ctx_plat_exp._expires_at)
+            try:
+                act(); breaches.append(sub)
+            except PermissionError:
+                pass
+            finally:
+                clock.set(1000000.0)
+        return breaches
+    try:
+        b = _exp_recovery()
+        if b:
+            items['21'] = {'expected': 'reject', 'observed': ','.join(b), 'status': 'FAIL', 'failure_code': 'E-RECOVERY-PROVIDER-VERIFY-BYPASS'}
+        else:
+            items['21'] = {'expected': 'reject', 'observed': 'both_blocked', 'status': 'PASS', 'failure_code': None}
+    except Exception as e:
+        items['21'] = {'expected': 'reject', 'observed': type(e).__name__, 'status': 'ERROR', 'failure_code': 'E-VAULT-EXECUTION-ERROR'}; item_errors.append({'test_id': '21', 'error': str(e)})
+    # 22 missing platform signing key -> subprocess exit 2 (assert)
     r22 = subprocess.run([sys.executable, '-c',
         'import os; os.environ.pop("DM_PLATFORM_RECOVERY_SIGNING_KEY", None); '
         'from app.daily_loop.services.platform_recovery import PlatformRecoveryProvider; PlatformRecoveryProvider.from_env()'],
         capture_output=True, text=True, cwd=str(BASE))
-    if r22.returncode != 2:
-        violations.append('22')
-        _VAULT_CODE['22'] = 'E-VAULT-RECOVERY-KEY-MISSING-EXITCODE'
-    # 23 restore success invariants
+    assert_('22', 'E-VAULT-RECOVERY-KEY-MISSING-EXITCODE', r22.returncode == 2, f'exit={r22.returncode}')
+    # 23 restore success invariants (ALLOW/composite) -- reconnect_count==1 etc.
     try:
         recovery_service.backup(vpath + '.bak5', ctx_platform)
         vrepo.insert_vault(vault_id='V-006', subject_type='customer', subject_id='C-006', store_id='S001', plaintext_phone='13900000000', ctx=ctx_owner)
         rr = recovery_service.restore(vpath + '.bak5', ctx_platform)
+        code = obs = None
         if not rr.get('restored'):
-            violations.append('23-restore')
+            code, obs = 'E-VAULT-RESTORE-SUCCESS-BROKEN', 'not_restored'
+        elif rr.get('reconnect_count', -1) != 1:
+            code, obs = 'E-VAULT-RECONNECT-COUNT', f"reconnect={rr.get('reconnect_count')}"
         else:
-            if rr.get('reconnect_count', -1) != 1: violations.append('23-reconnect')
-            if vrepo.conn.execute("SELECT count(*) FROM dl_identity_vault").fetchone()[0] != 1: violations.append('23-rows')
-            ec = _sqlite3.connect(vpath); n = ec.execute("SELECT count(*) FROM dl_identity_vault").fetchone()[0]; ec.close()
-            if n != 1: violations.append('23-ext')
+            repo_rows = vrepo.conn.execute("SELECT count(*) FROM dl_identity_vault").fetchone()[0]
+            ec = _sqlite3.connect(vpath); ext_rows = ec.execute("SELECT count(*) FROM dl_identity_vault").fetchone()[0]; ec.close()
+            if repo_rows != 1 or ext_rows != 1:
+                code, obs = 'E-VAULT-RESTORE-SUCCESS-BROKEN', f'repo_rows={repo_rows},ext_rows={ext_rows}'
+        if code:
+            items['23'] = {'expected': 'succeed', 'observed': obs, 'status': 'FAIL', 'failure_code': code}
+        else:
+            items['23'] = {'expected': 'succeed', 'observed': 'restored,reconnect=1,rows=1', 'status': 'PASS', 'failure_code': None}
     except Exception as e:
-        item_errors.append({'test_id': '23', 'error': f'{type(e).__name__}: {e}'})
-    # 24 restore failure invariance (wrong master key)
+        items['23'] = {'expected': 'succeed', 'observed': type(e).__name__, 'status': 'ERROR', 'failure_code': 'E-VAULT-EXECUTION-ERROR'}; item_errors.append({'test_id': '23', 'error': str(e)})
+    # 24 restore failure invariance: wrong master key -> InvalidTag (precise) + rows unchanged
     try:
         orig = vrepo.conn.execute("SELECT count(*) FROM dl_identity_vault").fetchone()[0]
+        orig_sha = _sha256_file(vpath)
         os.environ['DM_VAULT_MASTER_KEY'] = 'wrong_key_at_least_16_chars!'
         from app.daily_loop.services.keyring import restore_vault, KeyRing as KR2
+        observed = None
         try:
-            restore_vault(vpath + '.bak5', vpath + '.x', KR2().get_master()); violations.append('24')
-        except Exception:
-            pass
+            restore_vault(vpath + '.bak5', vpath + '.x', KR2().get_master())
+            observed = 'restore_succeeded'  # violation: wrong key should not restore
+        except InvalidTag:
+            observed = 'InvalidTag'          # correct precise rejection
+        except Exception as e:
+            observed = f'unexpected:{type(e).__name__}'
         os.environ['DM_VAULT_MASTER_KEY'] = 'test_master_key_at_least_16_chars_long'
-        if orig != vrepo.conn.execute("SELECT count(*) FROM dl_identity_vault").fetchone()[0]:
-            violations.append('24-rows')
+        rows_after = vrepo.conn.execute("SELECT count(*) FROM dl_identity_vault").fetchone()[0]
+        sha_after = _sha256_file(vpath)
+        if observed == 'InvalidTag' and rows_after == orig and sha_after == orig_sha:
+            items['24'] = {'expected': 'reject_invalidtag_invariant', 'observed': 'InvalidTag,rows&sha_unchanged', 'status': 'PASS', 'failure_code': None}
+        elif observed == 'restore_succeeded':
+            items['24'] = {'expected': 'reject_invalidtag_invariant', 'observed': observed, 'status': 'FAIL', 'failure_code': 'E-VAULT-RESTORE-FAILURE-MUTATED'}
+        elif rows_after != orig or sha_after != orig_sha:
+            items['24'] = {'expected': 'reject_invalidtag_invariant', 'observed': f'{observed},rows/sha_changed', 'status': 'FAIL', 'failure_code': 'E-VAULT-RESTORE-FAILURE-MUTATED'}
+        else:
+            items['24'] = {'expected': 'reject_invalidtag_invariant', 'observed': observed, 'status': 'ERROR', 'failure_code': 'E-VAULT-WRONGKEY-UNEXPECTED-EXCEPTION'}
+            item_errors.append({'test_id': '24', 'error': observed})
     except Exception as e:
-        item_errors.append({'test_id': '24', 'error': f'{type(e).__name__}: {e}'})
+        items['24'] = {'expected': 'reject_invalidtag_invariant', 'observed': type(e).__name__, 'status': 'ERROR', 'failure_code': 'E-VAULT-EXECUTION-ERROR'}; item_errors.append({'test_id': '24', 'error': str(e)})
     # cleanup
     try:
         vrepo.close()
@@ -435,13 +512,14 @@ def _check_vault_impl():
             if os.path.exists(p): os.unlink(p)
     except Exception:
         pass
-    return violations, item_errors
+    return items, item_errors
 
 def check_manifest():
     mp = BASE / "manifest.json"
     if not mp.exists():
         return _fail('manifest', ['E-MANIFEST-MISSING'], [{'message': 'manifest.json not found'}])
-    manifest = json.load(open(mp))
+    with open(mp) as f:
+        manifest = json.load(f)
     mf = manifest.get("files", {})
     excluded = set()
     for it in manifest.get("excluded_generated_files", []):
@@ -451,8 +529,7 @@ def check_manifest():
         if rel in excluded: continue
         fp = BASE / rel
         if not fp.exists(): ms += 1; continue
-        h = hashlib.sha256(); h.update(open(fp, 'rb').read())
-        if h.hexdigest() != expected: mm += 1
+        if _sha256_file(fp) != expected: mm += 1
     disk = set()
     for root, dirs, filenames in os.walk(BASE):
         dirs[:] = [d for d in dirs if d not in ("__pycache__", ".pytest_cache", ".venv", ".git", "evidence")]
