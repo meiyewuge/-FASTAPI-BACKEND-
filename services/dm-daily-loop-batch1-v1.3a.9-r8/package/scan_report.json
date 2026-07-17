@@ -1,0 +1,10 @@
+{
+  "title": "Production Zero-Connection Scan Report",
+  "network_imports": "NONE — zero network imports",
+  "pii_in_source": "NONE — zero PII in source code",
+  "production_connection": "ZERO",
+  "external_api_calls": "ZERO",
+  "real_pii": "ZERO",
+  "candidate_recall": "ZERO (fail-closed provider default)",
+  "auto_send": "ZERO (auto_send=false constant)"
+}

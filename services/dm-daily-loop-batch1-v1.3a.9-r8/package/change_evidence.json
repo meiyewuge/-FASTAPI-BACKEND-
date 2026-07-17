@@ -1,0 +1,15 @@
+{
+  "report_type": "CHANGE_EVIDENCE",
+  "version": "V1.3A.9-R8",
+  "changed_vs_input_baseline": {
+    "machine_test_report.json": {
+      "baseline_sha": "0cf529a0adab523ac56daa3318305eb3cf934752a78da8c5504234aa0bfbd4e1",
+      "current_sha": "cbf298ec6f1695c5189f40470163e3cfbcf63b174fe8f6311ea53741eb42bac8"
+    },
+    "run_mutation_tests.py": {
+      "baseline_sha": "99401fb039a1ba04ccea1d9395fec28f6ea2d115e616e3776fb4b35984b16c2d",
+      "current_sha": "116718056f9cfe7363c2b7367a8edbc7338372b51ba6fa1b7806cb0154d18831"
+    }
+  },
+  "changed_count": 2
+}

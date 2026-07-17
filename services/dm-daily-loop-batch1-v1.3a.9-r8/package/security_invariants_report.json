@@ -1,0 +1,23 @@
+{
+  "report_type": "SECURITY_INVARIANTS_REPORT",
+  "version": "V1.3A.9-R8",
+  "source": "live run_truth_gate.py --checks vault",
+  "vault_detector_status": "PASS",
+  "vault_detector_exit_code": 0,
+  "total_invariants": 24,
+  "all_held": true,
+  "raw_detector_result": {
+    "check_id": "vault",
+    "status": "PASS",
+    "exit_code": 0,
+    "failure_codes": [],
+    "details": [
+      {
+        "info": "24/24 vault invariants held"
+      }
+    ],
+    "executed_checks": [
+      "vault"
+    ]
+  }
+}

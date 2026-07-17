@@ -1,0 +1,26 @@
+{
+  "report_type": "MACHINE_TEST_REPORT",
+  "version": "V1.3A.9-R8",
+  "build_id": "9b3933c9-aff6-413a-b3c3-bb2d02b8c09c",
+  "python_version": "3.11.15",
+  "main_tests": {
+    "ran": 88,
+    "ok": true
+  },
+  "repository_smoke": {
+    "ran": 26,
+    "ok": true
+  },
+  "vendor_holdings": {
+    "ran": 66,
+    "ok": true
+  },
+  "restore_fault_injection": {
+    "ran": 7,
+    "ok": true
+  },
+  "total_base_tests": 180,
+  "mutation_blocked": "13/13",
+  "mutation_sequence_pass": true,
+  "selector_selftest_pass": true
+}

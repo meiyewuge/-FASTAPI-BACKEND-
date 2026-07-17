@@ -1,0 +1,46 @@
+{
+  "report_type": "CLAUDE_R8_PRE_EDIT_INDEPENDENT_AUDIT",
+  "auditor": "Claude Code (independent final audit, pre-edit snapshot)",
+  "audit_time_utc": "2026-07-13",
+  "environment": {
+    "python": "3.11.15",
+    "cryptography": "49.0.0",
+    "cffi": "2.1.0",
+    "pycparser": "3.0.0"
+  },
+  "inputs": {
+    "r7_full_baseline_zip": "ZHIPU_DM_DAILY_LOOP_BATCH1_V1_3A_9_R7_REPRODUCIBLE_BUILD_AND_FAULT_PROOF_CLOSURE.zip",
+    "r7_sha256": "12c7bdf68a21d77cbd5046c12e5ba9e8f9caba39b9ac3030ce387232eee41eb3",
+    "r7_sha256_matches_work_order": true,
+    "stage_b_r1_zip": "ZHIPU_DM_DAILY_LOOP_BATCH1_V1_3A_9_R8_STAGE_B_R1_EVIDENCE.zip",
+    "stage_b_r1_sha256": "89cecde53925ec4719147bc721a97ad6fc4805f9c2bd65981f3dd50b5d233768",
+    "stage_b_r1_sha256_matches_work_order": true,
+    "audit_copy_construction": "R7 full baseline + overlaid Stage B-R1 run_truth_gate.py and run_mutation_tests.py (per work order 1.2)"
+  },
+  "zhipu_claim_adjudication": {
+    "claim": "13/13 blocked, sequence PASS",
+    "verdict": "MISLEADING / NOT TRUSTWORTHY",
+    "reason": "Independent replay reproduces 13/13 'BLOCKED' but 5 of them (m2,m5,m6,m9,m10) are FALSE GREEN: the detector's blanket 'except Exception: return False' converts SQL OperationalError / AttributeError / SyntaxError into 'BLOCKED', so the security invariant is not actually exercised. Additionally an honest default-mode replay exits 1 ('bundled report does not match current run') due to volatile build_id/duration fields, so the delivered evidence pack fails its own replay."
+  },
+  "overall_conclusion": "GO_FIX",
+  "overall_conclusion_reason": "All 12 known blockers are independently CONFIRMED. The R7 production baseline (app/daily_loop/services/*, migrations, tests) is sound and untouched; every defect lives in the allowed-to-modify evidence/detector/build layer (run_truth_gate.py, run_mutation_tests.py, build_release.py, reports). Therefore fixing is possible within the permitted scope without altering frozen production code.",
+  "findings": [
+    {"id":"P0-1","severity":"P0","title":"Mutation runner ignores semantic failure code","status":"CONFIRMED","file":"run_mutation_tests.py","line":187,"evidence":"Decision is `if exit_code == 1 and hits_match: result='BLOCKED'`. `observed_failure_code` is literally `f\"exit {exit_code}\"` (=\"exit 1\"); `expected_failure_code` is stored but never compared. Any exit-1 (including exception-driven) counts as BLOCKED."},
+    {"id":"P0-2","severity":"P0","title":"m2 is an invalid-SQL mutation, not a cross-store semantic bypass","status":"CONFIRMED","file":"app/daily_loop/migrations/001_initial_schema.sql (via m2 spec)","evidence":"m2 replaces `THEN RAISE(ABORT,'E-SCOPE...')` with `THEN SELECT 1` inside a CASE expr -> invalid SQL. Reproduced: cross_store detector logged `FAIL: schema init failed (trigger mutation detected): OperationalError`. Proves SQL broken, not that cross-store trigger semantics were gated."},
+    {"id":"P0-3","severity":"P0","title":"m6 trigger deletion only produces a SQL syntax error","status":"CONFIRMED","file":"app/daily_loop/migrations/001_initial_schema.sql (via m6 spec)","evidence":"m6 comments only the `CREATE TRIGGER ...` line, leaving orphaned BEFORE/BEGIN/END body. Reproduced: `FAIL: schema init failed (trigger mutation detected): OperationalError`. Not a clean 'schema initializes, target trigger missing' detection; no E-CROSS-STORE-TRIGGER-MISSING semantic."},
+    {"id":"P0-4","severity":"P0","title":"m5 does not prove write-authorization bypass","status":"CONFIRMED","file":"app/daily_loop/services/vault_repository.py (via m5 spec)","evidence":"m5 replaces `self._authorize('write',ctx,store_id)` with `pass`. Reproduced: `FAIL: vault check exception (mutation detected): AttributeError: 'NoneType' object has no attribute 'member_id'` — ctx=None path raises first; never reaches staff/cross-store write. No E-VAULT-WRITE-AUTH-BYPASS; no proof unauthorized data persisted."},
+    {"id":"P0-5","severity":"P0","title":"m9 does not actually bypass rotate authorization","status":"CONFIRMED","file":"app/daily_loop/services/vault_repository.py (via m9 spec)","evidence":"m9 removes `self._require_context(ctx,'rotate')` but the following `self._authorize(...)` still enforces context/authorization. Reproduced: `AttributeError: 'NoneType' object has no attribute 'store_id'`. No E-VAULT-ROTATE-AUTH-BYPASS; manager/cross-store rotate not shown to succeed."},
+    {"id":"P0-6","severity":"P0","title":"m10 is a syntax error, not a verifier mix","status":"CONFIRMED","file":"app/daily_loop/services/vault_recovery_service.py (via m10 spec)","evidence":"m10 replaces `self._provider.verify(recovery_ctx)` with `True  # verifier mix` inside `if not <expr>:`, commenting out the trailing colon. Reproduced: `SyntaxError: expected ':' (vault_recovery_service.py, line 53)`. Provider verification never actually bypassed; no E-RECOVERY-PROVIDER-VERIFY-BYPASS."},
+    {"id":"P0-7","severity":"P0","title":"Vault detector treats any exception as a security FAIL (BLOCKED)","status":"CONFIRMED","file":"run_truth_gate.py","line":144,"evidence":"check_vault wraps the whole gate in `except Exception as e: return False, 'vault check exception (mutation detected)...'` -> exit 1. SyntaxError/AttributeError/ImportError/env errors all become BLOCKED. The 24 vault items are not isolated; the first exception aborts the gate. This is the mechanism that makes m5/m9/m10 false-green."},
+    {"id":"P0-8","severity":"P0","title":"Security check bare-except false green","status":"CONFIRMED","file":"run_truth_gate.py","line":93,"evidence":"check_security uses bare `except: pass` (lines 93,97) around Repository calls made with parameters that may not match the production API; a TypeError/AttributeError is swallowed and counted as 'security rejected'. Not calling real production signing with only expected exception types."},
+    {"id":"P0-9","severity":"P0","title":"Cross-store check swallows all exceptions","status":"CONFIRMED","file":"run_truth_gate.py","line":78,"evidence":"check_cross_store uses bare `except: pass` on the semantic write; must accept only sqlite3.IntegrityError and assert the scope code. Also line 302 accepts `(PermissionError, TypeError)` as pass, admitting TypeError as a false green."},
+    {"id":"P0-10","severity":"P0","title":"Report fields not closed per work order","status":"CONFIRMED","file":"stageB mutation_report.json + run_mutation_tests.py","evidence":"observed_failure_code=='exit 1' (not semantic); MISSING started_at, ended_at, duration_ms, timed_out, signal; detector_command is a STRING not an argv array; normal-before/after carry only exit codes (normal_before_exit/normal_after_exit), no raw logs; no selector self-test result."},
+    {"id":"P0-11","severity":"P0","title":"Stage B-R1 evidence ZIP manifest not closed","status":"CONFIRMED","file":"stageB manifest.json","evidence":"manifest lists 69 files; only 32 present on disk; 41 listed-but-absent; mutation_report.json present but unlisted (not in files, not in excluded). Missing STAGE_B_R1_PROVENANCE.md, selector self-test, stage-B detector matrix naming, the correction work order, and normal-before/after logs. Cannot serve as a closed evidence pack."},
+    {"id":"P0-12","severity":"P0","title":"Default mutation-report comparison is non-reproducible","status":"CONFIRMED","file":"run_mutation_tests.py","line":17,"evidence":"BUILD_ID=str(uuid.uuid4()) regenerated per run; default mode does a full `json.dumps(sort_keys=True)` byte comparison of candidate vs bundled, INCLUDING volatile build_id + per-mutation duration_seconds + total_duration_seconds. Reproduced: clean replay exits 1 with 'bundled report does not match current run'. Must inject build_id from top-level build and compare only stable fields."}
+  ],
+  "mutation_matrix_semantic_status": {
+    "note": "13/13 recorded BLOCKED on independent run, but these are the ones whose BLOCKED is genuine vs false-green",
+    "genuine_or_plausible": ["m1_dataclass_drift","m3_syntax_error(detector=assertion_linter, but see note)","m4_unlisted_file","m7_manifest_missing","m8_tautology","m11_duplicate_reconnect","m12_unique_tautology","m13_aad_bypass"],
+    "false_green_exception_driven": ["m2_trigger_neutered","m5_vault_spoof","m6_delete_trigger","m9_rotate_auth_bypass","m10_verifier_mix"]
+  }
+}

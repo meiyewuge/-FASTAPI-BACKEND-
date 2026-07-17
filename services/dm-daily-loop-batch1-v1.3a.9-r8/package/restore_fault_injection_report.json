@@ -1,0 +1,7 @@
+{
+  "report_type": "RESTORE_FAULT_INJECTION_REPORT",
+  "version": "V1.3A.9-R8",
+  "ran": 7,
+  "ok": true,
+  "exit_code": 0
+}

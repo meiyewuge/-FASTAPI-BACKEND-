@@ -1,0 +1,59 @@
+{
+  "report_type": "CLAUDE_R8_POST_EDIT_INDEPENDENT_AUDIT",
+  "auditor": "Claude Code (independent final audit, post-edit)",
+  "post_edit_time_utc": "2026-07-17",
+  "pre_edit_seal_verification": {
+    "sealed_dir": "SEALED_PRE_EDIT/",
+    "CLAUDE_R8_PRE_EDIT_INDEPENDENT_AUDIT.md": {
+      "sealed_sha256": "b593eb00362c9f85cd0bef1c56d2d8b2bfc57cd634a23150f353ac5757a64d28",
+      "recomputed_matches": true
+    },
+    "CLAUDE_R8_PRE_EDIT_INDEPENDENT_AUDIT.json": {
+      "sealed_sha256": "6ab50aa823fc5df22ad8a47f457653f25f6c07ebbd266073605d0e9a4a9095ae",
+      "recomputed_matches": true
+    },
+    "seal_txt_included_in_delivery": true,
+    "sealed_files_modified_after_seal": false
+  },
+  "clock_timestamp_discrepancy": {
+    "disclosed": true,
+    "field": "audit_time_utc in the sealed pre-edit audit",
+    "sealed_value": "2026-07-13",
+    "actual_seal_and_build_time_utc": "2026-07-17",
+    "explanation": "The sealed pre-edit audit's audit_time_utc reads 2026-07-13, which predates the true artifact time (SEAL.txt sealed_at_utc=2026-07-17T06:40:13Z; build/replay also on 2026-07-17). The value was carried over from earlier same-session artifacts and is EARLIER than the real clock. Per the human directive, the sealed files were NOT modified to correct this; the discrepancy is disclosed here instead. It does not affect any finding, SHA, or verdict."
+  },
+  "fixes_applied": [
+    {"id": "P0-1", "status": "FIXED", "how": "BLOCKED requires structured semantic failure_code (in allowed set) + hits_match; run_mutation_tests.py parses RESULT_JSON, no longer trusts bare exit 1."},
+    {"id": "P0-2", "status": "FIXED", "how": "m2 -> 'THEN 1' (SQL-valid); trigger present, cross-store write succeeds; detector emits E-CROSS-STORE-SEMANTIC-BYPASS."},
+    {"id": "P0-3", "status": "FIXED", "how": "m6 special fully removes the trigger block; schema initialises; detector emits E-CROSS-STORE-TRIGGER-MISSING."},
+    {"id": "P0-4", "status": "FIXED", "how": "m5 _authorize('write')->_require_context; staff/cross write persists; E-VAULT-WRITE-AUTH-BYPASS."},
+    {"id": "P0-5", "status": "FIXED", "how": "m9 _authorize('rotate')->_require_context; manager/cross rotate succeeds; E-VAULT-ROTATE-AUTH-BYPASS."},
+    {"id": "P0-6", "status": "FIXED", "how": "m10 -> syntax-valid 'True'; `if not True:` truly bypasses verify; E-RECOVERY-PROVIDER-VERIFY-BYPASS."},
+    {"id": "P0-7", "status": "FIXED", "how": "Exit taxonomy 0/1/2/3; detectors never turn an exception into a security FAIL; vault isolates 24 items."},
+    {"id": "P0-8", "status": "FIXED", "how": "check_security builds real model objects and calls real write paths; only ValueError accepted; TypeError/etc = ERROR."},
+    {"id": "P0-9", "status": "FIXED", "how": "check_cross_store accepts only sqlite3.IntegrityError with E-SCOPE; others = ERROR."},
+    {"id": "P0-10", "status": "FIXED", "how": "Report carries started_at/ended_at/duration_ms/timed_out/signal, argv detector_command, normal-before/after raw logs+SHA, selector self-test."},
+    {"id": "P0-11", "status": "FIXED", "how": "Single build produces closed manifest (0/0/0) + required deliverables; final ZIP contains mutation_report.json."},
+    {"id": "P0-12", "status": "FIXED", "how": "build_id injected by top-level build; default (replay) compares only a volatile-free stable_signature."}
+  ],
+  "final_build": {
+    "entry": "python3 build_release.py --release-version V1.3A.9-R8 --package",
+    "main_tests_exit": 0, "smoke_exit": 0, "vendor_exit": 0, "fault_injection_exit": 0,
+    "mutation_blocked": "13/13", "vault_detector_exit": 0,
+    "manifest_files": 48, "final_truth_gate_exit": 0, "build_exit": 0
+  },
+  "final_zip": {
+    "name": "ZHIPU_DM_DAILY_LOOP_BATCH1_V1_3A_9_R8_EVIDENCE_INTEGRITY_FINAL_CLOSURE.zip",
+    "sha256": "1f9693787243123c66f41347a723861eaa5b60425e15e7bfaea0421578cac5db"
+  },
+  "external_replay_attestation": {
+    "fresh_extract": true,
+    "truth_gate_1_exit": 0, "mutation_replay_exit": 0, "mutation_stable_signature_match": true,
+    "truth_gate_2_exit": 0, "main_tests_exit": 0, "smoke_exit": 0, "vendor_exit": 0, "fault_exit": 0,
+    "verdict": "PASS",
+    "attestation_file": "ZHIPU_DM_DAILY_LOOP_BATCH1_V1_3A_9_R8_FINAL_ZIP_REPLAY_ATTESTATION.json"
+  },
+  "frozen_scope_untouched": true,
+  "frozen_scope_note": "No changes to app/daily_loop/services/*, migration SQL, tests/* business assertions, restore fault-injection semantics, or vendor. Mutations edit production files only on throwaway temp copies.",
+  "overall_verdict": "DM_DAILY_LOOP_BATCH1_V1_3A_9_R8_READY_FOR_HUMAN_MERGE_REVIEW"
+}

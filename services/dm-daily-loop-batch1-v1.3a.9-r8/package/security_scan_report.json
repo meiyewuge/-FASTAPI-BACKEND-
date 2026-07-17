@@ -1,0 +1,8 @@
+{
+  "title": "Security Scan Report V1.2",
+  "network_imports": "NONE",
+  "pii_in_source": "NONE",
+  "production_connection": "ZERO",
+  "external_api_calls": "ZERO",
+  "vendor_package": "dm-customer-holdings-v0.1.2 (66 tests pass)"
+}
