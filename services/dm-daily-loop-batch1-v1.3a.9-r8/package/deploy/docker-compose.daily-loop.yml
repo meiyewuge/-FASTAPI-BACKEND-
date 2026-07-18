@@ -1,0 +1,41 @@
+# DM Daily Loop — compose fragment (C1-B). Generated only; NOT run this stage.
+# The container listens 0.0.0.0:18090 inside its namespace; the host publishes
+# ONLY 127.0.0.1:18090:18090 (loopback), so the service is host-reachable but not
+# public. staging and prod use DISTINCT service names, volumes, host dirs, and env
+# files (never a shared /var/lib path).
+services:
+  daily-loop-staging:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.runtime
+    image: dm-daily-loop:staging
+    container_name: dm-daily-loop-staging
+    environment:
+      - DM_DAILY_LOOP_AUTH_DB=/data/auth.db
+    env_file:
+      - ./env/daily-loop.staging.env        # business env ONLY; no recovery roots
+    volumes:
+      - dm_daily_loop_staging_data:/data
+    ports:
+      - "127.0.0.1:18090:18090"             # loopback publish only
+    restart: unless-stopped
+
+  daily-loop-prod:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.runtime
+    image: dm-daily-loop:prod
+    container_name: dm-daily-loop-prod
+    environment:
+      - DM_DAILY_LOOP_AUTH_DB=/data/auth.db
+    env_file:
+      - ./env/daily-loop.prod.env           # distinct env file; no recovery roots
+    volumes:
+      - dm_daily_loop_prod_data:/data
+    ports:
+      - "127.0.0.1:18091:18090"             # distinct host port; loopback only
+    restart: unless-stopped
+
+volumes:
+  dm_daily_loop_staging_data:                # distinct volume per environment
+  dm_daily_loop_prod_data:

@@ -1,0 +1,58 @@
+{
+  "protocol": "dm-s2s-v2",
+  "secret": "golden_vectors_secret_16chars",
+  "salt": "dm_adapter_s2s",
+  "vectors": [
+    {
+      "method": "GET",
+      "path": "/v1/dl/internal/tasks",
+      "query": {
+        "task_date": "2026-07-17"
+      },
+      "auth_user_id": "U-STF",
+      "target_store_id": "S001",
+      "body": "",
+      "timestamp": "1000000.0",
+      "nonce": "aaaaaaaaaaaaaaaa1",
+      "expected_sig": "bb2f7bd6c87c4d9dae280ac0f9e45d9f08f4ef35a21a6e52e9d56a4c665b0c1f"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/dl/internal/appointments",
+      "query": {
+        "date": "2026-07-17"
+      },
+      "auth_user_id": "U-OWN",
+      "target_store_id": "S001",
+      "body": "",
+      "timestamp": "1000001.5",
+      "nonce": "bbbbbbbbbbbbbbbb2",
+      "expected_sig": "c52ee5c2f7a6a954326ca3af402e0788b92584686beddd48596d01dba0ee19c1"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/dl/internal/tasks",
+      "query": {},
+      "auth_user_id": "U-OWN2",
+      "target_store_id": "S002",
+      "body": "",
+      "timestamp": "1000002.25",
+      "nonce": "cccccccccccccccc3",
+      "expected_sig": "29fb2fdd0375342daf766c09072d7af5103084d31f50f45865b0686c1e72d1c4"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/dl/internal/tasks",
+      "query": {
+        "task_date": "2026-07-17",
+        "extra": "z"
+      },
+      "auth_user_id": "U-MGR",
+      "target_store_id": "S001",
+      "body": "{\"k\":1}",
+      "timestamp": "1000003.0",
+      "nonce": "dddddddddddddddd4",
+      "expected_sig": "7f80fe871c8c4697075c8f67b26c32148382967aba04f3711db1bc55b07b917d"
+    }
+  ]
+}

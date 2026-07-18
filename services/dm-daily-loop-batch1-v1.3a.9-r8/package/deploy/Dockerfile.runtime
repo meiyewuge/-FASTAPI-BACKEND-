@@ -1,0 +1,41 @@
+# DM Daily Loop — RUNTIME image (C1-B).
+# Contains ONLY production code + runtime deps. NO tests/, NO evidence/, NO
+# reports, NO run_*_tests.py. Recovery roots (DM_PLATFORM_RECOVERY_*,
+# DM_VAULT_MASTER_KEY) are NOT baked in — the business process never loads them
+# (RECOVERY_HOLD).
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# runtime dependencies only (cryptography for keyring, fastapi/uvicorn for API)
+COPY deploy/requirements-runtime.txt /app/requirements-runtime.txt
+RUN pip install --no-cache-dir -r /app/requirements-runtime.txt
+
+# copy ONLY the production package + thin server entrypoint (explicit paths;
+# tests/evidence never copied)
+COPY app/ /app/app/
+COPY service/ /app/service/
+
+# R1b P0: vendored dm_customer_holdings runtime module. repository.py /
+# holdings_bridge.py import the top-level package `dm_customer_holdings`, so its 5
+# runtime .py files are installed as an importable top-level package. The glob
+# `*.py` copies ONLY the top-level runtime files — never vendor/.../tests/ or
+# __pycache__ — and NO broad PYTHONPATH=/app/vendor hack is used.
+RUN mkdir -p /app/dm_customer_holdings
+COPY vendor/dm_customer_holdings/*.py /app/dm_customer_holdings/
+
+# non-root user + writable data dir. Create /data and chown to the runtime uid
+# BEFORE dropping privileges, so the non-root process can create/write auth.db on
+# a freshly-mounted named volume (P0-4).
+RUN useradd --create-home --uid 10001 --user-group dmsvc \
+    && mkdir -p /data \
+    && chown -R 10001:10001 /data
+VOLUME ["/data"]
+USER dmsvc
+
+EXPOSE 18090
+
+# container binds 0.0.0.0 inside its own network namespace; the host only
+# publishes 127.0.0.1 (see docker-compose.daily-loop.yml). Single worker.
+CMD ["uvicorn", "service.daily_loop_server:create_app", "--factory", \
+     "--host", "0.0.0.0", "--port", "18090", "--workers", "1"]

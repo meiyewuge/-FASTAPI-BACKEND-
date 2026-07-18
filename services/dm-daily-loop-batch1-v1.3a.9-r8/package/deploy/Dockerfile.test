@@ -1,0 +1,31 @@
+# DM Daily Loop — TEST / CI image (C1-B).
+# Separate from runtime. Includes tests + evidence tooling and runs the full
+# gate set: C1-B API matrix, Truth Gate, mutation, restore fault injection.
+# This image is NEVER deployed to staging/prod.
+FROM python:3.11-slim AS test
+
+WORKDIR /app
+
+COPY deploy/requirements-runtime.txt /app/requirements-runtime.txt
+RUN pip install --no-cache-dir -r /app/requirements-runtime.txt
+
+# test image copies the whole tree (code + server + tests + evidence tooling)
+COPY app/ /app/app/
+COPY service/ /app/service/
+COPY tests/ /app/tests/
+COPY tools/ /app/tools/
+COPY run_truth_gate.py run_mutation_tests.py /app/
+
+ENV PYTHONWARNINGS=always \
+    DM_VAULT_MASTER_KEY=test_master_key_at_least_16_chars_long \
+    DM_CALLER_SIGNING_KEY=test_signing_key_at_least_16_chars \
+    DM_SERVICE_PRINCIPAL_SECRET=test_service_secret \
+    DM_ADAPTER_SHARED_SECRET=test_adapter_shared_secret_16c \
+    DM_PLATFORM_RECOVERY_SECRET=test_platform_secret_different \
+    DM_PLATFORM_RECOVERY_SIGNING_KEY=test_recovery_signing_key_16chars
+
+# CI gate: API matrix + Truth Gate + mutation + fault (no server needed)
+CMD ["sh", "-c", "python -m unittest tests.test_c1b_api -v && \
+     python run_truth_gate.py && \
+     python run_mutation_tests.py && \
+     python -m unittest tests.test_restore_fault_injection -v"]

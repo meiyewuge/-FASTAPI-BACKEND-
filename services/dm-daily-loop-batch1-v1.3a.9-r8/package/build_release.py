@@ -134,6 +134,42 @@ def main():
         if r.returncode != 0:
             print(f"FATAL: {label} tests failed"); sys.exit(1)
 
+    # 2c (R1a P1): C1-B gates INSIDE the single build. Exact counts, NO skip
+    # allowed. A FastAPI skip (missing dep) is treated as FAILURE, never PASS.
+    C1B_GATES = [
+        ('c1b_api', 'tests.test_c1b_api', 44),
+        ('c1b_fastapi', 'tests.test_c1b_fastapi_integration', 6),
+        ('c1b_golden', 'tests.test_c1b_golden_vectors', 2),
+        ('c1b_backend_adapter', 'tests.test_c1b_backend_adapter', 8),
+        ('c1b_runtime_packaging', 'tests.test_c1b_runtime_packaging', 5),
+    ]
+    c1b_results = {}
+    c1b_env = dict(os.environ, DM_ADAPTER_SHARED_SECRET=os.environ.get('DM_ADAPTER_SHARED_SECRET', 'test_adapter_shared_secret_16c'))
+    for name, mod, expect in C1B_GATES:
+        rc = run_step(name, [sys.executable, '-m', 'unittest', mod, '-v'])
+        ran, ok = parse_unittest(rc.stdout, rc.stderr)
+        text = (rc.stdout or '') + (rc.stderr or '')
+        skipped = ('skipped' in text.lower()) or ('skip=' in text.lower())
+        c1b_results[name] = {'ran': ran, 'expected': expect, 'ok': ok, 'skipped': skipped,
+                             'exit_code': rc.returncode}
+        if rc.returncode != 0 or not ok or ran != expect or skipped:
+            print(f"FATAL: C1-B gate {name} failed (rc={rc.returncode} ran={ran} "
+                  f"expect={expect} skipped={skipped})"); sys.exit(1)
+    print(f"C1-B gates PASS: " + ", ".join(f"{k}={v['ran']}/{v['expected']}" for k, v in c1b_results.items()))
+
+    # R1a: authoritative C1-B API report DERIVED from this build's real gate
+    # results (single build_id; no bypass-filled counts).
+    (BASE.parent / 'CLAUDE_C1_B_R1A_API_TEST_REPORT.json').write_text(json.dumps({
+        'report_type': 'CLAUDE_C1_B_R1A_API_TEST_REPORT',
+        'version': args.release_version, 'build_id': args.build_id,
+        'protocol': 'dm-s2s-v2', 'python': sys.version.split()[0],
+        'derived_from': 'build_release single build (not bypass-filled)',
+        'holds': {'IDENTITY_SOURCE_HOLD': True, 'RECOVERY_HOLD': True,
+                  'EXTERNAL_FACADE': 'NOT_MOUNTED', 'DOCKER_RUNTIME': 'NOT_EXECUTED'},
+        'gates': c1b_results,
+        'all_pass': True,
+    }, indent=2, ensure_ascii=False))
+
     # 3: mutation tests --write-report (13/13 real)
     r_mut = run_step('mutation_tests', [sys.executable, 'run_mutation_tests.py', '--write-report',
                      '--build-id', args.build_id, '--version', args.release_version], timeout=1800)
@@ -162,6 +198,7 @@ def main():
                'mutation_blocked': f"{mutation_report['blocked']}/{mutation_report['total_mutations']}",
                'mutation_sequence_pass': mutation_report['sequence_pass'],
                'selector_selftest_pass': mutation_report['selector_selftest']['pass'],
+               'c1b_gates': c1b_results,
                'resource_warnings': rw_total}
     (BASE / 'machine_test_report.json').write_text(json.dumps(machine, indent=2, ensure_ascii=False))
     if rw_total != 0:
@@ -188,9 +225,19 @@ def main():
     if not all_pass:
         print(f"FATAL: security invariants not 1..24 all-PASS (key_set_ok={key_set_ok})"); sys.exit(1)
 
-    fault_report = {'report_type': 'RESTORE_FAULT_INJECTION_REPORT', 'version': args.release_version,
-                    'build_id': args.build_id, 'ran': fault_ran, 'ok': fault_ok, 'exit_code': r_fault.returncode}
-    (BASE / 'restore_fault_injection_report.json').write_text(json.dumps(fault_report, indent=2, ensure_ascii=False))
+    # R8-R2: regenerate the structured fault report HERE (after mutation), so the
+    # early manifest used during the mutation gate stays consistent. Re-run the fault
+    # suite once with DM_FAULT_EVIDENCE_PATH to emit per-test evidence, then merge build_id.
+    fault_path = BASE / 'restore_fault_injection_report.json'
+    fenv = dict(os.environ, DM_FAULT_EVIDENCE_PATH=str(fault_path))
+    r_fault2 = subprocess.run([sys.executable, '-m', 'unittest', 'tests.test_restore_fault_injection', '-v'],
+                              cwd=BASE, capture_output=True, text=True, timeout=300, env=fenv)
+    if r_fault2.returncode != 0:
+        print("FATAL: fault injection (evidence run) failed"); sys.exit(1)
+    fault_report = json.loads(fault_path.read_text()) if fault_path.exists() else {'report_type': 'RESTORE_FAULT_INJECTION_REPORT', 'tests': []}
+    fault_report.update({'version': args.release_version, 'build_id': args.build_id,
+                         'ran': fault_ran, 'ok': fault_ok, 'exit_code': r_fault.returncode})
+    fault_path.write_text(json.dumps(fault_report, indent=2, ensure_ascii=False))
 
     # change evidence vs SEALED R7 baseline (P0/R1a): only record current_sha for
     # files that are STABLE at this point and will not be rewritten afterward.
