@@ -16,6 +16,27 @@ class Settings(BaseSettings):
     # False: 所有记录必须有凭证（P0B-5 关闭）
     allow_unauthenticated_results: bool = True
 
+    # ── Stage I1 权威身份 ─────────────────────────────────────────────
+    # 默认 OFF：旧应用正常启动，身份/Facade 路由不挂载（R1-2）。
+    # ON 时启动前校验 4 张身份表就绪，否则 fail-closed，不进入半可用。
+    identity_i1_enabled: bool = False
+    # 微信配置（真实值仅经环境变量/.env 注入；I0 现场事实：staging/prod 均未配置）。
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
+    # openid 伪名化独立 HMAC key（≥32 字符）。为空则退化为 salted sha256（仅 dev、identity 关闭时）。
+    # 严禁复用微信 secret / Adapter / Caller / Recovery / Vault 根。轮换见 env 模板。
+    dm_openid_hmac_key: str = ""
+    # R1b: 身份配置统一由 Settings（.env 或环境变量）权威提供，避免 settings 与
+    # os.environ 双源漂移。DM_MAIN_BACKEND 必须在身份启用时为真，使 Adapter 密钥根
+    # 隔离生效；DM_ADAPTER_SHARED_SECRET 是主后端唯一允许的 DM_* 密钥。
+    dm_main_backend: bool = False
+    dm_adapter_shared_secret: str = ""
+    # R1c: 同一 Settings 源必须贯穿真实 Facade → Adapter → Daily Loop Client 调用链，
+    # Adapter 不得再依赖第二套 os.environ 才能工作。feature 开关与上游 base URL 也归
+    # Settings。base URL 非密钥。
+    dm_daily_loop_adapter_enabled: bool = False
+    dm_daily_loop_base_url: str = "http://127.0.0.1:18090"
+
     # ── LLM 配置 ──────────────────────────────────────────────────
     llm_provider: str = "local"
     llm_api_key: str | None = None

@@ -63,7 +63,13 @@ def canonical_signature(shared_secret_derived: bytes, method: str, path: str, bo
         hashlib.sha256).hexdigest()
 
 
-def is_enabled() -> bool:
+def is_enabled(enabled=None) -> bool:
+    """Feature enablement. R1c: the REAL request path passes the authoritative
+    value from Settings (``settings.dm_daily_loop_adapter_enabled``); the os.environ
+    read is only a fallback for direct/legacy callers so there is a single source of
+    truth on the Facade path."""
+    if enabled is not None:
+        return bool(enabled)
     return os.environ.get('DM_DAILY_LOOP_ADAPTER_ENABLED') == '1'
 
 
@@ -71,6 +77,11 @@ class MainBackendKeyIsolationError(RuntimeError):
     """Raised (fail-closed) when a main-backend adapter process is found holding a
     secret root it must never carry. The message names the OFFENDING KEY NAMES
     only — never their values."""
+
+
+class AdapterConfigError(RuntimeError):
+    """Raised (fail-closed) when the adapter is constructed without a usable S2S
+    shared secret. Carries no secret VALUE."""
 
 
 # Secret roots that must NEVER be present in a main-backend process. The main
@@ -83,14 +94,20 @@ FORBIDDEN_IN_MAIN_BACKEND = (
 )
 
 
-def enforce_main_backend_key_isolation(env=None) -> None:
+def enforce_main_backend_key_isolation(env=None, main_backend=None) -> None:
     """Fail-closed if this main-backend process holds any forbidden secret root.
 
-    Gated on DM_MAIN_BACKEND == '1' (set only in a real main-backend deployment),
-    so combined dev/test processes that legitimately carry Daily Loop roots are
-    unaffected. Never prints secret VALUES — only the offending key names."""
+    R1c: whether this is a main backend is driven by the authoritative
+    ``main_backend`` flag passed in (from ``settings.dm_main_backend``) rather than
+    a second os.environ read; when it is None we fall back to DM_MAIN_BACKEND for
+    direct/legacy callers. Enforcement still SCANS the process environment for the
+    forbidden Caller/Recovery/Vault roots. Combined dev/test processes that
+    legitimately carry Daily Loop roots pass main_backend=False and are unaffected.
+    Never prints secret VALUES — only the offending key names."""
     env = env if env is not None else os.environ
-    if env.get('DM_MAIN_BACKEND') != '1':
+    if main_backend is None:
+        main_backend = env.get('DM_MAIN_BACKEND') == '1'
+    if not main_backend:
         return
     present = sorted(k for k in FORBIDDEN_IN_MAIN_BACKEND if env.get(k))
     if present:
@@ -103,21 +120,24 @@ class DailyLoopAdapter:
     the Daily Loop internal API. Off unless explicitly enabled. Holds only the
     S2S shared secret; never the caller signing / recovery / vault roots."""
 
-    def __init__(self, shared_secret: str = None, clock=None):
-        # P0 (R1a): hard key-root isolation. In a real main-backend process this
-        # raises instead of the old no-op `pass`, so a leaked Caller/Recovery/Vault
-        # root cannot be silently accepted.
-        enforce_main_backend_key_isolation()
+    def __init__(self, shared_secret: str = None, main_backend=None, enabled=None, clock=None):
+        # P0 (R1a): hard key-root isolation. R1c: config is injected from the single
+        # Settings source (shared_secret / main_backend / enabled) so the adapter no
+        # longer needs a second os.environ path to work; a leaked Caller/Recovery/
+        # Vault root still fails closed (isolation scans the process env).
+        enforce_main_backend_key_isolation(main_backend=main_backend)
         self._clock = clock or time.time
+        self._enabled = is_enabled(enabled)
         secret = shared_secret if shared_secret is not None else os.environ.get('DM_ADAPTER_SHARED_SECRET')
         if not secret or len(secret) < 16:
-            raise SystemExit(2)
+            # fail-closed (missing/short shared secret); no secret value in the error
+            raise AdapterConfigError('adapter shared secret missing or too short')
         self._key = _derive_key(secret)
 
     def build_headers(self, method: str, path: str, body: bytes,
                       auth_user_id: str, target_store_id: str, query: dict = None) -> dict:
-        if not is_enabled():
-            raise RuntimeError('adapter disabled: set DM_DAILY_LOOP_ADAPTER_ENABLED=1 to enable')
+        if not self._enabled:
+            raise RuntimeError('adapter disabled: enable via settings.dm_daily_loop_adapter_enabled')
         if not _IDENT_RE.match(auth_user_id or '') or not _IDENT_RE.match(target_store_id or ''):
             raise ValueError('identity fields must be bounded and newline-free')
         ts = repr(self._clock())
