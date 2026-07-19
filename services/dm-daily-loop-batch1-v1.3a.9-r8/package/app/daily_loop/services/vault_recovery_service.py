@@ -143,6 +143,97 @@ class VaultRecoveryService:
             return {'ok': False, 'error': f'prepare failed: {type(e).__name__}: {e}',
                     'error_code': 'E-RESTORE-PREPARE', 'candidate_path': candidate_path}
 
+    def _rollback_to_point(self, db_path: str, rollback_path: str,
+                           rollback_sha: str, rollback_counts: Dict[str, int],
+                           reason: str, error_code: str,
+                           reconnect_count: int, extra: Optional[dict] = None) -> dict:
+        """R2a P0 + R2b: 统一的 post-replace 回滚流程 —— 条件为假与异常两类失败共用同一
+        事务，避免两套回滚代码漂移。恢复 rollback point → 清理 sidecar → 重连 Repository →
+        复验 rollback SHA/counts/integrity/FK → R2b: 4条件全部为真才 rollback_restored=True。
+        **永不裸抛异常**，回滚成功时绝不留下 repo.conn=None。"""
+        result = {'restored': False, 'error': reason, 'error_code': error_code,
+                  'exception_escaped': False}
+        if extra:
+            result.update(extra)
+        # 关闭任何部分创建的新连接
+        try:
+            if self._repo.conn is not None:
+                self._repo.conn.close()
+        except Exception:
+            pass
+        self._repo.conn = None
+        # 用 rollback point 恢复原库
+        try:
+            os.replace(rollback_path, db_path)
+        except OSError as rb_err:
+            result['error'] = f'{reason}; rollback replace failed: {type(rb_err).__name__}: {rb_err}'
+            result['error_code'] = 'E-RESTORE-ROLLBACK-FAILED'
+            result['rollback_restored'] = False
+            result['repo_conn_alive'] = False
+            result['reconnect_count'] = reconnect_count
+            return result
+        # R2b: 清理 failed new DB 残留的 WAL/SHM sidecar 文件，防止 WAL replay 修改恢复后的
+        # rollback point。只清理 db_path 的 sidecar（db_path + '-wal' / db_path + '-shm'），
+        # 不使用通配符，不会影响同目录下其他 DB 的 sidecar 文件。
+        # 时机：os.replace(rollback→db) 之后、_connect(db) 之前。
+        for ext in ('-wal', '-shm'):
+            sidecar = db_path + ext
+            try:
+                if os.path.exists(sidecar):
+                    os.unlink(sidecar)
+            except OSError:
+                pass
+        # 重连 Repository
+        try:
+            self._repo.conn = self._repo._connect(db_path)
+            reconnect_count += 1
+        except Exception as rc_err:
+            result['error'] = f'{reason}; rolled back but reconnect failed: {type(rc_err).__name__}: {rc_err}'
+            result['error_code'] = 'E-RESTORE-ROLLBACK-FAILED'
+            result['rollback_restored'] = False
+            result['repo_conn_alive'] = False
+            result['reconnect_count'] = reconnect_count
+            return result
+        # 验证 rollback point 已恢复且连接可查询
+        try:
+            rb_verify_sha = _sha256_file(db_path)
+            rb_integrity = self._repo.conn.execute("PRAGMA integrity_check").fetchone()[0]
+            rb_fk = self._repo.conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            rb_verify_counts = _count_all_tables(self._repo.conn)
+        except Exception as v_err:
+            result['error'] = f'{reason}; rolled back but verify failed: {type(v_err).__name__}: {v_err}'
+            result['error_code'] = 'E-RESTORE-ROLLBACK-FAILED'
+            result['rollback_restored'] = False
+            result['repo_conn_alive'] = False
+            result['reconnect_count'] = reconnect_count
+            return result
+        # R2b: rollback 复验硬执法 —— 4条件全部为真才 rollback_restored=True
+        rollback_conditions = {
+            'sha_match': rb_verify_sha == rollback_sha,
+            'counts_match': rb_verify_counts == rollback_counts,
+            'integrity_ok': rb_integrity == 'ok',
+            'fk_on': rb_fk == 1,
+        }
+        rollback_failed = [k for k, v in rollback_conditions.items() if not v]
+        result['reconnect_count'] = reconnect_count
+        result['rollback_sha'] = rb_verify_sha
+        result['rollback_counts'] = rb_verify_counts
+        result['rollback_sha_match'] = rollback_conditions['sha_match']
+        result['rollback_counts_match'] = rollback_conditions['counts_match']
+        result['rollback_integrity'] = rb_integrity
+        result['rollback_fk'] = rb_fk
+        result['rollback_conditions'] = rollback_conditions
+        result['rollback_failed'] = rollback_failed
+        if all(rollback_conditions.values()):
+            result['rollback_restored'] = True
+            result['repo_conn_alive'] = True
+        else:
+            result['rollback_restored'] = False
+            result['repo_conn_alive'] = True
+            result['error_code'] = 'E-RESTORE-ROLLBACK-FAILED'
+            result['error'] = f'{reason}; rollback verification failed: {rollback_failed}'
+        return result
+
     def _commit_restore_candidate(self, candidate_path: str,
                                    candidate_sha: str,
                                    candidate_counts: Dict[str, int],
@@ -173,13 +264,28 @@ class VaultRecoveryService:
                     'reconnect_count': 0}
 
         # === 步骤2: checkpoint原库 ===
-        rollback_path = tempfile.mkstemp(suffix='.rollback', dir=db_parent)[1]
+        _rb_fd, rollback_path = tempfile.mkstemp(suffix='.rollback', dir=db_parent)
+        os.close(_rb_fd)  # S0-1: close mkstemp fd explicitly (no leaked descriptor)
         rollback_ok = False
         rollback_sha = ''
         rollback_counts = {}
         try:
-            # WAL checkpoint
-            self._repo.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            # WAL checkpoint — S0-2: read (busy, log, checkpointed); busy!=0 hard-blocks
+            # BEFORE closing/replacing. Empty/None/exception -> fail-closed. (0,0,0) is
+            # valid (no busy readers, nothing to checkpoint) and must NOT be a failure.
+            _cp_row = self._repo.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if _cp_row is None or len(_cp_row) < 1:
+                raise RuntimeError('wal_checkpoint returned no/empty result')
+            _cp_busy = _cp_row[0]
+            if _cp_busy != 0:
+                try:
+                    if os.path.exists(rollback_path): os.unlink(rollback_path)
+                except OSError:
+                    pass
+                return {'restored': False,
+                        'error': f'wal_checkpoint busy={_cp_busy}; aborted before close/replace',
+                        'error_code': 'E-RESTORE-CHECKPOINT', 'reconnect_count': 0,
+                        'repo_conn_alive': True, 'checkpoint_busy': _cp_busy}
             # 复制原库到rollback文件
             import shutil
             shutil.copy2(db_path, rollback_path)
@@ -222,81 +328,103 @@ class VaultRecoveryService:
         try:
             os.replace(candidate_path, db_path)
         except Exception as e:
-            # replace失败 → 用rollback恢复
+            # R2a 2.2: candidate 的第一次 replace 失败发生在触碰原库之前。按 os.replace
+            # 原子语义原库应仍在原处。**不无条件声称 rollback_restored=True**；重新连接并
+            # 复验原库，报告 original_untouched；无法验证则 fail-closed。
             try:
-                os.replace(rollback_path, db_path)
-            except OSError:
-                pass
-            self._repo.conn = self._repo._connect(db_path)
+                self._repo.conn = self._repo._connect(db_path)
+                reconnect_count = 1
+                orig_sha = _sha256_file(db_path)
+                orig_integrity = self._repo.conn.execute("PRAGMA integrity_check").fetchone()[0]
+                orig_counts = _count_all_tables(self._repo.conn)
+                original_untouched = (orig_sha == rollback_sha
+                                      and orig_integrity == 'ok'
+                                      and orig_counts == rollback_counts)
+                try:
+                    if os.path.exists(rollback_path):
+                        os.unlink(rollback_path)
+                except OSError:
+                    pass
+                return {'restored': False,
+                        'error': f'atomic replace failed: {type(e).__name__}: {e}',
+                        'error_code': 'E-RESTORE-REPLACE',
+                        'reconnect_count': reconnect_count,
+                        'rollback_restored': False,
+                        'original_untouched': original_untouched,
+                        'repo_conn_alive': True,
+                        'orig_sha': orig_sha,
+                        'orig_integrity': orig_integrity,
+                        'exception_escaped': False}
+            except Exception as verr:
+                # fail-closed: 原库无法验证
+                self._repo.conn = None
+                return {'restored': False,
+                        'error': f'atomic replace failed and original re-verify failed: '
+                                 f'{type(e).__name__}: {e}; {type(verr).__name__}: {verr}',
+                        'error_code': 'E-RESTORE-REPLACE',
+                        'reconnect_count': reconnect_count,
+                        'rollback_restored': False,
+                        'original_untouched': False,
+                        'repo_conn_alive': False,
+                        'exception_escaped': False}
+
+        # === 步骤5: 验证新库 — R2a P0: 连接/验证/条件判定全部纳入统一异常回滚保护 ===
+        # 从 os.replace(candidate) 成功开始，_connect / integrity / fk / counts / sha /
+        # 条件计算中任一抛异常或返回失败，都必须进入 _rollback_to_point 同一回滚流程。
+        # 异常不得裸抛，绝不留下 repo.conn=None。
+        # S0-1: rollback 文件在全部条件通过前始终保留，仅成功路径删除。
+        reconnect_count = 0
+        try:
+            new_conn = self._repo._connect(db_path)
+            self._repo.conn = new_conn
             reconnect_count = 1
-            return {'restored': False, 'error': f'atomic replace failed: {type(e).__name__}: {e}',
-                    'error_code': 'E-RESTORE-REPLACE', 'reconnect_count': reconnect_count,
-                    'rollback_restored': True, 'rollback_sha': rollback_sha}
 
-        # === 步骤5: 验证新库 — 成功条件全部执法 ===
-        reconnect_count = 1
-        new_conn = self._repo._connect(db_path)
-        self._repo.conn = new_conn
+            new_integrity = new_conn.execute("PRAGMA integrity_check").fetchone()[0]
+            new_fk = new_conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            new_counts = _count_all_tables(new_conn)
+            new_sha = _sha256_file(db_path)
 
-        new_integrity = new_conn.execute("PRAGMA integrity_check").fetchone()[0]
-        new_fk = new_conn.execute("PRAGMA foreign_keys").fetchone()[0]
-        new_counts = _count_all_tables(new_conn)
-        new_sha = _sha256_file(db_path)
+            conditions = {
+                'integrity_ok': new_integrity == 'ok',
+                'fk_on': new_fk == 1,
+                'sha_match': new_sha == recheck_sha,
+                'counts_match': new_counts == candidate_counts,
+            }
 
-        # 清理rollback文件
+            if not all(conditions.values()):
+                failed = [k for k, v in conditions.items() if not v]
+                return self._rollback_to_point(
+                    db_path, rollback_path, rollback_sha, rollback_counts,
+                    reason=f'success conditions failed: {failed}',
+                    error_code='E-RESTORE-VERIFY',
+                    reconnect_count=reconnect_count,
+                    extra={
+                        'conditions': conditions,
+                        'new_integrity': new_integrity,
+                        'new_fk': new_fk,
+                        'new_sha': new_sha,
+                        'expected_sha': recheck_sha,
+                        'new_counts': new_counts,
+                        'expected_counts': candidate_counts,
+                    })
+        except Exception as e:
+            # post-replace 连接或验证本身抛异常 → 统一回滚，绝不逃逸
+            return self._rollback_to_point(
+                db_path, rollback_path, rollback_sha, rollback_counts,
+                reason=f'post-replace exception during {type(e).__name__}: {e}',
+                error_code='E-RESTORE-POST-REPLACE',
+                reconnect_count=reconnect_count,
+                extra={'exception_type': type(e).__name__})
+
+        # S0-1: all conditions passed — NOW delete rollback. A delete failure is a
+        # controlled cleanup error; it never turns success into failure, nor hides
+        # a failure as success.
+        cleanup_error = None
         try:
             if os.path.exists(rollback_path):
                 os.unlink(rollback_path)
-        except OSError:
-            pass
-
-        # 成功条件全部执法
-        conditions = {
-            'integrity_ok': new_integrity == 'ok',
-            'fk_on': new_fk == 1,
-            'sha_match': new_sha == recheck_sha,
-            'counts_match': new_counts == candidate_counts,
-        }
-
-        if not all(conditions.values()):
-            # 某条件不满足 → 回滚
-            failed = [k for k, v in conditions.items() if not v]
-            # 用rollback恢复原库
-            try:
-                new_conn.close()
-                self._repo.conn = None
-                os.replace(rollback_path, db_path)
-                self._repo.conn = self._repo._connect(db_path)
-                reconnect_count = 2
-                rb_verify_sha = _sha256_file(db_path)
-                rb_verify_conn = sqlite3.connect(db_path)
-                rb_verify_counts = _count_all_tables(rb_verify_conn)
-                rb_verify_conn.close()
-                return {
-                    'restored': False,
-                    'error': f'success conditions failed: {failed}',
-                    'error_code': 'E-RESTORE-VERIFY',
-                    'conditions': conditions,
-                    'new_integrity': new_integrity,
-                    'new_fk': new_fk,
-                    'new_sha': new_sha,
-                    'expected_sha': recheck_sha,
-                    'new_counts': new_counts,
-                    'expected_counts': candidate_counts,
-                    'reconnect_count': reconnect_count,
-                    'rollback_restored': True,
-                    'rollback_sha': rb_verify_sha,
-                    'rollback_counts': rb_verify_counts,
-                    'rollback_sha_match': rb_verify_sha == rollback_sha,
-                    'rollback_counts_match': rb_verify_counts == rollback_counts,
-                }
-            except Exception as rb_err:
-                return {'restored': False,
-                        'error': f'success conditions failed: {failed}, rollback also failed: {rb_err}',
-                        'error_code': 'E-RESTORE-ROLLBACK-FAILED',
-                        'reconnect_count': reconnect_count,
-                        'rollback_restored': False}
-
+        except OSError as ce:
+            cleanup_error = f'{type(ce).__name__}: {ce}'
         return {
             'restored': True,
             'candidate_sha_matched': True,
@@ -306,6 +434,7 @@ class VaultRecoveryService:
             'new_counts': new_counts,
             'reconnect_count': reconnect_count,
             'rollback_restored': False,
+            'cleanup_error': cleanup_error,
             'error_code': None,
         }
 

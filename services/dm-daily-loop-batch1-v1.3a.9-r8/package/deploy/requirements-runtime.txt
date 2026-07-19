@@ -1,0 +1,7 @@
+# DM Daily Loop runtime dependencies (C1-B).
+# Test/CI-only tools (unittest, evidence tooling) are stdlib and need nothing here.
+cryptography==49.0.0
+cffi==2.1.0
+pycparser==3.0.0
+fastapi==0.139.2
+uvicorn==0.30.6
