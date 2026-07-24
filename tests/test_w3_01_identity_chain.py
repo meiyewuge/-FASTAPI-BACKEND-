@@ -531,6 +531,7 @@ class TestReadinessGates(unittest.TestCase):
             self.dm_main_backend = kw.get("dm_main_backend", True)
             self.dm_openid_hmac_key = kw.get("dm_openid_hmac_key", "k" * 40)
             self.dm_adapter_shared_secret = kw.get("dm_adapter_shared_secret", "adapter_secret")
+            self.auth_trusted_proxies = kw.get("auth_trusted_proxies", "127.0.0.1")
 
     def test_config_ok(self):
         from backend.app.identity.readiness import check_identity_config
@@ -560,6 +561,16 @@ class TestReadinessGates(unittest.TestCase):
         with self.assertRaises(IdentityConfigError):
             check_identity_config(self._S(dm_openid_hmac_key=key),
                                   env={"DM_VAULT_MASTER_KEY": key})
+
+    def test_invalid_proxy_config_fail_closed(self):
+        from backend.app.identity.readiness import check_identity_config, IdentityConfigError
+        # a non-IP / non-CIDR trusted-proxy value must fail closed at startup (P1-4)
+        with self.assertRaises(IdentityConfigError):
+            check_identity_config(self._S(auth_trusted_proxies="not-an-ip"), env={})
+        with self.assertRaises(IdentityConfigError):
+            check_identity_config(self._S(auth_trusted_proxies="10.0.0.0/999"), env={})
+        # valid exact IP + CIDR mix passes
+        check_identity_config(self._S(auth_trusted_proxies="127.0.0.1, 10.0.0.0/8, ::1"), env={})
 
     def test_ready_fails_on_unmigrated_then_passes(self):
         from backend.app.identity.readiness import check_ready, IdentityNotReady
@@ -942,41 +953,274 @@ class TestR1OpenAPIContract(W3Base):
         _rec("openapi_matches_runtime_contract", True)
 
 
-class TestR1ProxyRateLimit(W3Base):
-    def setUp(self):
-        super().setUp()
-        self._saved_proxies = settings.__dict__.get("auth_trusted_proxies")
+from backend.app.identity import proxy as _proxy
 
-    def tearDown(self):
-        settings.auth_trusted_proxies = self._saved_proxies
-        super().tearDown()
 
-    def _login_xff(self, openid, code, xff):
-        self._set_wechat(openid=openid)
-        return self.client.post("/api/auth/wechat/login", json={"code": code},
-                                headers={"X-Forwarded-For": xff})
+class TestR2ProxyContract(unittest.TestCase):
+    """R2 P1-4: real CIDR-aware trusted-proxy rate-limit key (deterministic unit
+    tests over proxy.client_key with real IPs)."""
 
-    def test_trusted_proxy_two_clients_two_buckets(self):
-        # trust the TestClient peer host so X-Forwarded-For is honored
-        peer = "testclient"
-        settings.auth_trusted_proxies = peer
-        service._login_limiter = LoginRateLimiter(1000, 1)  # 1 attempt per bucket
-        # client A first attempt (bucket 1.1.1.1)
-        self.assertEqual(self._login_xff("o_a", "ca1", "1.1.1.1").status_code, 200)
-        # client A second attempt -> same bucket exhausted
-        self.assertEqual(self._login_xff("o_a", "ca2", "1.1.1.1").status_code, 429)
-        # client B -> different bucket, still allowed
-        self.assertEqual(self._login_xff("o_b", "cb1", "2.2.2.2").status_code, 200)
+    def key(self, peer, xff, trusted):
+        return _proxy.client_key(peer, xff, trusted)
+
+    def test_configured_proxy_positive(self):
+        # exact-IP proxy honored
+        self.assertEqual(self.key("127.0.0.1", "1.1.1.1", "127.0.0.1"), "1.1.1.1")
+        # CIDR proxy honored (10.1.2.3 is inside 10.0.0.0/8)
+        self.assertEqual(self.key("10.1.2.3", "1.1.1.1", "10.0.0.0/8"), "1.1.1.1")
+        _rec("trusted_proxy_configured_positive", True)
+
+    def test_two_clients_behind_proxy_two_buckets(self):
+        a = self.key("10.0.0.9", "1.1.1.1", "10.0.0.0/8")
+        b = self.key("10.0.0.9", "2.2.2.2", "10.0.0.0/8")
+        self.assertNotEqual(a, b)
         _rec("trusted_proxy_two_clients_two_buckets", True)
 
-    def test_untrusted_forwarded_header_ignored(self):
-        # peer is NOT in the trusted set -> X-Forwarded-For is ignored, everyone
-        # shares the peer bucket, so a spoofed header cannot dodge the limit.
-        settings.auth_trusted_proxies = "10.0.0.1"
-        service._login_limiter = LoginRateLimiter(1000, 1)
-        self.assertEqual(self._login_xff("o_c", "cc1", "9.9.9.1").status_code, 200)
-        self.assertEqual(self._login_xff("o_c", "cc2", "9.9.9.2").status_code, 429)
-        _rec("untrusted_forwarded_header_ignored", True)
+    def test_same_client_same_bucket(self):
+        a = self.key("10.0.0.9", "1.1.1.1", "10.0.0.0/8")
+        b = self.key("10.0.0.9", "1.1.1.1", "10.0.0.0/8")
+        self.assertEqual(a, b)
+        _rec("trusted_proxy_same_client_same_bucket", True)
+
+    def test_untrusted_xff_spoof_ignored(self):
+        # peer NOT in trusted network -> forwarded header ignored, key = peer
+        self.assertEqual(self.key("203.0.113.5", "1.1.1.1", "10.0.0.0/8"), "203.0.113.5")
+        _rec("untrusted_xff_spoof_ignored", True)
+
+    def test_multi_hop_right_to_left(self):
+        # XFF: real client, then a trusted proxy hop; take right-most non-trusted
+        self.assertEqual(self.key("10.0.0.1", "9.9.9.9, 10.0.0.2", "10.0.0.0/8"), "9.9.9.9")
+        _rec("trusted_proxy_multi_hop_right_to_left", True)
+
+    def test_cidr_positive_and_spoof_negative(self):
+        # positive: inside CIDR -> client from XFF; negative: outside CIDR -> peer
+        self.assertEqual(self.key("192.168.5.5", "8.8.8.8", "192.168.0.0/16"), "8.8.8.8")
+        self.assertEqual(self.key("8.8.4.4", "8.8.8.8", "192.168.0.0/16"), "8.8.4.4")
+        _rec("trusted_proxy_cidr_positive_and_spoof_negative", True)
+
+    def test_invalid_config_fails_closed_to_peer(self):
+        # invalid trusted config -> never trust forwarded header
+        self.assertEqual(self.key("10.0.0.1", "1.1.1.1", "garbage"), "10.0.0.1")
+        _rec("trusted_proxy_invalid_config_fail_closed_key", True)
+
+
+class TestR2Migration(unittest.TestCase):
+    """R2 P0-1/P0-2: single-version migration state machine + atomic upgrade."""
+
+    def _fresh_engine(self):
+        fd, f = tempfile.mkstemp(suffix=".db"); os.close(fd)
+        self._files.append(f)
+        return create_engine(f"sqlite:///{f}", connect_args={"check_same_thread": False})
+
+    def setUp(self):
+        self._files = []
+
+    def tearDown(self):
+        for f in self._files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+    def _idx(self, eng):
+        from sqlalchemy import inspect
+        s = set()
+        for t in inspect(eng).get_table_names():
+            for i in inspect(eng).get_indexes(t):
+                s.add(i.get("name"))
+            for u in inspect(eng).get_unique_constraints(t):
+                s.add(u.get("name"))
+        return s
+
+    def _make_r0(self, eng):
+        # faithful R0 = current schema minus the two R1 uniqueness indexes + old version
+        migrator.apply_forward(eng)
+        with eng.begin() as c:
+            c.exec_driver_sql("DROP INDEX uq_dl_binding_store_member")
+            c.exec_driver_sql("DROP INDEX uq_dl_binding_store_authuser")
+            c.exec_driver_sql("DELETE FROM dl_identity_schema_meta")
+            c.exec_driver_sql("INSERT INTO dl_identity_schema_meta (version) VALUES ('dsm-w3-01')")
+
+    def _seed_dup(self, eng, member_same=True):
+        S = sessionmaker(bind=eng)
+        db = S()
+        try:
+            u1 = im.AppUser(status="active"); u2 = im.AppUser(status="active")
+            db.add_all([u1, u2]); db.flush()
+            store_registry.register_store(db, "dls_c")
+            if member_same:
+                mid1 = mid2 = "mDup"; au1, au2 = "a1", "a2"
+            else:
+                mid1, mid2 = "m1", "m2"; au1 = au2 = "auDup"
+            db.add(im.StoreMemberBinding(app_user_id=u1.id, dl_auth_user_id=au1, dl_store_id="dls_c",
+                   dl_member_id=mid1, member_public_id=store_registry.new_member_public_id(),
+                   role="staff", status="active"))
+            db.add(im.StoreMemberBinding(app_user_id=u2.id, dl_auth_user_id=au2, dl_store_id="dls_c",
+                   dl_member_id=mid2, member_public_id=store_registry.new_member_public_id(),
+                   role="staff", status="active"))
+            db.commit()
+        finally:
+            db.close()
+
+    def test_migration_fresh_r1_single_version(self):
+        from backend.app.identity.readiness import check_ready
+        e = self._fresh_engine()
+        migrator.apply_forward(e)
+        self.assertEqual(migrator.current_versions(e), ["dsm-w3-01-r1"])
+        migrator.apply_forward(e)  # idempotent
+        self.assertEqual(migrator.current_versions(e), ["dsm-w3-01-r1"])
+        check_ready(e)
+        _rec("migration_fresh_r1_single_version", True)
+
+    def test_migration_r0_to_r1_clean_single_version_ready(self):
+        from backend.app.identity.readiness import check_ready
+        e = self._fresh_engine(); self._make_r0(e)
+        self.assertEqual(migrator.current_versions(e), ["dsm-w3-01"])
+        migrator.apply_forward(e)
+        self.assertEqual(migrator.current_versions(e), ["dsm-w3-01-r1"])
+        self.assertTrue({"uq_dl_binding_store_member", "uq_dl_binding_store_authuser"} <= self._idx(e))
+        check_ready(e)
+        _rec("migration_r0_to_r1_clean_single_version_ready", True)
+
+    def test_migration_r0_to_r1_member_conflict_no_partial_change(self):
+        e = self._fresh_engine(); self._make_r0(e); self._seed_dup(e, member_same=True)
+        before_idx, before_v = self._idx(e), migrator.current_versions(e)
+        with self.assertRaises(migrator.MigrationConflict) as ctx:
+            migrator.apply_forward(e)
+        for bad in ("mDup", "dls_c", "a1"):  # no raw internal id disclosed
+            self.assertNotIn(bad, str(ctx.exception))
+        self.assertEqual(self._idx(e), before_idx)
+        self.assertEqual(migrator.current_versions(e), before_v)
+        _rec("migration_r0_to_r1_member_conflict_no_partial_change", True)
+
+    def test_migration_r0_to_r1_authuser_conflict_no_partial_change(self):
+        e = self._fresh_engine(); self._make_r0(e); self._seed_dup(e, member_same=False)
+        before_idx, before_v = self._idx(e), migrator.current_versions(e)
+        with self.assertRaises(migrator.MigrationConflict):
+            migrator.apply_forward(e)
+        self.assertEqual(self._idx(e), before_idx)
+        self.assertEqual(migrator.current_versions(e), before_v)
+        _rec("migration_r0_to_r1_authuser_conflict_no_partial_change", True)
+
+    def test_migration_injected_second_index_failure_rolls_back_first(self):
+        e = self._fresh_engine(); self._make_r0(e)
+
+        def boom():
+            raise RuntimeError("injected after first index")
+        with self.assertRaises(RuntimeError):
+            migrator.apply_forward(e, _fault_after_first_index=boom)
+        # first index rolled back, version unchanged (no half-migration)
+        self.assertNotIn("uq_dl_binding_store_member", self._idx(e))
+        self.assertEqual(migrator.current_versions(e), ["dsm-w3-01"])
+        # a clean retry then succeeds (DB not wedged)
+        migrator.apply_forward(e)
+        self.assertEqual(migrator.current_versions(e), ["dsm-w3-01-r1"])
+        _rec("migration_injected_second_index_failure_rolls_back_first", True)
+
+    def test_migration_unknown_version_no_change(self):
+        e = self._fresh_engine()
+        migrator.apply_forward(e)
+        with e.begin() as c:
+            c.exec_driver_sql("DELETE FROM dl_identity_schema_meta")
+            c.exec_driver_sql("INSERT INTO dl_identity_schema_meta (version) VALUES ('mystery-1')")
+        with self.assertRaises(migrator.MigrationError):
+            migrator.apply_forward(e)
+        self.assertEqual(migrator.current_versions(e), ["mystery-1"])
+        _rec("migration_unknown_version_no_change", True)
+
+    def test_migration_multiple_versions_no_change(self):
+        e = self._fresh_engine()
+        migrator.apply_forward(e)
+        with e.begin() as c:
+            c.exec_driver_sql("INSERT INTO dl_identity_schema_meta (version) VALUES ('dsm-w3-01')")
+        before = sorted(migrator.current_versions(e))
+        with self.assertRaises(migrator.MigrationError):
+            migrator.apply_forward(e)
+        self.assertEqual(sorted(migrator.current_versions(e)), before)
+        _rec("migration_multiple_versions_no_change", True)
+
+
+class TestR2OpenAPIRequired(W3Base):
+    def _oa(self):
+        return self.app.openapi()
+
+    def test_openapi_login_declares_runtime_403(self):
+        oa = self._oa()
+        self.assertIn("403", oa["paths"]["/api/auth/wechat/login"]["post"]["responses"])
+        # runtime really produces a login 403 (disabled binding)
+        self._seed_binding("openid_oa403")
+        db = self.TestSession()
+        try:
+            db.execute(text("UPDATE dl_store_member_binding SET status='disabled'"))
+            db.commit()
+        finally:
+            db.close()
+        r = self._login("openid_oa403", code="c_oa403")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["code"], "ROLE_FORBIDDEN")
+        _rec("openapi_login_declares_runtime_403", True)
+
+    def test_openapi_all_envelopes_require_four_fields(self):
+        comps = self._oa()["components"]["schemas"]
+        four = {"code", "message", "trace_id", "data"}
+        for name in ("LoginResponse", "MeResponse", "LogoutResponse", "ErrorEnvelope"):
+            self.assertEqual(set(comps[name].get("required", [])), four,
+                             f"{name} must require all four envelope fields")
+        _rec("openapi_all_envelopes_require_four_fields", True)
+
+    def test_openapi_logout_and_error_data_required_null(self):
+        comps = self._oa()["components"]["schemas"]
+        for name in ("LogoutResponse", "ErrorEnvelope"):
+            data = comps[name]["properties"]["data"]
+            self.assertEqual(data.get("type"), "null", f"{name}.data must be null-only")
+            self.assertIn("data", comps[name].get("required", []))
+        _rec("openapi_logout_and_error_data_required_null", True)
+
+
+class TestR2Audit(W3Base):
+    def test_login_success_exactly_one_session_issued_audit(self):
+        with _AuditCapture() as cap:
+            self._set_wechat(openid="openid_r2_ok")
+            r = self.client.post("/api/auth/wechat/login", json={"code": "code_r2_ok"})
+        self.assertEqual(r.status_code, 200, r.text)
+        evs = [e for e in cap.events() if e["event"] == "session_issued"]
+        self.assertEqual(len(evs), 1, "exactly one session_issued on success")
+        # login_success and session_issued share the trace_id
+        tids = {e["trace_id"] for e in cap.events() if e["event"] in ("session_issued", "login_success")}
+        self.assertEqual(len(tids), 1)
+        _rec("login_success_exactly_one_session_issued_audit", True)
+
+    def test_login_commit_failure_zero_residue_and_no_session_issued_audit(self):
+        # make the outer commit fail after the session row is flushed
+        def _bad_db():
+            db = self.TestSession()
+
+            def _boom():
+                raise RuntimeError("commit boom")
+            db.commit = _boom  # type: ignore[assignment]
+            try:
+                yield db
+            finally:
+                db.close()
+        self.app.dependency_overrides[get_db] = _bad_db
+        with _AuditCapture() as cap:
+            self._set_wechat(openid="openid_r2_fail")
+            r = self.client.post("/api/auth/wechat/login", json={"code": "code_r2_fail"})
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["code"], "INTERNAL_ERROR")
+        # no false session_issued / login_success on a rolled-back commit
+        events = [e["event"] for e in cap.events()]
+        self.assertNotIn("session_issued", events)
+        self.assertNotIn("login_success", events)
+        # and zero residue
+        db = self.TestSession()
+        try:
+            self.assertEqual(db.query(im.AppUser).count(), 0)
+            self.assertEqual(db.query(im.WechatIdentity).count(), 0)
+            self.assertEqual(db.query(im.AuthSession).count(), 0)
+        finally:
+            db.close()
+        _rec("login_commit_failure_zero_residue_and_no_session_issued_audit", True)
 
 
 if __name__ == "__main__":
