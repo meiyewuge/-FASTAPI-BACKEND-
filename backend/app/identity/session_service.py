@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from . import models
 from . import errors
 from . import store_registry
+from . import audit
 from ..config import settings
 
 SESSION_TTL_SECONDS = 24 * 3600  # fixed 24h, no refresh
@@ -68,7 +69,12 @@ def _ce(a: Optional[str], b: Optional[str]) -> bool:
 
 
 def mint_session(db: Session, app_user: models.AppUser,
-                 binding: Optional[models.StoreMemberBinding]) -> tuple[str, datetime]:
+                 binding: Optional[models.StoreMemberBinding], *,
+                 commit: bool = True, trace_id: Optional[str] = None) -> tuple[str, datetime]:
+    """Add an opaque session row for the user. With commit=False the row is only
+    flushed and the CALLER owns the single atomic commit (P0-3 login). `binding`
+    must already be active if provided (login rejects disabled/left before minting,
+    P0-1); an inactive binding here is treated as unbound defensively."""
     raw_token = secrets.token_hex(32)  # 256-bit
     expires_at = _now() + timedelta(seconds=SESSION_TTL_SECONDS)
     bound = binding is not None and binding.status == "active"
@@ -88,7 +94,12 @@ def mint_session(db: Session, app_user: models.AppUser,
         revoked=False,
     )
     db.add(sess)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    audit.audit("session_issued", trace_id=trace_id, app_user_id=app_user.id,
+                code="OK", bound=bound)
     return raw_token, expires_at
 
 
@@ -160,9 +171,12 @@ def resolve_session(db: Session, token: Optional[str]) -> AuthContext:
     return AuthContext(app_user_id=sess.app_user_id, bound=False)
 
 
-def revoke_session(db: Session, token: Optional[str]) -> None:
+def revoke_session(db: Session, token: Optional[str], *,
+                   trace_id: Optional[str] = None) -> None:
     """Revoke the session for a bearer token. Idempotent: revoking an already-revoked
-    or unknown token is a silent success (never leaks whether it existed)."""
+    or unknown/absent token is a silent success (never leaks whether it existed).
+    A `session_revoked` audit is emitted ONLY on a first real revocation, so the
+    audit trail does not reveal whether a token existed."""
     if not token:
         return
     sess = db.query(models.AuthSession).filter(
@@ -171,3 +185,5 @@ def revoke_session(db: Session, token: Optional[str]) -> None:
     if sess is not None and not sess.revoked:
         sess.revoked = True
         db.commit()
+        audit.audit("session_revoked", trace_id=trace_id, app_user_id=sess.app_user_id,
+                    code="OK")
