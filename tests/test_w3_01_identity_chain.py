@@ -33,6 +33,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
 
+from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.identity import models as im
 from backend.app.identity import (migrator, session_service, service, store_registry,
@@ -82,7 +83,15 @@ def _build_test_app() -> FastAPI:
     async def _trace(request: Request, call_next):
         incoming = request.headers.get("x-trace-id")
         request.state.trace_id = incoming or envelope.new_trace_id()
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        except Exception:
+            # mirror main.py: unexpected exception on an identity path -> W1 500.
+            if not request.url.path.startswith("/api/auth"):
+                raise
+            return JSONResponse(status_code=500, content={
+                "code": "INTERNAL_ERROR", "message": "服务内部错误",
+                "trace_id": envelope.trace_id_of(request), "data": None})
 
     app.include_router(auth_identity.router)
 
@@ -588,6 +597,386 @@ class TestReadinessGates(unittest.TestCase):
                 os.unlink(dbf)
             except OSError:
                 pass
+
+
+import logging as _logging
+from unittest import mock
+
+
+class _AuditCapture:
+    """Attach to the identity_audit logger and collect parsed event payloads."""
+    def __init__(self):
+        self.records = []
+        self._logger = _logging.getLogger("identity_audit")
+        self._handler = _logging.Handler()
+        self._handler.emit = self._emit  # type: ignore
+        self._raw = []
+
+    def _emit(self, record):
+        self._raw.append(record.getMessage())
+
+    def __enter__(self):
+        self._logger.addHandler(self._handler)
+        self._logger.setLevel(_logging.INFO)
+        return self
+
+    def __exit__(self, *a):
+        self._logger.removeHandler(self._handler)
+
+    def events(self):
+        out = []
+        for m in self._raw:
+            # format: "identity_audit {json}"
+            idx = m.find("{")
+            if idx >= 0:
+                try:
+                    out.append(json.loads(m[idx:]))
+                except Exception:
+                    pass
+        return out
+
+    def raw_text(self):
+        return "\n".join(self._raw)
+
+
+class TestR1LoginStateMachine(W3Base):
+    def _sessions(self):
+        db = self.TestSession()
+        try:
+            return db.query(im.AuthSession).count()
+        finally:
+            db.close()
+
+    def _disable_binding(self, status="disabled"):
+        db = self.TestSession()
+        try:
+            db.execute(text("UPDATE dl_store_member_binding SET status=:s"), {"s": status})
+            db.commit()
+        finally:
+            db.close()
+
+    def test_login_no_binding_200_and_me_200_unbound(self):
+        r = self._login("openid_r1_nobind")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(r.json()["data"]["bound"])
+        token = r.json()["data"]["token"]
+        m2 = self.client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(m2.status_code, 200, m2.text)
+        self.assertFalse(m2.json()["data"]["bound"])
+        _rec("login_no_binding_200_and_me_200_unbound", True)
+
+    def test_login_disabled_binding_403_no_session(self):
+        self._seed_binding("openid_r1_disb")
+        self._disable_binding("disabled")
+        before = self._sessions()
+        r = self._login("openid_r1_disb", code="c_disb")
+        self.assertEqual(r.status_code, 403, r.text)
+        self.assertEqual(r.json()["code"], "ROLE_FORBIDDEN")
+        self._assert_envelope(r.json())
+        self.assertEqual(self._sessions(), before, "session row count must be unchanged")
+        _rec("login_disabled_binding_403_no_session", True)
+
+    def test_login_left_binding_403_no_session(self):
+        self._seed_binding("openid_r1_left")
+        self._disable_binding("left")
+        before = self._sessions()
+        r = self._login("openid_r1_left", code="c_left")
+        self.assertEqual(r.status_code, 403, r.text)
+        self.assertEqual(r.json()["code"], "ROLE_FORBIDDEN")
+        self.assertEqual(self._sessions(), before)
+        _rec("login_left_binding_403_no_session", True)
+
+    def test_login_disabled_user_403_no_session(self):
+        self._seed_binding("openid_r1_udis")
+        db = self.TestSession()
+        try:
+            db.execute(text("UPDATE dl_app_user SET status='disabled'"))
+            db.commit()
+        finally:
+            db.close()
+        before = self._sessions()
+        r = self._login("openid_r1_udis", code="c_udis")
+        self.assertEqual(r.status_code, 403, r.text)
+        self.assertEqual(r.json()["code"], "ROLE_FORBIDDEN")
+        self.assertEqual(self._sessions(), before)
+        _rec("login_disabled_user_403_no_session", True)
+
+    def test_login_transaction_rollback_on_session_insert_failure(self):
+        def _counts():
+            db = self.TestSession()
+            try:
+                return (db.query(im.AppUser).count(),
+                        db.query(im.WechatIdentity).count(),
+                        db.query(im.AuthSession).count())
+            finally:
+                db.close()
+        self.assertEqual(_counts(), (0, 0, 0))
+        self._set_wechat(openid="openid_r1_txn")
+        with mock.patch.object(session_service, "mint_session",
+                               side_effect=RuntimeError("boom on session insert")):
+            r = self.client.post("/api/auth/wechat/login", json={"code": "c_txn"})
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["code"], "INTERNAL_ERROR")
+        # P0-3: no half-baked identity survives a failed session insert
+        self.assertEqual(_counts(), (0, 0, 0))
+        _rec("login_transaction_rollback_on_session_insert_failure", True)
+
+    def test_concurrent_first_login_single_authority(self):
+        # pre-seed the "winner": an AppUser + WechatIdentity for this openid
+        openid = "openid_r1_race"
+        oh = session_service.hash_openid(openid)
+        db = self.TestSession()
+        try:
+            u = im.AppUser(status="active"); db.add(u); db.flush()
+            db.add(im.WechatIdentity(app_user_id=u.id, openid_hash=oh))
+            db.commit()
+        finally:
+            db.close()
+        # force the loser path: first lookup returns None -> insert -> IntegrityError
+        # on unique(openid_hash) -> rollback -> retry finds the existing identity.
+        real = service._find_user_by_openid
+        state = {"n": 0}
+
+        def _racy(dbs, h):
+            state["n"] += 1
+            if state["n"] == 1:
+                return None
+            return real(dbs, h)
+
+        self._set_wechat(openid=openid)
+        with mock.patch.object(service, "_find_user_by_openid", _racy):
+            r = self.client.post("/api/auth/wechat/login", json={"code": "c_race"})
+        self.assertEqual(r.status_code, 200, r.text)
+        db = self.TestSession()
+        try:
+            self.assertEqual(db.query(im.AppUser).count(), 1, "single authority")
+            self.assertEqual(db.query(im.WechatIdentity).filter_by(openid_hash=oh).count(), 1)
+            self.assertEqual(db.query(im.AuthSession).count(), 1, "one valid session, no orphan")
+        finally:
+            db.close()
+        _rec("concurrent_first_login_single_authority", True)
+
+
+class TestR1Unexpected500(W3Base):
+    def _bearer(self, t):
+        return {"Authorization": f"Bearer {t}"}
+
+    def test_unexpected_login_500_w1_envelope(self):
+        self._set_wechat(openid="openid_500_login")
+        with mock.patch.object(session_service, "mint_session",
+                               side_effect=RuntimeError("x")):
+            r = self.client.post("/api/auth/wechat/login", json={"code": "c500l"})
+        self.assertEqual(r.status_code, 500, r.text)
+        b = r.json(); self._assert_envelope(b)
+        self.assertEqual(b["code"], "INTERNAL_ERROR")
+        for bad in ("Traceback", "boom", "RuntimeError", "SELECT", "dl_"):
+            self.assertNotIn(bad, b["message"])
+        _rec("unexpected_login_500_w1_envelope", True)
+
+    def test_unexpected_me_500_w1_envelope(self):
+        token = self._login("openid_500_me").json()["data"]["token"]
+        with mock.patch.object(session_service, "resolve_session",
+                               side_effect=RuntimeError("x")):
+            r = self.client.get("/api/auth/me", headers=self._bearer(token))
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["code"], "INTERNAL_ERROR")
+        self._assert_envelope(r.json())
+        _rec("unexpected_me_500_w1_envelope", True)
+
+    def test_unexpected_logout_500_w1_envelope(self):
+        token = self._login("openid_500_lo").json()["data"]["token"]
+        with mock.patch.object(session_service, "revoke_session",
+                               side_effect=RuntimeError("x")):
+            r = self.client.post("/api/auth/logout", headers=self._bearer(token))
+        self.assertEqual(r.status_code, 500, r.text)
+        self.assertEqual(r.json()["code"], "INTERNAL_ERROR")
+        self._assert_envelope(r.json())
+        _rec("unexpected_logout_500_w1_envelope", True)
+
+
+class TestR1SqliteIntegrity(W3Base):
+    def test_sqlite_foreign_keys_on_runtime_connection(self):
+        with self.engine.connect() as c:
+            val = c.exec_driver_sql("PRAGMA foreign_keys").scalar()
+        self.assertEqual(val, 1, "foreign_keys must be ON for the runtime connection")
+        _rec("sqlite_foreign_keys_on_runtime_connection", True)
+
+    def _orphan(self, obj):
+        db = self.TestSession()
+        try:
+            db.add(obj)
+            with self.assertRaises(IntegrityError):
+                db.commit()
+        finally:
+            db.rollback(); db.close()
+
+    def test_sqlite_orphan_wechat_rejected(self):
+        self._orphan(im.WechatIdentity(app_user_id=999999, openid_hash="x" * 10))
+        _rec("sqlite_orphan_wechat_rejected", True)
+
+    def test_sqlite_orphan_binding_rejected(self):
+        self._orphan(im.StoreMemberBinding(
+            app_user_id=999999, dl_auth_user_id="a", dl_store_id="s", dl_member_id="m",
+            member_public_id=store_registry.new_member_public_id(), role="staff", status="active"))
+        _rec("sqlite_orphan_binding_rejected", True)
+
+    def test_sqlite_orphan_session_rejected(self):
+        from datetime import datetime, timedelta, timezone
+        self._orphan(im.AuthSession(
+            token_hash="h" * 10, app_user_id=999999, snap_bound=False,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
+        _rec("sqlite_orphan_session_rejected", True)
+
+    def test_duplicate_authoritative_member_binding_rejected(self):
+        db = self.TestSession()
+        try:
+            u1 = im.AppUser(status="active"); u2 = im.AppUser(status="active")
+            db.add_all([u1, u2]); db.flush()
+            store_registry.register_store(db, "dls_dup")
+            db.add(im.StoreMemberBinding(
+                app_user_id=u1.id, dl_auth_user_id="au1", dl_store_id="dls_dup",
+                dl_member_id="member_X", member_public_id=store_registry.new_member_public_id(),
+                role="staff", status="active"))
+            db.flush()
+            # same authoritative (dl_store_id + dl_member_id) under a different AppUser
+            db.add(im.StoreMemberBinding(
+                app_user_id=u2.id, dl_auth_user_id="au2", dl_store_id="dls_dup",
+                dl_member_id="member_X", member_public_id=store_registry.new_member_public_id(),
+                role="staff", status="active"))
+            with self.assertRaises(IntegrityError):
+                db.commit()
+        finally:
+            db.rollback(); db.close()
+        _rec("duplicate_authoritative_member_binding_rejected", True)
+
+
+class TestR1Audit(W3Base):
+    def _bearer(self, t):
+        return {"Authorization": f"Bearer {t}"}
+
+    _SECRETS = ("code_", "openid_", "Bearer ")
+
+    def _assert_no_secret(self, text_blob, extra=()):
+        for s in list(self._SECRETS) + list(extra):
+            self.assertNotIn(s, text_blob)
+
+    def test_audit_session_issued_no_secret(self):
+        with _AuditCapture() as cap:
+            self._set_wechat(openid="openid_aud_issue")
+            r = self.client.post("/api/auth/wechat/login", json={"code": "code_aud_issue"})
+            token = r.json()["data"]["token"]
+        events = [e["event"] for e in cap.events()]
+        self.assertIn("session_issued", events)
+        raw = cap.raw_text()
+        self.assertNotIn("code_aud_issue", raw)
+        self.assertNotIn("openid_aud_issue", raw)
+        self.assertNotIn(token, raw)
+        _rec("audit_session_issued_no_secret", True)
+
+    def test_audit_session_revoked_no_secret(self):
+        token = self._login("openid_aud_rev").json()["data"]["token"]
+        with _AuditCapture() as cap:
+            self.client.post("/api/auth/logout", headers=self._bearer(token))
+        events = [e["event"] for e in cap.events()]
+        self.assertIn("session_revoked", events)
+        self.assertNotIn(token, cap.raw_text())
+        _rec("audit_session_revoked_no_secret", True)
+
+    def test_audit_binding_rejected_no_secret(self):
+        self._seed_binding("openid_aud_bindrej")
+        db = self.TestSession()
+        try:
+            db.execute(text("UPDATE dl_store_member_binding SET status='disabled'"))
+            db.commit()
+        finally:
+            db.close()
+        with _AuditCapture() as cap:
+            r = self._login("openid_aud_bindrej", code="code_bindrej")
+        self.assertEqual(r.status_code, 403)
+        events = [e["event"] for e in cap.events()]
+        self.assertIn("binding_rejected", events)
+        self.assertNotIn("openid_aud_bindrej", cap.raw_text())
+        _rec("audit_binding_rejected_no_secret", True)
+
+
+class TestR1OpenAPIContract(W3Base):
+    def test_openapi_matches_runtime_contract(self):
+        oa = self.app.openapi()
+        paths = oa["paths"]
+
+        def _resolve(schema):
+            # follow a single $ref into components
+            if "$ref" in schema:
+                name = schema["$ref"].split("/")[-1]
+                return oa["components"]["schemas"][name]
+            return schema
+
+        def _success_props(path, method):
+            resp = paths[path][method]["responses"]["200"]
+            sch = resp["content"]["application/json"]["schema"]
+            return set(_resolve(sch).get("properties", {}).keys())
+
+        # login
+        self.assertEqual(_success_props("/api/auth/wechat/login", "post"),
+                         {"code", "message", "trace_id", "data"})
+        login_data = _resolve(_resolve(
+            paths["/api/auth/wechat/login"]["post"]["responses"]["200"]
+            ["content"]["application/json"]["schema"])["properties"]["data"])
+        self.assertEqual(set(login_data["properties"].keys()),
+                         {"token", "expires_at", "expires_in", "bound"})
+        # me + declared error envelopes
+        self.assertEqual(_success_props("/api/auth/me", "get"),
+                         {"code", "message", "trace_id", "data"})
+        for code in ("401", "403", "500"):
+            self.assertIn(code, paths["/api/auth/me"]["get"]["responses"])
+        for code in ("422", "429", "500", "503"):
+            self.assertIn(code, paths["/api/auth/wechat/login"]["post"]["responses"])
+        # logout success declares data (null)
+        self.assertEqual(_success_props("/api/auth/logout", "post"),
+                         {"code", "message", "trace_id", "data"})
+        # runtime sample agrees with the declared machine code on an error
+        r = self.client.get("/api/auth/me")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(set(r.json().keys()), {"code", "message", "trace_id", "data"})
+        self.assertEqual(r.json()["code"], "SESSION_INVALID")
+        _rec("openapi_matches_runtime_contract", True)
+
+
+class TestR1ProxyRateLimit(W3Base):
+    def setUp(self):
+        super().setUp()
+        self._saved_proxies = settings.__dict__.get("auth_trusted_proxies")
+
+    def tearDown(self):
+        settings.auth_trusted_proxies = self._saved_proxies
+        super().tearDown()
+
+    def _login_xff(self, openid, code, xff):
+        self._set_wechat(openid=openid)
+        return self.client.post("/api/auth/wechat/login", json={"code": code},
+                                headers={"X-Forwarded-For": xff})
+
+    def test_trusted_proxy_two_clients_two_buckets(self):
+        # trust the TestClient peer host so X-Forwarded-For is honored
+        peer = "testclient"
+        settings.auth_trusted_proxies = peer
+        service._login_limiter = LoginRateLimiter(1000, 1)  # 1 attempt per bucket
+        # client A first attempt (bucket 1.1.1.1)
+        self.assertEqual(self._login_xff("o_a", "ca1", "1.1.1.1").status_code, 200)
+        # client A second attempt -> same bucket exhausted
+        self.assertEqual(self._login_xff("o_a", "ca2", "1.1.1.1").status_code, 429)
+        # client B -> different bucket, still allowed
+        self.assertEqual(self._login_xff("o_b", "cb1", "2.2.2.2").status_code, 200)
+        _rec("trusted_proxy_two_clients_two_buckets", True)
+
+    def test_untrusted_forwarded_header_ignored(self):
+        # peer is NOT in the trusted set -> X-Forwarded-For is ignored, everyone
+        # shares the peer bucket, so a spoofed header cannot dodge the limit.
+        settings.auth_trusted_proxies = "10.0.0.1"
+        service._login_limiter = LoginRateLimiter(1000, 1)
+        self.assertEqual(self._login_xff("o_c", "cc1", "9.9.9.1").status_code, 200)
+        self.assertEqual(self._login_xff("o_c", "cc2", "9.9.9.2").status_code, 429)
+        _rec("untrusted_forwarded_header_ignored", True)
 
 
 if __name__ == "__main__":
