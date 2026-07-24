@@ -16,6 +16,34 @@ class Settings(BaseSettings):
     # False: 所有记录必须有凭证（P0B-5 关闭）
     allow_unauthenticated_results: bool = True
 
+    # ── DSM W3-01 权威身份链 (identity I1) ────────────────────────────
+    # 默认 OFF：旧应用正常启动，身份路由不挂载。ON 时启动前校验身份表 + 门店
+    # 注册表就绪且配置完整独立，否则 fail-closed，不进入半可用状态。
+    identity_i1_enabled: bool = False
+    # 微信配置（真实值仅经环境变量/.env 注入；生产默认未配置）。
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
+    # code2session 上游超时（秒）。
+    wechat_timeout_seconds: float = 5.0
+    # openid 伪名化独立 HMAC key（≥32 字符）。为空则退化为 salted sha256（仅 dev、identity 关闭时）。
+    # 严禁复用微信 secret / Adapter 共享密钥 / daily-loop 任一根密钥。
+    dm_openid_hmac_key: str = ""
+    # 主后端标志：身份启用时必须为真，使密钥根隔离检查生效。
+    dm_main_backend: bool = False
+    # 主后端唯一允许持有的 DM_* 共享密钥（独立性检查用，不参与本轮登录链）。
+    dm_adapter_shared_secret: str = ""
+    # 登录限频：窗口秒 + 单 IP 窗口内最大登录尝试次数。
+    auth_login_rate_window_seconds: int = 60
+    auth_login_rate_max_attempts: int = 10
+    # code 防重放短窗口（秒）：窗口内同一 code 再次提交视为重放，拒绝。
+    auth_code_replay_window_seconds: int = 300
+    # 限流可信代理（R2 P1-4）：逗号分隔的精确 IP 和/或 CIDR 网段（IPv4/IPv6，经
+    # ipaddress 真正解析，支持如 10.0.0.0/8、2001:db8::/32）。仅当直连 peer 落入
+    # 该集合时才信任 X-Forwarded-For，从右向左剥离可信代理跳、取最右非可信客户端；
+    # 否则回退直连 peer。非法值在启动时 fail-closed（readiness 拒绝）。生产由 .env
+    # 注入并与 Uvicorn --forwarded-allow-ips 收窄一致。为空则从不信任转发头。
+    auth_trusted_proxies: str = "127.0.0.1"
+
     # ── LLM 配置 ──────────────────────────────────────────────────
     llm_provider: str = "local"
     llm_api_key: str | None = None

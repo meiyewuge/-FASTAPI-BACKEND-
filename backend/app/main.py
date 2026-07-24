@@ -33,6 +33,76 @@ app.include_router(weapp.router, prefix="/api", tags=["weapp"])
 app.include_router(store_manager_v013_router)
 app.include_router(store_manager_router)
 
+# ── DSM W3-01 authoritative employee-identity chain ───────────────────────────
+# Gated behind IDENTITY_I1_ENABLED (default OFF). Identity + store-registry tables
+# live on a SEPARATE metadata and are created ONLY by the reviewed migration —
+# never by the legacy Base.metadata.create_all() above. When enabled, the schema
+# must already be migrated and the config must be complete + independent, or the
+# app fails closed at startup (no half-usable state). When disabled, nothing below
+# is registered and legacy behavior is byte-for-byte unchanged.
+if settings.identity_i1_enabled:
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.encoders import jsonable_encoder
+    from .routers import auth_identity
+    from .identity import models as identity_models  # noqa: F401
+    from .identity import envelope as identity_envelope
+    from .identity.errors import ApiError, VALIDATION_ERROR
+    from .identity.readiness import check_ready, check_identity_config
+
+    # single Settings config source; complete + independent + main-backend, else
+    # fail closed. Then require the migrated schema at the exact machine version.
+    check_identity_config(settings, os.environ)
+    check_ready(engine)
+
+    import logging as _logging
+    from .identity.errors import INTERNAL_ERROR
+
+    _IDENTITY_PREFIX = "/api/auth"
+    _identity_log = _logging.getLogger("identity")
+
+    @app.middleware("http")
+    async def _trace_id_middleware(request: Request, call_next):
+        # one trace id per request; honor a caller-supplied X-Trace-Id if present.
+        incoming = request.headers.get("x-trace-id") or request.headers.get("X-Trace-Id")
+        request.state.trace_id = incoming or identity_envelope.new_trace_id()
+        try:
+            return await call_next(request)
+        except Exception:
+            # P0-2: ANY unexpected exception on an identity path -> unified W1 500
+            # envelope (never the plain-text "Internal Server Error", never a stack/
+            # SQL/table/path leak). Non-identity routes are re-raised so their legacy
+            # exception behavior is byte-for-byte unchanged.
+            if not request.url.path.startswith(_IDENTITY_PREFIX):
+                raise
+            trace_id = identity_envelope.trace_id_of(request)
+            # server-side security log keeps the detail; the client response does not.
+            _identity_log.exception("identity_unhandled_exception trace_id=%s", trace_id)
+            return JSONResponse(status_code=500, content={
+                "code": INTERNAL_ERROR, "message": "服务内部错误",
+                "trace_id": trace_id, "data": None})
+
+    app.include_router(auth_identity.router)
+
+    @app.exception_handler(ApiError)
+    async def _api_error_handler(request: Request, exc: ApiError):
+        """Unified {code, message, trace_id, data} envelope for identity errors."""
+        trace_id = identity_envelope.trace_id_of(request)
+        return JSONResponse(status_code=exc.http_status, content=exc.envelope(trace_id))
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_handler(request: Request, exc: RequestValidationError):
+        """Identity routes get the unified 422 VALIDATION_ERROR envelope; every other
+        route keeps FastAPI's default validation response so legacy behavior is
+        unchanged."""
+        if request.url.path.startswith(_IDENTITY_PREFIX):
+            trace_id = identity_envelope.trace_id_of(request)
+            return JSONResponse(status_code=422, content={
+                "code": VALIDATION_ERROR, "message": "请求参数错误",
+                "trace_id": trace_id, "data": None})
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
 app.mount("/reports", StaticFiles(directory=settings.report_storage_path), name="reports")
 
 
