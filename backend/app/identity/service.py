@@ -141,6 +141,10 @@ def login_with_code(db: Session, code: str, wechat: WeChatClient, *,
                 db.flush()  # surfaces the unique(openid_hash) race here, still same txn
             data = _issue_for_user(db, app_user, trace_id=trace_id)
             db.commit()
+            # audit ONLY after the atomic commit succeeds (R2 P1-3): a session was
+            # truly issued and persisted. Same trace_id on both events.
+            audit.audit("session_issued", trace_id=trace_id, app_user_id=app_user.id,
+                        code="OK", bound=data["bound"])
             audit.audit("login_success", trace_id=trace_id, app_user_id=app_user.id,
                         code="OK", bound=data["bound"])
             return data

@@ -77,29 +77,45 @@ def mint_session(db: Session, app_user: models.AppUser,
     P0-1); an inactive binding here is treated as unbound defensively."""
     raw_token = secrets.token_hex(32)  # 256-bit
     expires_at = _now() + timedelta(seconds=SESSION_TTL_SECONDS)
-    bound = binding is not None and binding.status == "active"
+    # explicit narrowing (not a separate bool) so the snapshot reads are type-safe
+    # under strict-optional mypy (R2 P1-2).
+    if binding is not None and binding.status == "active":
+        bound = True
+        snap_auth_user_id: Optional[str] = binding.dl_auth_user_id
+        snap_store_id: Optional[str] = binding.dl_store_id
+        snap_member_id: Optional[str] = binding.dl_member_id
+        snap_role: Optional[str] = binding.role
+        snap_binding_epoch: Optional[int] = binding.status_epoch or 0
+    else:
+        bound = False
+        snap_auth_user_id = snap_store_id = snap_member_id = snap_role = None
+        snap_binding_epoch = None
     sess = models.AuthSession(
         token_hash=hash_token(raw_token),
         app_user_id=app_user.id,
         snap_bound=bound,
-        snap_auth_user_id=(binding.dl_auth_user_id if bound else None),
-        snap_store_id=(binding.dl_store_id if bound else None),
-        snap_member_id=(binding.dl_member_id if bound else None),
-        snap_role=(binding.role if bound else None),
+        snap_auth_user_id=snap_auth_user_id,
+        snap_store_id=snap_store_id,
+        snap_member_id=snap_member_id,
+        snap_role=snap_role,
         # pin status epochs so ANY status change (active->disabled->active)
         # permanently invalidates this token, incl. out-of-band DB updates.
         snap_user_epoch=(app_user.status_epoch or 0),
-        snap_binding_epoch=(binding.status_epoch if bound else None),
+        snap_binding_epoch=snap_binding_epoch,
         expires_at=expires_at,
         revoked=False,
     )
     db.add(sess)
     if commit:
+        # self-committing caller: audit ONLY after the commit actually succeeds
+        # (R2 P1-3), so a failed commit never emits a false session_issued.
         db.commit()
+        audit.audit("session_issued", trace_id=trace_id, app_user_id=app_user.id,
+                    code="OK", bound=bound)
     else:
+        # deferred commit: the CALLER owns the atomic commit and MUST emit
+        # session_issued only after it succeeds (see service.login_with_code).
         db.flush()
-    audit.audit("session_issued", trace_id=trace_id, app_user_id=app_user.id,
-                code="OK", bound=bound)
     return raw_token, expires_at
 
 
