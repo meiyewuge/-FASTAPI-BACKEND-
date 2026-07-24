@@ -92,3 +92,10 @@ def check_identity_config(settings, env=None) -> None:
         other = env.get(name)
         if other and other == hmac_key:
             raise IdentityConfigError(f"identity config invalid: DM_OPENID_HMAC_KEY must not equal {name}")
+    # R2 P1-4: AUTH_TRUSTED_PROXIES must be valid exact IPs / CIDRs, else fail closed.
+    from . import proxy
+    try:
+        proxy.parse_trusted_proxies(settings.auth_trusted_proxies)
+    except ValueError:
+        raise IdentityConfigError(
+            "identity config invalid: AUTH_TRUSTED_PROXIES must be exact IPs or CIDRs")

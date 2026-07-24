@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..identity import service, session_service, envelope
+from ..identity import service, session_service, envelope, proxy
 from ..identity import schemas as auth_schemas
 from ..identity.deps import require_session, _bearer_token
 from ..identity.wechat import WeChatClient
@@ -40,31 +40,17 @@ def get_wechat_client() -> WeChatClient:
     return WeChatClient()
 
 
-def _trusted_proxies() -> set[str]:
-    return {p.strip() for p in (settings.auth_trusted_proxies or "").split(",") if p.strip()}
-
-
 def _client_key(request: Request) -> str:
-    """Rate-limit key = the real client IP. X-Forwarded-For is trusted ONLY when the
-    direct peer is a configured trusted proxy (P1-3); we then take the right-most
-    forwarded hop that is not itself a trusted proxy. An untrusted peer's forwarded
-    header is ignored, so it cannot forge a bucket, and two real clients behind the
-    same proxy land in different buckets."""
+    """Rate-limit key = the real client IP, honoring X-Forwarded-For only from a
+    configured trusted proxy network (exact IP or CIDR). See identity.proxy."""
     peer = request.client.host if request.client else "unknown"
-    trusted = _trusted_proxies()
-    if peer in trusted:
-        xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
-        if xff:
-            hops = [h.strip() for h in xff.split(",") if h.strip()]
-            for ip in reversed(hops):
-                if ip not in trusted:
-                    return ip
-    return peer
+    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    return proxy.client_key(peer, xff, settings.auth_trusted_proxies)
 
 
 @router.post("/wechat/login", operation_id="w3_01_auth_wechat_login",
              response_model=auth_schemas.LoginResponse,
-             responses={422: _ERR, 429: _ERR, 500: _ERR, 503: _ERR})
+             responses={403: _ERR, 422: _ERR, 429: _ERR, 500: _ERR, 503: _ERR})
 def wechat_login(req: WeChatLoginRequest, request: Request,
                  db: Session = Depends(get_db),
                  wechat: WeChatClient = Depends(get_wechat_client)):

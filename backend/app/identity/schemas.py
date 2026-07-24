@@ -1,54 +1,60 @@
-"""OpenAPI response models for the W3-01 identity operations (R1 P1-2).
+"""OpenAPI response models for the W3-01 identity operations (R1 P1-2 / R2 P1-1).
 
-These pin a real machine contract for the three operations so the generated
-OpenAPI carries concrete success/error envelope schemas (not empty {} or the
-default HTTPValidationError). They mirror the runtime responses produced by
-identity.envelope and AUTH_CONTRACT_MATRIX.csv exactly.
+These pin a real machine contract so the generated OpenAPI carries concrete
+success/error envelope schemas that match the runtime responses and
+AUTH_CONTRACT_MATRIX.csv exactly.
+
+R2 P1-1 hardening:
+  - all four envelope fields (code, message, trace_id, data) are REQUIRED on every
+    success and error schema (no field carries a default, so none drops out of
+    `required`);
+  - success `code` is the literal "OK";
+  - logout success `data` and every error `data` are typed null-only and required.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class LoginData(BaseModel):
-    token: str = Field(..., description="opaque bearer token (256-bit)")
-    expires_at: str = Field(..., description="ISO-8601 session expiry")
-    expires_in: int = Field(..., description="seconds until expiry (86400)")
-    bound: bool = Field(..., description="true iff an active store binding exists")
+    token: str
+    expires_at: str
+    expires_in: int
+    bound: bool
 
 
 class MeData(BaseModel):
-    bound: bool = Field(..., description="true iff an active store binding exists")
-    role: Optional[str] = Field(None, description="owner|manager|staff (bound only)")
-    store_id: Optional[str] = Field(None, description="opaque store_<opaque12> (bound only)")
-    member_id: Optional[str] = Field(None, description="opaque mbr_<opaque12> (bound only)")
+    bound: bool
+    role: Optional[str] = None        # present but nullable when unbound
+    store_id: Optional[str] = None    # opaque store_<opaque12> (bound only)
+    member_id: Optional[str] = None   # opaque mbr_<opaque12> (bound only)
 
 
 class LoginResponse(BaseModel):
-    code: str = Field("OK", description="machine code; 'OK' on success")
-    message: str = "ok"
+    code: Literal["OK"]
+    message: str
     trace_id: str
     data: LoginData
 
 
 class MeResponse(BaseModel):
-    code: str = Field("OK", description="machine code; 'OK' on success")
-    message: str = "ok"
+    code: Literal["OK"]
+    message: str
     trace_id: str
     data: MeData
 
 
 class LogoutResponse(BaseModel):
-    code: str = Field("OK", description="machine code; 'OK' on success")
-    message: str = "ok"
+    code: Literal["OK"]
+    message: str
     trace_id: str
-    data: Optional[dict] = Field(None, description="always null on logout")
+    data: None  # required and only null
 
 
 class ErrorEnvelope(BaseModel):
-    code: str = Field(..., description="machine error code, e.g. SESSION_INVALID")
-    message: str = Field(..., description="safe human message; no secret/stack/SQL")
+    code: str
+    message: str
     trace_id: str
-    data: Optional[dict] = Field(None, description="always null on error")
+    data: None  # required and only null
