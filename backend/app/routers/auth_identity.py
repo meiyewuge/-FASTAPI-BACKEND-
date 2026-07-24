@@ -16,13 +16,18 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..database import get_db
 from ..identity import service, session_service, envelope
+from ..identity import schemas as auth_schemas
 from ..identity.deps import require_session, _bearer_token
 from ..identity.wechat import WeChatClient
 from ..identity.session_service import AuthContext
 
 router = APIRouter(prefix="/api/auth", tags=["identity"])
+
+# machine error-envelope schema reused for every declared error status (P1-2).
+_ERR = {"model": auth_schemas.ErrorEnvelope}
 
 
 class WeChatLoginRequest(BaseModel):
@@ -35,11 +40,31 @@ def get_wechat_client() -> WeChatClient:
     return WeChatClient()
 
 
+def _trusted_proxies() -> set[str]:
+    return {p.strip() for p in (settings.auth_trusted_proxies or "").split(",") if p.strip()}
+
+
 def _client_key(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    """Rate-limit key = the real client IP. X-Forwarded-For is trusted ONLY when the
+    direct peer is a configured trusted proxy (P1-3); we then take the right-most
+    forwarded hop that is not itself a trusted proxy. An untrusted peer's forwarded
+    header is ignored, so it cannot forge a bucket, and two real clients behind the
+    same proxy land in different buckets."""
+    peer = request.client.host if request.client else "unknown"
+    trusted = _trusted_proxies()
+    if peer in trusted:
+        xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+        if xff:
+            hops = [h.strip() for h in xff.split(",") if h.strip()]
+            for ip in reversed(hops):
+                if ip not in trusted:
+                    return ip
+    return peer
 
 
-@router.post("/wechat/login", operation_id="w3_01_auth_wechat_login")
+@router.post("/wechat/login", operation_id="w3_01_auth_wechat_login",
+             response_model=auth_schemas.LoginResponse,
+             responses={422: _ERR, 429: _ERR, 500: _ERR, 503: _ERR})
 def wechat_login(req: WeChatLoginRequest, request: Request,
                  db: Session = Depends(get_db),
                  wechat: WeChatClient = Depends(get_wechat_client)):
@@ -51,7 +76,9 @@ def wechat_login(req: WeChatLoginRequest, request: Request,
     return envelope.ok(data, request)
 
 
-@router.get("/me", operation_id="w3_01_auth_me")
+@router.get("/me", operation_id="w3_01_auth_me",
+            response_model=auth_schemas.MeResponse,
+            responses={401: _ERR, 403: _ERR, 500: _ERR})
 def me(request: Request, ctx: AuthContext = Depends(require_session)):
     if not ctx.bound:
         # valid session but no active store binding -> 200 + bound=false (order §4.2.3).
@@ -67,9 +94,11 @@ def me(request: Request, ctx: AuthContext = Depends(require_session)):
     }, request)
 
 
-@router.post("/logout", operation_id="w3_01_auth_logout")
+@router.post("/logout", operation_id="w3_01_auth_logout",
+             response_model=auth_schemas.LogoutResponse,
+             responses={500: _ERR})
 def logout(request: Request, db: Session = Depends(get_db)):
     token = _bearer_token(request)
     # idempotent; never leaks whether the session existed
-    session_service.revoke_session(db, token)
+    session_service.revoke_session(db, token, trace_id=envelope.trace_id_of(request))
     return envelope.ok(None, request)

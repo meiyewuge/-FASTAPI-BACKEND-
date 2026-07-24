@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     auth_login_rate_max_attempts: int = 10
     # code 防重放短窗口（秒）：窗口内同一 code 再次提交视为重放，拒绝。
     auth_code_replay_window_seconds: int = 300
+    # 限流可信代理（P1-3）：仅当直连 peer 属于该集合时，才信任 X-Forwarded-For
+    # 决定限流 key，取其最右一跳（最接近可信代理的客户端 IP）；否则用直连 peer。
+    # 逗号分隔字符串（例：127.0.0.1,10.0.0.0/8 的网关地址）。生产由 .env 注入并配合
+    # Uvicorn --forwarded-allow-ips 收窄。为空则从不信任转发头，回退直连 peer。
+    auth_trusted_proxies: str = "127.0.0.1"
 
     # ── LLM 配置 ──────────────────────────────────────────────────
     llm_provider: str = "local"
