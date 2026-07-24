@@ -56,14 +56,32 @@ if settings.identity_i1_enabled:
     check_identity_config(settings, os.environ)
     check_ready(engine)
 
+    import logging as _logging
+    from .identity.errors import INTERNAL_ERROR
+
     _IDENTITY_PREFIX = "/api/auth"
+    _identity_log = _logging.getLogger("identity")
 
     @app.middleware("http")
     async def _trace_id_middleware(request: Request, call_next):
         # one trace id per request; honor a caller-supplied X-Trace-Id if present.
         incoming = request.headers.get("x-trace-id") or request.headers.get("X-Trace-Id")
         request.state.trace_id = incoming or identity_envelope.new_trace_id()
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        except Exception:
+            # P0-2: ANY unexpected exception on an identity path -> unified W1 500
+            # envelope (never the plain-text "Internal Server Error", never a stack/
+            # SQL/table/path leak). Non-identity routes are re-raised so their legacy
+            # exception behavior is byte-for-byte unchanged.
+            if not request.url.path.startswith(_IDENTITY_PREFIX):
+                raise
+            trace_id = identity_envelope.trace_id_of(request)
+            # server-side security log keeps the detail; the client response does not.
+            _identity_log.exception("identity_unhandled_exception trace_id=%s", trace_id)
+            return JSONResponse(status_code=500, content={
+                "code": INTERNAL_ERROR, "message": "服务内部错误",
+                "trace_id": trace_id, "data": None})
 
     app.include_router(auth_identity.router)
 
