@@ -37,7 +37,7 @@ _FK = _PK
 
 ROLE_VALUES = ("owner", "manager", "staff")
 STATUS_VALUES = ("active", "disabled", "left")
-SCHEMA_VERSION = "dsm-w3-01"
+SCHEMA_VERSION = "dsm-w3-01-r1"
 
 
 class IdentityBase(DeclarativeBase):
@@ -109,6 +109,12 @@ class StoreMemberBinding(IdentityBase):
     __table_args__ = (
         UniqueConstraint("app_user_id", name="uq_dl_binding_app_user"),
         UniqueConstraint("member_public_id", name="uq_dl_binding_member_public_id"),
+        # P0-5: one authoritative daily-loop employee identity may belong to AT MOST
+        # ONE AppUser. Both the store+member and the store+auth_user pairs are unique,
+        # so the same authoritative member (or authoritative user) cannot be claimed
+        # by two WeChat users. Enforced by the DB, not just caller discipline.
+        UniqueConstraint("dl_store_id", "dl_member_id", name="uq_dl_binding_store_member"),
+        UniqueConstraint("dl_store_id", "dl_auth_user_id", name="uq_dl_binding_store_authuser"),
         Index("ix_dl_binding_store", "dl_store_id"),
         CheckConstraint("role in ('owner','manager','staff')", name="ck_dl_binding_role"),
         CheckConstraint("status in ('active','disabled','left')", name="ck_dl_binding_status"),
@@ -173,5 +179,6 @@ REQUIRED_INDEXES = {
     "uq_dl_store_public_id", "uq_dl_store_dl_store_id", "uq_dl_store_main_store_id",
     "uq_dl_store_v013_store_id",
     "uq_dl_wechat_openid_hash", "uq_dl_wechat_app_user", "uq_dl_binding_app_user",
-    "uq_dl_binding_member_public_id", "uq_dl_session_token_hash",
+    "uq_dl_binding_member_public_id", "uq_dl_binding_store_member",
+    "uq_dl_binding_store_authuser", "uq_dl_session_token_hash",
 }

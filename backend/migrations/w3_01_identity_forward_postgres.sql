@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS dl_store_member_binding (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dl_binding_app_user ON dl_store_member_binding(app_user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dl_binding_member_public_id ON dl_store_member_binding(member_public_id);
+-- P0-5: one authoritative employee identity -> at most one AppUser.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dl_binding_store_member ON dl_store_member_binding(dl_store_id, dl_member_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dl_binding_store_authuser ON dl_store_member_binding(dl_store_id, dl_auth_user_id);
 CREATE INDEX IF NOT EXISTS ix_dl_binding_store ON dl_store_member_binding(dl_store_id);
 
 CREATE TABLE IF NOT EXISTS dl_auth_session (
@@ -96,4 +99,4 @@ BEFORE UPDATE OF status ON dl_store_member_binding
 FOR EACH ROW EXECUTE FUNCTION dl_bump_status_epoch();
 
 CREATE TABLE IF NOT EXISTS dl_identity_schema_meta (version VARCHAR(32) PRIMARY KEY);
-INSERT INTO dl_identity_schema_meta (version) VALUES ('dsm-w3-01') ON CONFLICT DO NOTHING;
+INSERT INTO dl_identity_schema_meta (version) VALUES ('dsm-w3-01-r1') ON CONFLICT DO NOTHING;

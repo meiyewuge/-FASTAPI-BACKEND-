@@ -8,6 +8,8 @@ DROP INDEX IF EXISTS uq_dl_session_token_hash;
 DROP TABLE IF EXISTS dl_auth_session;
 
 DROP INDEX IF EXISTS ix_dl_binding_store;
+DROP INDEX IF EXISTS uq_dl_binding_store_authuser;
+DROP INDEX IF EXISTS uq_dl_binding_store_member;
 DROP INDEX IF EXISTS uq_dl_binding_member_public_id;
 DROP INDEX IF EXISTS uq_dl_binding_app_user;
 DROP TABLE IF EXISTS dl_store_member_binding;
